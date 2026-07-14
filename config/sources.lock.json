@@ -523,10 +523,10 @@
       "sourceUrl": "repo:src/PSOBB.Enhancement/build-manifest.json",
       "releaseUrl": null,
       "version": "0.1.0-dev",
-      "checkedAtUtc": "2026-07-14T15:30:36Z",
-      "retrievedAtUtc": "2026-07-14T16:26:33Z",
+      "checkedAtUtc": "2026-07-14T23:03:24Z",
+      "retrievedAtUtc": "2026-07-14T23:03:24Z",
       "size": 5414,
-      "sha256": "23e1d67e910850ca4bd57d51a4b07a0f12dd671690a23af771dd43b2e24377d5",
+      "sha256": "739801810c882e79f75b467c5d5bdf721eef6fc8e6ea635fbcccc831a7f24a0d",
       "signatureState": "Source-controlled build manifest is hash-locked; the exact x86 canary artifact is unsigned",
       "scanState": "Project-built source and artifact; exact build, unit, ABI, and client-byte verification passed; live runtime acceptance remains pending",
       "license": "MIT at repo:src/PSOBB.Enhancement/LICENSE.md",
@@ -542,8 +542,8 @@
         },
         {
           "path": "src/PSOBB.Enhancement/PSOBB.Enhancement.ini.example",
-          "size": 528,
-          "sha256": "72fe88b6d639df18cb887edc06b76a233dd12e937cdbe8a551da1895c061513b",
+          "size": 527,
+          "sha256": "81b7a8c9c913ffb2901ca4b9a950252b568cbe5fa9cda15059da5bd899bdd45c",
           "authenticode": "NotApplicable"
         }
       ],
@@ -552,7 +552,7 @@
           "path": "PSOBB.Enhancement.asi",
           "buildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.asi",
           "size": 216576,
-          "sha256": "63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674",
+          "sha256": "c810c44682593a79d702a6bb01c845af1bc01d52db979f90b433437c5581675a",
           "authenticode": "NotSigned"
         }
       ]

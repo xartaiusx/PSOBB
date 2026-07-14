@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "componentId": "project-owned-psobb-enhancement",
   "version": "0.1.0-dev",
-  "builtAtUtc": "2026-07-14T16:26:33Z",
+  "builtAtUtc": "2026-07-14T23:03:24Z",
   "baseClient": {
     "relativePath": "Psobb.exe",
     "size": 6971904,
@@ -56,8 +56,8 @@
     },
     {
       "path": "src/PSOBB.Enhancement/include/psobb_enhancement/policy.h",
-      "size": 1092,
-      "sha256": "4b380a7d2a334abc50cc4630cac09749b74fc5c2dfee45efeac08203b439e908"
+      "size": 1091,
+      "sha256": "9ef45af6d78a4a62760b5a8c0366f117eda5029cd924cec5e6154db11a20aa35"
     },
     {
       "path": "src/PSOBB.Enhancement/LICENSE.md",
@@ -66,8 +66,8 @@
     },
     {
       "path": "src/PSOBB.Enhancement/PSOBB.Enhancement.ini.example",
-      "size": 528,
-      "sha256": "72fe88b6d639df18cb887edc06b76a233dd12e937cdbe8a551da1895c061513b"
+      "size": 527,
+      "sha256": "81b7a8c9c913ffb2901ca4b9a950252b568cbe5fa9cda15059da5bd899bdd45c"
     },
     {
       "path": "src/PSOBB.Enhancement/README.md",
@@ -76,13 +76,13 @@
     },
     {
       "path": "src/PSOBB.Enhancement/src/dllmain.cpp",
-      "size": 952,
-      "sha256": "d5c5e7de7aef194b21c824125dc1460a217bd46ee46f1ae7da67e0153d1a37ee"
+      "size": 950,
+      "sha256": "9941f610cb44d78b052ea59527b5d6687e31770c45c62be0cb597450df7fc95e"
     },
     {
       "path": "src/PSOBB.Enhancement/src/enhancement_internal.h",
-      "size": 219,
-      "sha256": "151609a256cbeecc1d99ab33060e7b3addb14a21a78954bcb12d9146c35467c2"
+      "size": 218,
+      "sha256": "866bea3d7675b25593e630a5f6f609f09a4fea648f95a1435561518430049a7b"
     },
     {
       "path": "src/PSOBB.Enhancement/src/enhancement.cpp",
@@ -96,13 +96,13 @@
     },
     {
       "path": "src/PSOBB.Enhancement/src/pinned_image.cpp",
-      "size": 8578,
-      "sha256": "05e58e4ec390dc2920d70d21fc8be72610ea041490fa43c0ac3706f50c541b2d"
+      "size": 8577,
+      "sha256": "cc643ea6e5b88828b3f0ac3003cae0609bc5e90c9dbb2375dead78f4c1630472"
     },
     {
       "path": "src/PSOBB.Enhancement/src/policy.cpp",
-      "size": 3286,
-      "sha256": "0dda26e3aafeccfe3b2143419c326b1b70c6d98a99b75bd57e7650ace5133e17"
+      "size": 3285,
+      "sha256": "da6bc7bcf6ba4c2f7ee17f384f68d4bd3d6a19308d77873c60cfe135a7db1f14"
     },
     {
       "path": "src/PSOBB.Enhancement/src/sha256.cpp",
@@ -116,8 +116,8 @@
     },
     {
       "path": "src/PSOBB.Enhancement/tools/verify_main.cpp",
-      "size": 1642,
-      "sha256": "78123c94e043c2aa43292e0d3d18382c00937f56cef3874dcd0da23770ead38e"
+      "size": 1641,
+      "sha256": "4bb7d3a5019d11ed5f32930b500e2f2ce1bb5cfe71db8c81a8db9c7e8d683883"
     },
     {
       "path": "tests/PSOBB.Enhancement/abi_smoke.cpp",
@@ -126,13 +126,13 @@
     },
     {
       "path": "tests/PSOBB.Enhancement/CMakeLists.txt",
-      "size": 1199,
-      "sha256": "6033b022e30fb28a86e5907d0b4447771f059c95ab09ff4cf1b58a11a684b093"
+      "size": 1198,
+      "sha256": "e6b8a690dd6e81a4e073a7413559a3fd8b2539d0ea85e6b8d9c84142da9ff3f3"
     },
     {
       "path": "tests/PSOBB.Enhancement/policy_tests.cpp",
-      "size": 5396,
-      "sha256": "aa7d89889c196fdbda371d44d8c900a7f51ec985e2ad61b6afbd6f04bf897f3a"
+      "size": 5394,
+      "sha256": "0bc44de9912411c4ff20f415351802d232b5586900023cbf90ddd1150f063588"
     }
   ],
   "artifacts": [
@@ -141,7 +141,7 @@
       "runtimeName": "PSOBB.Enhancement.asi",
       "machine": "x86",
       "size": 216576,
-      "sha256": "63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674",
+      "sha256": "c810c44682593a79d702a6bb01c845af1bc01d52db979f90b433437c5581675a",
       "authenticode": "NotSigned"
     }
   ],
