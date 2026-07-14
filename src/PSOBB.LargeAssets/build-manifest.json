@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "componentId": "project-owned-psobb-large-assets",
+  "version": "0.1.0-pinned-59nl",
+  "builtAtUtc": "2026-07-14T19:05:18Z",
+  "baseClient": {
+    "relativePath": "Psobb.exe",
+    "size": 6971904,
+    "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535",
+    "imageBase": "0x00400000",
+    "sizeOfImage": "0x00762000"
+  },
+  "licensedInput": {
+    "project": "Blue Burst Patch Project",
+    "sourcePath": "Blue Burst Patch Project/large_assets.cpp",
+    "commit": "dc123c5630b36c1bbf5a98660b178ba1ed316db8",
+    "sourceArchiveSha256": "683812d22c095db554a6529df050b4db852c977a33598166365dfdfe7baf88f1",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2021 Solybum, jtuu"
+  },
+  "patchContract": {
+    "upstreamAddressEntries": 18,
+    "uniquePatchSites": 17,
+    "deduplicatedVirtualAddress": "0x005B7CFC",
+    "replacementUint32": 100000000,
+    "expectedValues": {
+      "0x00090000": 16,
+      "0x00100000": 1
+    }
+  },
+  "toolchain": {
+    "generator": "Visual Studio 18 2026",
+    "platform": "Win32",
+    "configuration": "Release",
+    "compiler": "MSVC x86 19.51.36248.0",
+    "windowsSdk": "10.0.28000.0",
+    "cmakeMinimum": "3.25",
+    "languageStandard": "C++20",
+    "runtimeLibrary": "MultiThreaded",
+    "compileOptions": [
+      "/W4",
+      "/WX",
+      "/permissive-",
+      "/sdl",
+      "/Brepro",
+      "/guard:cf",
+      "/utf-8",
+      "/Zc:__cplusplus",
+      "/Zc:inline"
+    ],
+    "linkOptions": [
+      "/Brepro",
+      "/DYNAMICBASE",
+      "/INCREMENTAL:NO",
+      "/NXCOMPAT",
+      "/GUARD:CF"
+    ]
+  },
+  "sourceInputs": [
+    {
+      "path": "src/PSOBB.LargeAssets/CMakeLists.txt",
+      "size": 2353,
+      "sha256": "76efae1c1ace6b711a74aa1fddf6b80b535ac69f9c690970ad12612d0224a56c"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/include/psobb_large_assets/api.h",
+      "size": 1520,
+      "sha256": "d898d2dbd7f2269824931c15f8b9b54cd58d33410be113186ff388112a89ce51"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/include/psobb_large_assets/patch_plan.h",
+      "size": 2827,
+      "sha256": "07957c8a9f63a32fcffc452da745de2ae4e28a27a12e3e06f52220ef1654ea48"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/include/psobb_large_assets/pinned_image.h",
+      "size": 1439,
+      "sha256": "96896d98cfc8f2abff4cdfc8496b5c0e6fb5fba9e6b36a658a49d950df98d16c"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/LICENSE.md",
+      "size": 1083,
+      "sha256": "7cc0d61fcc3f3fe8d13b39dd6dedf464275ed0ee201874190e7aabf503f29c9e"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/PSOBB.LargeAssets.ini.example",
+      "size": 80,
+      "sha256": "58df8b2117ba2d3c2e56a368617286795a2e9206fc9035f8df5d60554294eab4"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/README.md",
+      "size": 4558,
+      "sha256": "69f3fed1a2fe996b25a0fea8fa889828a2b8633c9964bd67856e856f096064bf"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/dllmain.cpp",
+      "size": 631,
+      "sha256": "234c8d2d6377a7617cab9172fa32d01714b10f8a1d26b5dd7185acea31a08769"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/exports.def",
+      "size": 258,
+      "sha256": "1a0b2399afd4dd2fd4d4c0161a7462b932afeda56eac3dda29e2b4b8f1c62f1b"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/patch_plan.cpp",
+      "size": 3666,
+      "sha256": "2906c9e2fa640757a799724a9af455e21ae705337ec922a9cc251b1d99020be9"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/pinned_image.cpp",
+      "size": 10532,
+      "sha256": "9c6e1e690d1c003165b088c267eadd623a3347772314cdcd0038b5d3b41b4de6"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/runtime_internal.h",
+      "size": 243,
+      "sha256": "0af5710cd8181bd0318b2b1e44535db41ab78179503ba7410f4b1bc85224fc2b"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/src/runtime.cpp",
+      "size": 15338,
+      "sha256": "b0cd0ec193e8b5ee5e6e6519c7c113c99d0652e3a155f6d5c1513d979ad2039d"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/THIRD-PARTY-NOTICES.md",
+      "size": 1566,
+      "sha256": "7326dff7a28449c14df41dc2ac7f34e2a858151eb3123863779a8f51eaa6659b"
+    },
+    {
+      "path": "src/PSOBB.LargeAssets/tools/verify_main.cpp",
+      "size": 1612,
+      "sha256": "f53d00b6db3b4a55a115bca2c172dad0f824700ea442c7d01dd79aade90d5098"
+    },
+    {
+      "path": "tests/PSOBB.LargeAssets/abi_smoke.cpp",
+      "size": 2421,
+      "sha256": "056e4ea669010e0104b54d49b087145342256de75116b00f9e3a4693856ae015"
+    },
+    {
+      "path": "tests/PSOBB.LargeAssets/CMakeLists.txt",
+      "size": 1125,
+      "sha256": "1747d83d9cba16aeae53c97a02c7d32915c4f6e1ebbd5b758f5ea9f535be12b6"
+    },
+    {
+      "path": "tests/PSOBB.LargeAssets/patch_tests.cpp",
+      "size": 9615,
+      "sha256": "a3bb325a46131066faa26842d2d60f7e888a8af52d7c4bfdb05a9f33856f65d7"
+    }
+  ],
+  "artifacts": [
+    {
+      "relativeBuildPath": "src/PSOBB.LargeAssets/bin/build-x86/Release/PSOBB.LargeAssets.asi",
+      "runtimeName": "PSOBB.LargeAssets.asi",
+      "machine": "x86",
+      "size": 230400,
+      "sha256": "bede4e0a9117a10c0b07a32712a04594604eea586dc779b1f81c34ae8a0b0bcf",
+      "authenticode": "NotSigned",
+      "securityProperties": [
+        "ASLR",
+        "NX",
+        "Control Flow Guard"
+      ]
+    }
+  ],
+  "verificationTool": {
+    "relativeBuildPath": "src/PSOBB.LargeAssets/bin/build-x86/Release/PSOBB.LargeAssets.Verify.exe",
+    "size": 259584,
+    "sha256": "187aed3b8701783cc6142fce64c50bd47dbb512fd9cfd418eaf5073e88fc4391",
+    "expectedOutputContract": [
+      "fileSizeMatched=true",
+      "sha256Matched=true",
+      "peContractMatched=true",
+      "patchBytesMatched=true",
+      "upstreamAddressEntries=18",
+      "uniquePatchSites=17",
+      "patchValue=100000000"
+    ]
+  },
+  "verification": {
+    "cleanRebuildHashesMatched": true,
+    "ctest": "2/2 passed",
+    "exactClientVerifier": "passed",
+    "rvaToRawSyntheticTest": "passed",
+    "inertWithoutEnabledIni": "passed"
+  },
+  "license": "MIT with upstream MIT notice preserved",
+  "redistribution": "Project source and project-built artifact may be redistributed with LICENSE.md and THIRD-PARTY-NOTICES.md; proprietary client and third-party asset packs are excluded.",
+  "acceptance": "Canary/local-lab only until live asset-load and rollback acceptance passes."
+}

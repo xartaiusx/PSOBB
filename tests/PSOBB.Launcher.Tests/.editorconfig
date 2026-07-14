@@ -1,0 +1,5 @@
+root = false
+
+[*.cs]
+# Scenario-style test names intentionally use Method_Condition_Result.
+dotnet_diagnostic.CA1707.severity = none

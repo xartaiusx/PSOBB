@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psobb.local/schemas/graphics-evidence.schema.json",
+  "title": "PSOBB graphics acceptance evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "generatedAtUtc",
+    "acceptancePolicy",
+    "candidates"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "generatedAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "acceptancePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredPassGates",
+        "artifactRequiredGates",
+        "allowNotApplicableForAcceptance",
+        "maximumP95RegressionPercent",
+        "minimumGameplayMinutes",
+        "minimumSoakMinutes",
+        "casMaximumHaloOvershootPercent",
+        "aspectErrorMaximumPercent"
+      ],
+      "properties": {
+        "requiredPassGates": {
+          "$ref": "#/$defs/gateNameArray"
+        },
+        "artifactRequiredGates": {
+          "$ref": "#/$defs/gateNameArray"
+        },
+        "allowNotApplicableForAcceptance": {
+          "$ref": "#/$defs/gateNameArray"
+        },
+        "maximumP95RegressionPercent": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minimumGameplayMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimumSoakMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "casMaximumHaloOvershootPercent": {
+          "type": "number",
+          "minimum": 0
+        },
+        "aspectErrorMaximumPercent": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    }
+  },
+  "$defs": {
+    "gateName": {
+      "enum": [
+        "provenance",
+        "rightsAndDistribution",
+        "staticConfiguration",
+        "runtimeModuleAllowlist",
+        "liveWindow",
+        "backbufferCapture",
+        "screenshotCorpus",
+        "aspectAndHud",
+        "casHaloAndClipping",
+        "framePacing",
+        "stabilitySoak",
+        "rollback",
+        "manualVisualSelection"
+      ]
+    },
+    "gateNameArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/gateName"
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "note",
+        "artifactRefs"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "pass",
+            "fail",
+            "pending",
+            "blocked",
+            "not-applicable"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "rightsAndDistribution",
+        "staticConfiguration",
+        "runtimeModuleAllowlist",
+        "liveWindow",
+        "backbufferCapture",
+        "screenshotCorpus",
+        "aspectAndHud",
+        "casHaloAndClipping",
+        "framePacing",
+        "stabilitySoak",
+        "rollback",
+        "manualVisualSelection"
+      ],
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/gate"
+        },
+        "rightsAndDistribution": {
+          "$ref": "#/$defs/gate"
+        },
+        "staticConfiguration": {
+          "$ref": "#/$defs/gate"
+        },
+        "runtimeModuleAllowlist": {
+          "$ref": "#/$defs/gate"
+        },
+        "liveWindow": {
+          "$ref": "#/$defs/gate"
+        },
+        "backbufferCapture": {
+          "$ref": "#/$defs/gate"
+        },
+        "screenshotCorpus": {
+          "$ref": "#/$defs/gate"
+        },
+        "aspectAndHud": {
+          "$ref": "#/$defs/gate"
+        },
+        "casHaloAndClipping": {
+          "$ref": "#/$defs/gate"
+        },
+        "framePacing": {
+          "$ref": "#/$defs/gate"
+        },
+        "stabilitySoak": {
+          "$ref": "#/$defs/gate"
+        },
+        "rollback": {
+          "$ref": "#/$defs/gate"
+        },
+        "manualVisualSelection": {
+          "$ref": "#/$defs/gate"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileId",
+        "stage",
+        "disposition",
+        "blockers",
+        "rejectionReason",
+        "gates"
+      ],
+      "properties": {
+        "profileId": {
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "declared",
+            "provenance-pinned",
+            "acquired",
+            "configuration-verified",
+            "runtime-verified",
+            "evidence-complete"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "pending",
+            "blocked",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "blockers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gates": {
+          "$ref": "#/$defs/gates"
+        }
+      }
+    }
+  }
+}

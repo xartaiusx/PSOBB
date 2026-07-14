@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "local-baseline-2026-07-13",
+  "channel": "stable",
+  "protocolRevision": 1,
+  "artifacts": [
+    {
+      "id": "newserv-stable",
+      "sourceKind": "remote",
+      "sourceUrl": "https://github.com/fuzziqersoftware/newserv/releases/download/v2026-02-27/release.zip",
+      "channel": "stable",
+      "protocolRevision": 1,
+      "destination": "server/release/newserv-windows.exe",
+      "sha256": "7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd",
+      "byteSize": 31162999,
+      "license": "MIT",
+      "redistribution": "Allowed with the upstream MIT license",
+      "rollback": {
+        "target": "last-known-good/server-v2026-02-27",
+        "strategy": "snapshot"
+      }
+    },
+    {
+      "id": "tethealla-59nl-client",
+      "sourceKind": "localImport",
+      "channel": "stable",
+      "protocolRevision": 1,
+      "destination": "runtime/client/Psobb.exe",
+      "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535",
+      "byteSize": 6971904,
+      "license": "SEGA proprietary; local import only",
+      "redistribution": "Local import only; never published by this project",
+      "rollback": {
+        "target": "immutable/client-base-1.25.13-59NL",
+        "strategy": "reimportBase"
+      },
+      "requiredBase": {
+        "path": "client/Psobb.exe",
+        "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535",
+        "byteSize": 6971904
+      }
+    }
+  ],
+  "launch": {
+    "serverExecutable": "server/release/newserv-windows.exe",
+    "clientExecutable": "runtime/client/Psobb.exe",
+    "serverArguments": [],
+    "clientArguments": [],
+    "healthPorts": [11000, 12000, 12001]
+  }
+}

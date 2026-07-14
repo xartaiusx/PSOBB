@@ -1,0 +1,975 @@
+{
+  "$schema": "./schemas/graphics-profiles.schema.json",
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-14T19:44:39Z",
+  "baseClient": {
+    "componentId": "tethealla-59nl-english",
+    "executablePath": "Psobb.exe",
+    "executableSha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535"
+  },
+  "acceptanceTarget": {
+    "physicalDisplay": {
+      "manufacturerId": "AUO",
+      "productCode": "7DB2",
+      "width": 2560,
+      "height": 1600,
+      "refreshHz": 240
+    },
+    "trueWidescreenRenderCeiling": {
+      "width": 3840,
+      "height": 2400
+    },
+    "defaultWindowMode": "borderless",
+    "colorSpace": "sdr-source-faithful"
+  },
+  "invariants": {
+    "d3d8OwnerCount": 1,
+    "allowDgVoodooD3D12": false,
+    "allowGlobalDriverOverrides": false,
+    "allowCredentials": false,
+    "blockedDefaultEffects": [
+      "ambient-occlusion",
+      "bloom",
+      "chromatic-aberration",
+      "color-grading",
+      "depth-of-field",
+      "film-grain",
+      "hdr-conversion",
+      "smaa",
+      "tone-mapping"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "safe-native-4x3",
+      "channel": "stable",
+      "distributionClass": "public-gated",
+      "purpose": "Immutable emergency fallback with no graphics proxy.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "application",
+          "componentId": null,
+          "relativePath": null,
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [],
+        "outputApi": "d3d8-native",
+        "featureLevel": null
+      },
+      "display": {
+        "output": {
+          "width": 1024,
+          "height": 768,
+          "fit": "application-controlled"
+        },
+        "aspectPolicy": "preserve-4x3",
+        "internalRenderCandidates": [
+          {
+            "width": 1024,
+            "height": 768
+          }
+        ],
+        "selectedInternalRender": {
+          "width": 1024,
+          "height": 768
+        },
+        "renderCeiling": {
+          "width": 1024,
+          "height": 768
+        },
+        "windowModes": [
+          "application-controlled"
+        ],
+        "defaultWindowMode": "application-controlled",
+        "monitorPolicy": "application-controlled",
+        "scalingFilterCandidates": [
+          "application-controlled"
+        ],
+        "selectedScalingFilter": "application-controlled"
+      },
+      "quality": {
+        "anisotropicFiltering": "application-controlled",
+        "mipmapping": "application-controlled",
+        "preservePointSampled": true,
+        "bilinear2DOperations": true,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": 0,
+        "vsyncOwner": "application",
+        "frameLimitOwner": "application",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [],
+      "rollbackProfileId": null
+    },
+    {
+      "id": "clarity-dgvoodoo-4x3",
+      "channel": "canary",
+      "distributionClass": "public-gated",
+      "purpose": "Known-good D3D11 FL11 supersampled 4:3 clarity baseline.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "aspect-preserving-pillarbox"
+        },
+        "aspectPolicy": "preserve-4x3",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1920
+          },
+          {
+            "width": 3840,
+            "height": 2880
+          }
+        ],
+        "selectedInternalRender": {
+          "width": 3840,
+          "height": 2880
+        },
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2880
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": "lanczos-3"
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": 0,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [],
+      "rollbackProfileId": "safe-native-4x3"
+    },
+    {
+      "id": "lab-widescreen-16x10",
+      "channel": "local-lab",
+      "distributionClass": "local-only",
+      "purpose": "Black-box, nonredistributable 16:10 behavior and feasibility evaluation.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "psobb-widescreen-local-evaluation",
+            "relativePath": "plugins/pso_widescreen.asi",
+            "role": "widescreen-reference",
+            "declaredOrder": 30
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "presentationOwner": "client-patch",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0,
+          4,
+          8
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "local-reference-widescreen"
+      ],
+      "knownLimitations": [
+        "Local evaluation only; the upstream project has no explicit reuse grant.",
+        "This profile is a black-box behavior reference and cannot satisfy the public widescreen gate."
+      ],
+      "rollbackProfileId": "clarity-dgvoodoo-4x3"
+    },
+    {
+      "id": "lab-widescreen-hd-16x10",
+      "channel": "local-lab",
+      "distributionClass": "local-only",
+      "purpose": "Private AshenbubsHD v1.02 texture evaluation on the proven no-CAS local widescreen layout with the exact project-owned 59NL large-asset patch.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "psobb-widescreen-local-evaluation",
+            "relativePath": "plugins/pso_widescreen.asi",
+            "role": "widescreen-reference",
+            "declaredOrder": 30
+          },
+          {
+            "componentId": "project-owned-psobb-large-assets",
+            "relativePath": "plugins/PSOBB.LargeAssets.asi",
+            "role": "large-asset-patch",
+            "declaredOrder": 40
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "presentationOwner": "client-patch",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0,
+          4,
+          8
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "local-reference-widescreen",
+        "exact-59nl-large-assets",
+        "private-ashenbubs-hd-overlay"
+      ],
+      "localAssetOverlay": {
+        "componentId": "ashenbubs-hd-psobb-v1.02-local-import",
+        "version": "1.02",
+        "distributionClass": "local-only",
+        "baseProfileId": "lab-widescreen-16x10",
+        "activationScript": "scripts/Set-PSOBBAshenbubsHDClientActivation.ps1"
+      },
+      "localModules": [
+        {
+          "componentId": "project-owned-psobb-large-assets",
+          "capability": "large-assets-59nl",
+          "relativePath": "plugins/PSOBB.LargeAssets.asi",
+          "configurationPath": "plugins/PSOBB.LargeAssets.ini"
+        }
+      ],
+      "knownLimitations": [
+        "AshenbubsHD is an unchanged private user import with upstream terms that prohibit redistribution, modification, conversion, repacking, and public release without permission.",
+        "The upstream author labels this asset pack Ephinea-only; exact 59NL compatibility remains pending isolated live asset-load, pacing, soak, and rollback acceptance.",
+        "This profile can only be created by the transactional AshenbubsHD activation script from lab-widescreen-16x10; the clean graphics materializer must never rebuild or replace an active private overlay.",
+        "The widescreen reference remains a nonredistributable black-box dependency, so this profile cannot satisfy the public widescreen gate."
+      ],
+      "rollbackProfileId": "lab-widescreen-16x10"
+    },
+    {
+      "id": "lab-widescreen-cas-16x10",
+      "channel": "local-lab",
+      "distributionClass": "local-only",
+      "purpose": "Isolated neutral-CAS evaluation on the proven local-only widescreen reference layout.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "psobb-widescreen-local-evaluation",
+            "relativePath": "plugins/pso_widescreen.asi",
+            "role": "widescreen-reference",
+            "declaredOrder": 30
+          },
+          {
+            "componentId": "reshade-6.7.3-local-import",
+            "relativePath": "dxgi.dll",
+            "role": "post-process",
+            "declaredOrder": 40
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "presentationOwner": "client-patch",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": "psobb-neutral-cas-source",
+        "strengthCandidates": [
+          0.15,
+          0.25,
+          0.35
+        ],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "local-reference-widescreen"
+      ],
+      "knownLimitations": [
+        "Local evaluation only; the widescreen reference has no explicit reuse grant and ReShade is a user-imported binary.",
+        "This profile evaluates CAS on the proven black-box layout and does not represent clean-room implementation readiness."
+      ],
+      "rollbackProfileId": "lab-widescreen-16x10"
+    },
+    {
+      "id": "cleanroom-widescreen-canary",
+      "channel": "local-lab",
+      "distributionClass": "public-gated",
+      "purpose": "Local-lab staging candidate for the project-owned 59NL 16:10 canary, without post-processing.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "project-owned-psobb-enhancement",
+            "relativePath": "plugins/PSOBB.Enhancement.asi",
+            "role": "project-widescreen-partial",
+            "declaredOrder": 30
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "presentationOwner": "client-patch",
+        "monitorPolicy": "nearest-physical-monitor-from-device-window",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "exact-59nl-byte-preflight",
+        "guarded-resolution-override",
+        "horizontal-fov-16x10",
+        "borderless-or-initial-resizable-window",
+        "game-initiated-reset-policy",
+        "client-capability-reporting"
+      ],
+      "knownLimitations": [
+        "Resolution-independent HUD and minimap transformation are not implemented.",
+        "Resizable mode changes the window frame but does not automatically recreate the D3D device when the user resizes it.",
+        "Live client, scene-by-scene visual, pacing, soak, and rollback acceptance remain pending."
+      ],
+      "rollbackProfileId": "clarity-dgvoodoo-4x3"
+    },
+    {
+      "id": "cas-evaluation-16x10",
+      "channel": "local-lab",
+      "distributionClass": "local-only",
+      "purpose": "Isolated local evaluation of standard ReShade and the project-owned neutral CAS shader behind the clean-room widescreen canary.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "project-owned-psobb-enhancement",
+            "relativePath": "plugins/PSOBB.Enhancement.asi",
+            "role": "project-widescreen-partial",
+            "declaredOrder": 30
+          },
+          {
+            "componentId": "reshade-6.7.3-local-import",
+            "relativePath": "dxgi.dll",
+            "role": "post-process",
+            "declaredOrder": 40
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "presentationOwner": "client-patch",
+        "monitorPolicy": "nearest-physical-monitor-from-device-window",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": "psobb-neutral-cas-source",
+        "strengthCandidates": [
+          0.15,
+          0.25,
+          0.35
+        ],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "exact-59nl-byte-preflight",
+        "guarded-resolution-override",
+        "horizontal-fov-16x10",
+        "borderless-or-initial-resizable-window",
+        "game-initiated-reset-policy",
+        "client-capability-reporting"
+      ],
+      "knownLimitations": [
+        "Resolution-independent HUD and minimap transformation are not implemented.",
+        "Resizable mode does not automatically recreate the D3D device when the user resizes it.",
+        "ReShade is a standard local import and is not redistributed by this project.",
+        "CAS remains disabled until one of the three explicit strengths is materialized for isolated evidence collection."
+      ],
+      "rollbackProfileId": "cleanroom-widescreen-canary"
+    },
+    {
+      "id": "fidelity-modern-16x10",
+      "channel": "canary",
+      "distributionClass": "public-gated",
+      "purpose": "Intended true-16:10 profile after project-owned patch and restrained CAS acceptance.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dgvoodoo2-x86-d3d8",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "ultimate-asi-loader-x86",
+            "relativePath": "dinput8.dll",
+            "role": "asi-loader",
+            "declaredOrder": 20
+          },
+          {
+            "componentId": "project-owned-psobb-enhancement",
+            "relativePath": "plugins/PSOBB.Enhancement.asi",
+            "role": "project-widescreen-and-hud",
+            "declaredOrder": 30
+          },
+          {
+            "componentId": "reshade-6.7.3-local-import",
+            "relativePath": "dxgi.dll",
+            "role": "post-process",
+            "declaredOrder": 40
+          }
+        ],
+        "outputApi": "d3d11_fl11_0",
+        "featureLevel": "11_0"
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "exact-full-panel"
+        },
+        "aspectPolicy": "expand-horizontal-16x10",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1600
+          },
+          {
+            "width": 3840,
+            "height": 2400
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 3840,
+          "height": 2400
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "lanczos-3",
+          "lanczos-2",
+          "bicubic"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": 16,
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0,
+          4,
+          8
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": "psobb-neutral-cas-source",
+        "strengthCandidates": [
+          0.15,
+          0.25,
+          0.35
+        ],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [
+        "project-widescreen-16x10",
+        "resolution-independent-hud",
+        "minimap-chat-targeting-anchors",
+        "safe-device-recreation",
+        "client-capability-reporting"
+      ],
+      "knownLimitations": [
+        "This target cannot be promoted until the project-owned enhancement implements HUD/minimap anchoring and automatic resize-triggered device recreation.",
+        "ReShade remains a user-supplied local import and CAS remains evidence-gated."
+      ],
+      "rollbackProfileId": "clarity-dgvoodoo-4x3"
+    },
+    {
+      "id": "dxvk-canary",
+      "channel": "local-lab",
+      "distributionClass": "local-only",
+      "purpose": "Isolated unsupported-on-Windows Vulkan compatibility and pacing comparison.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "dxvk-x86-d3d8-d3d9",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [
+          {
+            "componentId": "dxvk-x86-d3d8-d3d9",
+            "relativePath": "d3d9.dll",
+            "role": "translation-dependency",
+            "declaredOrder": 20
+          }
+        ],
+        "outputApi": "vulkan",
+        "featureLevel": null
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "aspect-preserving-pillarbox"
+        },
+        "aspectPolicy": "preserve-4x3",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1920
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 2560,
+          "height": 1920
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": "application-controlled",
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [],
+      "rollbackProfileId": "clarity-dgvoodoo-4x3"
+    },
+    {
+      "id": "d3d8to9-canary",
+      "channel": "local-lab",
+      "distributionClass": "public-gated",
+      "purpose": "Isolated D3D8-to-D3D9 translation comparison, not an upscaler.",
+      "renderer": {
+        "d3d8Owner": {
+          "kind": "proxy",
+          "componentId": "d3d8to9-x86",
+          "relativePath": "d3d8.dll",
+          "role": "d3d8-owner"
+        },
+        "secondaryLayers": [],
+        "outputApi": "d3d9",
+        "featureLevel": null
+      },
+      "display": {
+        "output": {
+          "width": 2560,
+          "height": 1600,
+          "fit": "aspect-preserving-pillarbox"
+        },
+        "aspectPolicy": "preserve-4x3",
+        "internalRenderCandidates": [
+          {
+            "width": 2560,
+            "height": 1920
+          }
+        ],
+        "selectedInternalRender": null,
+        "renderCeiling": {
+          "width": 2560,
+          "height": 1920
+        },
+        "windowModes": [
+          "borderless",
+          "resizable"
+        ],
+        "defaultWindowMode": "borderless",
+        "monitorPolicy": "physical-auo-2560x1600-first",
+        "scalingFilterCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedScalingFilter": null
+      },
+      "quality": {
+        "anisotropicFiltering": "application-controlled",
+        "mipmapping": "application-driven",
+        "preservePointSampled": true,
+        "bilinear2DOperations": false,
+        "msaaCandidates": [
+          0
+        ],
+        "selectedMsaa": null,
+        "vsyncOwner": "none",
+        "frameLimitOwner": "none",
+        "watermarkEnabled": false,
+        "colorSpace": "sdr-source-faithful"
+      },
+      "postProcessing": {
+        "enabledByDefault": false,
+        "effectComponentId": null,
+        "strengthCandidates": [],
+        "selectedStrength": null
+      },
+      "clientPatchRequirements": [],
+      "rollbackProfileId": "clarity-dgvoodoo-4x3"
+    }
+  ]
+}

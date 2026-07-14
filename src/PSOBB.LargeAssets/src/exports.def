@@ -1,0 +1,5 @@
+EXPORTS
+  PSOBBLargeAssets_GetCapabilities=_PSOBBLargeAssets_GetCapabilities@4
+  PSOBBLargeAssets_GetVersion=_PSOBBLargeAssets_GetVersion@0
+  PSOBBLargeAssets_Initialize=_PSOBBLargeAssets_Initialize@0
+  PSOBBLargeAssets_Rollback=_PSOBBLargeAssets_Rollback@0

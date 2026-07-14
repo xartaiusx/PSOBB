@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "protocolRevision": 1,
+  "profile": "local-baseline",
+  "features": {
+    "privateDrops": "enabled",
+    "sharedAndDuplicateDropModes": "enabled",
+    "commonBank": "enabled",
+    "explicitSave": "enabled",
+    "characterBackups": "enabled",
+    "itemNotifications": "enabled",
+    "materialAndKillCounts": "enabled-stable-qol-accurate-kill-auto-patch",
+    "soloSwitchAssist": "enabled",
+    "clientAutoPatchProfile": "stable-qol-staged-explicit-stopped-server-promotion",
+    "sharedExperience": "planned-gated-two-client-protocol-tests",
+    "authoritativeDamageSync": "planned-gated-client-server-patch-and-two-client-tests",
+    "thirtyTwoCharacterSlots": "planned-gated-project-fork-save-migration-and-restore-tests",
+    "expandedStacksAndBankLimits": "planned-gated-project-fork-save-migration-and-boundary-tests",
+    "twentySixPaletteInputs": "stable-qol-auto-patch-gameplay-input-acceptance-pending",
+    "xinputEnhancements": "planned-gated-licensed-client-patch-and-controller-tests",
+    "rotatingBoosts": "disabled-until-public-soft-launch",
+    "openRegistration": "disabled"
+  }
+}

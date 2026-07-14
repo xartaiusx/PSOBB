@@ -1,0 +1,6 @@
+root = false
+
+[*.cs]
+# These classes are instance services so the coordinator and view model can own,
+# replace, and test them without global state.
+dotnet_diagnostic.CA1822.severity = none

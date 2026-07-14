@@ -1,0 +1,618 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psobb.local/schemas/graphics-profiles.schema.json",
+  "title": "PSOBB graphics profiles",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "generatedAtUtc",
+    "baseClient",
+    "acceptanceTarget",
+    "invariants",
+    "profiles"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "generatedAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "baseClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "executablePath",
+        "executableSha256"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string"
+        },
+        "executablePath": {
+          "const": "Psobb.exe"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "acceptanceTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physicalDisplay",
+        "trueWidescreenRenderCeiling",
+        "defaultWindowMode",
+        "colorSpace"
+      ],
+      "properties": {
+        "physicalDisplay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manufacturerId",
+            "productCode",
+            "width",
+            "height",
+            "refreshHz"
+          ],
+          "properties": {
+            "manufacturerId": {
+              "type": "string"
+            },
+            "productCode": {
+              "type": "string"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "refreshHz": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "trueWidescreenRenderCeiling": {
+          "$ref": "#/$defs/resolution"
+        },
+        "defaultWindowMode": {
+          "enum": [
+            "borderless",
+            "resizable"
+          ]
+        },
+        "colorSpace": {
+          "const": "sdr-source-faithful"
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "d3d8OwnerCount",
+        "allowDgVoodooD3D12",
+        "allowGlobalDriverOverrides",
+        "allowCredentials",
+        "blockedDefaultEffects"
+      ],
+      "properties": {
+        "d3d8OwnerCount": {
+          "const": 1
+        },
+        "allowDgVoodooD3D12": {
+          "const": false
+        },
+        "allowGlobalDriverOverrides": {
+          "const": false
+        },
+        "allowCredentials": {
+          "const": false
+        },
+        "blockedDefaultEffects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 10,
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "d3d8Owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "componentId",
+        "relativePath",
+        "role"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "application",
+            "proxy"
+          ]
+        },
+        "componentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relativePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "const": "d3d8-owner"
+        }
+      }
+    },
+    "secondaryLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "relativePath",
+        "role",
+        "declaredOrder"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string"
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "asi-loader",
+            "widescreen-reference",
+            "project-widescreen-partial",
+            "project-widescreen-and-hud",
+            "large-asset-patch",
+            "post-process",
+            "translation-dependency"
+          ]
+        },
+        "declaredOrder": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "channel",
+        "distributionClass",
+        "purpose",
+        "renderer",
+        "display",
+        "quality",
+        "postProcessing",
+        "clientPatchRequirements",
+        "rollbackProfileId"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "channel": {
+          "enum": [
+            "stable",
+            "canary",
+            "local-lab"
+          ]
+        },
+        "distributionClass": {
+          "enum": [
+            "public-gated",
+            "local-only"
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "renderer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "d3d8Owner",
+            "secondaryLayers",
+            "outputApi",
+            "featureLevel"
+          ],
+          "properties": {
+            "d3d8Owner": {
+              "$ref": "#/$defs/d3d8Owner"
+            },
+            "secondaryLayers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/secondaryLayer"
+              }
+            },
+            "outputApi": {
+              "enum": [
+                "d3d8-native",
+                "d3d11_fl11_0",
+                "d3d9",
+                "vulkan"
+              ]
+            },
+            "featureLevel": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "output",
+            "aspectPolicy",
+            "internalRenderCandidates",
+            "selectedInternalRender",
+            "renderCeiling",
+            "windowModes",
+            "defaultWindowMode",
+            "monitorPolicy",
+            "scalingFilterCandidates",
+            "selectedScalingFilter"
+          ],
+          "properties": {
+            "output": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "width",
+                "height",
+                "fit"
+              ],
+              "properties": {
+                "width": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "fit": {
+                  "type": "string"
+                }
+              }
+            },
+            "aspectPolicy": {
+              "enum": [
+                "preserve-4x3",
+                "expand-horizontal-16x10"
+              ]
+            },
+            "internalRenderCandidates": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/resolution"
+              }
+            },
+            "selectedInternalRender": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "renderCeiling": {
+              "$ref": "#/$defs/resolution"
+            },
+            "windowModes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "application-controlled",
+                  "borderless",
+                  "resizable"
+                ]
+              }
+            },
+            "defaultWindowMode": {
+              "enum": [
+                "application-controlled",
+                "borderless",
+                "resizable"
+              ]
+            },
+            "presentationOwner": {
+              "enum": [
+                "application",
+                "client-patch",
+                "lifecycle"
+              ]
+            },
+            "monitorPolicy": {
+              "type": "string"
+            },
+            "scalingFilterCandidates": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            },
+            "selectedScalingFilter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "anisotropicFiltering",
+            "mipmapping",
+            "preservePointSampled",
+            "bilinear2DOperations",
+            "msaaCandidates",
+            "selectedMsaa",
+            "vsyncOwner",
+            "frameLimitOwner",
+            "watermarkEnabled",
+            "colorSpace"
+          ],
+          "properties": {
+            "anisotropicFiltering": {
+              "type": [
+                "integer",
+                "string"
+              ]
+            },
+            "mipmapping": {
+              "type": "string"
+            },
+            "preservePointSampled": {
+              "type": "boolean"
+            },
+            "bilinear2DOperations": {
+              "type": "boolean"
+            },
+            "msaaCandidates": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  0,
+                  4,
+                  8
+                ]
+              }
+            },
+            "selectedMsaa": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "vsyncOwner": {
+              "enum": [
+                "none",
+                "application",
+                "renderer",
+                "driver"
+              ]
+            },
+            "frameLimitOwner": {
+              "enum": [
+                "none",
+                "application",
+                "renderer",
+                "driver"
+              ]
+            },
+            "watermarkEnabled": {
+              "type": "boolean"
+            },
+            "colorSpace": {
+              "const": "sdr-source-faithful"
+            }
+          }
+        },
+        "postProcessing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabledByDefault",
+            "effectComponentId",
+            "strengthCandidates",
+            "selectedStrength"
+          ],
+          "properties": {
+            "enabledByDefault": {
+              "type": "boolean"
+            },
+            "effectComponentId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "strengthCandidates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 0.35
+              }
+            },
+            "selectedStrength": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "clientPatchRequirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "localAssetOverlay": {
+          "$ref": "#/$defs/localAssetOverlay"
+        },
+        "localModules": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/localModule"
+          }
+        },
+        "knownLimitations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rollbackProfileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "localAssetOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "version",
+        "distributionClass",
+        "baseProfileId",
+        "activationScript"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "distributionClass": {
+          "const": "local-only"
+        },
+        "baseProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activationScript": {
+          "type": "string",
+          "pattern": "^scripts/[A-Za-z0-9_.-]+\\.ps1$"
+        }
+      }
+    },
+    "localModule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "capability",
+        "relativePath",
+        "configurationPath"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capability": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relativePath": {
+          "type": "string",
+          "pattern": "^plugins/[A-Za-z0-9_.-]+\\.asi$"
+        },
+        "configurationPath": {
+          "type": "string",
+          "pattern": "^plugins/[A-Za-z0-9_.-]+\\.ini$"
+        }
+      }
+    }
+  }
+}

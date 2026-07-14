@@ -1,0 +1,53 @@
+# Proprietary and downloaded runtime content
+/runtime/
+/vendor/
+/artifacts/
+/archives/
+/client/
+/server/
+
+# Game and account state
+licenses/
+players/
+teams/
+backups/
+logs/
+*.psochar
+*.psosys
+*.psocard
+*.psosysteam
+
+# Secrets and local overrides
+secrets/
+*.credential.clixml
+*.account.json
+*.secrets.json
+*.local.json
+*.key
+*.pfx
+*-private.pem
+*.private.pem
+.env
+.env.*
+
+# Build output
+bin/
+obj/
+.vs/
+TestResults/
+*.user
+*.suo
+
+# Generated archives and binaries
+*.zip
+*.7z
+*.rar
+*.exe
+*.dll
+*.asi
+*.pdb
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini

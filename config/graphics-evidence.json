@@ -1,0 +1,962 @@
+{
+  "$schema": "./schemas/graphics-evidence.schema.json",
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-14T22:36:59Z",
+  "acceptancePolicy": {
+    "requiredPassGates": [
+      "provenance",
+      "rightsAndDistribution",
+      "staticConfiguration",
+      "runtimeModuleAllowlist",
+      "liveWindow",
+      "backbufferCapture",
+      "screenshotCorpus",
+      "aspectAndHud",
+      "casHaloAndClipping",
+      "framePacing",
+      "stabilitySoak",
+      "rollback",
+      "manualVisualSelection"
+    ],
+    "artifactRequiredGates": [
+      "backbufferCapture",
+      "screenshotCorpus",
+      "framePacing",
+      "stabilitySoak",
+      "rollback",
+      "manualVisualSelection"
+    ],
+    "allowNotApplicableForAcceptance": [
+      "casHaloAndClipping"
+    ],
+    "maximumP95RegressionPercent": 10,
+    "minimumGameplayMinutes": 10,
+    "minimumSoakMinutes": 30,
+    "casMaximumHaloOvershootPercent": 3,
+    "aspectErrorMaximumPercent": 0.1
+  },
+  "candidates": [
+    {
+      "profileId": "safe-native-4x3",
+      "stage": "configuration-verified",
+      "disposition": "pending",
+      "blockers": [],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "Exact 59NL base executable is locked and the profile adds no proxy.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "Local-import-only SEGA client boundary remains enforced.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "Native fallback declares the application as its sole D3D8 owner.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pending",
+          "note": "Repeat after the unified lifecycle work is complete.",
+          "artifactRefs": []
+        },
+        "liveWindow": {
+          "state": "pending",
+          "note": "Safe-mode window capture is not yet indexed.",
+          "artifactRefs": []
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture is indexed.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "Required lossless scene corpus is not complete.",
+          "artifactRefs": []
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "Fallback pillar and HUD measurements are not complete.",
+          "artifactRefs": []
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "This profile has no post-processing.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon baseline is not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Unified-launcher rollback evidence is not complete.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "Native remains a safety baseline rather than the visual winner.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "clarity-dgvoodoo-4x3",
+      "stage": "runtime-verified",
+      "disposition": "pending",
+      "blockers": [],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "Exact dgVoodoo 2.87.3 archive, x86 D3D8 member, and configuration are locked.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "Local evaluation is permitted; public wrapper bundling remains separately gated.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "D3D11 FL11, 3840x2880, Lanczos-3, watermark-off, and single-owner checks pass.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The live client loaded the approved local x86 d3d8.dll, D3D11, and DXGI without a competing proxy.",
+          "artifactRefs": [
+            "runtime:canary/runtime/client/client-profile.json#sha256=416da9c6ece726f74bd052e2637f23dfa0dfc95b4e22eddff0c7d84e3c4fbc33",
+            "runtime:canary/runtime/client/d3d8.dll#sha256=2fe0314195d0caf2c72c5496352c4235858b0f104a3a2b0d88832f15f76faf57"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "A responsive exact 2560x1600 borderless window was observed with the watermark disabled.",
+          "artifactRefs": [
+            "runtime:canary/runtime/client/client-profile.json#sha256=416da9c6ece726f74bd052e2637f23dfa0dfc95b4e22eddff0c7d84e3c4fbc33"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "The settings contract does not prove the actual render target; a RenderDoc capture is required.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "Required lossless scene corpus is not complete.",
+          "artifactRefs": []
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "Expected 4:3 pillars and HUD geometry still require indexed pixel measurements.",
+          "artifactRefs": []
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "This baseline has no post-processing.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon trace is not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "One-click launcher rollback evidence is not complete.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "Same-scene blind A/B selection is not complete.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "lab-widescreen-16x10",
+      "stage": "runtime-verified",
+      "disposition": "pending",
+      "blockers": [
+        "The widescreen reference remains an immutable local-only black-box dependency and cannot enter a public release.",
+        "RenderDoc backbuffer proof, the complete scene and HUD corpus, representative gameplay pacing, the thirty-minute soak, rollback, and blind A/B remain incomplete."
+      ],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "The annotated tag object, peeled commit, ASI-only release digest, and loader digest are pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "The reference is confined to an immutable local-only black-box profile and cannot enter public releases.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "dgVoodoo remains the sole D3D8 owner; dinput8 and the ASI are explicit non-D3D8 layers.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact local-lab profile loaded dgVoodoo as the sole D3D8 owner plus the pinned dinput8 loader and widescreen ASI; the widescreen log records successful 2560x1600 initialization.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T165753511Z-local-lab-lab-widescreen-16x10/client-profile.json#sha256=1e1c8def613f4abeb0f7910962c6d4d5f4f87d13ad936a4114ad68c15384c19b",
+            "runtime:last-known-good/clients/client-20260714T165753511Z-local-lab-lab-widescreen-16x10/pso_widescreen.log#sha256=05a1f96164bc1182f6c5d94f2133f2a7ae7d0426327bd68ec2ed42d9fe07fd7d"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "A responsive, watermark-free, exact 2560x1600 borderless true-widescreen window was observed on the physical panel.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-16x10/20260714T165245895Z/screenshots/lobby-2560x1600-native-lanczos3.png#sha256=664be0792cc951843488169ec6761c74d0108237e442d18b5530a141827ad0a5"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture is indexed.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "An exploratory lossless 2560x1600 lobby capture exists, but the required episode, menu, HUD, effects, fog, and boss corpus is incomplete.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-16x10/20260714T165245895Z/screenshots/lobby-2560x1600-native-lanczos3.png#sha256=664be0792cc951843488169ec6761c74d0108237e442d18b5530a141827ad0a5"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "The exploratory capture is exact 2560x1600 with expanded horizontal view, but circle landmarks, FOV, HUD, minimap, menu anchors, and all-scene geometry still require indexed measurements.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-16x10/20260714T165245895Z/screenshots/lobby-2560x1600-native-lanczos3.png#sha256=664be0792cc951843488169ec6761c74d0108237e442d18b5530a141827ad0a5"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "The ASI-only package is evaluated without its bundled ReShade stack.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon trace is not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Isolated-profile rollback is not proven.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "Black-box behavior comparison is not complete.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "lab-widescreen-hd-16x10",
+      "stage": "runtime-verified",
+      "disposition": "pending",
+      "blockers": [
+        "RenderDoc was armed for the exact All profile, but no .rdc was captured or replay-inspected; backbuffer and internal-render proof remain incomplete.",
+        "The complete lossless scene and HUD geometry corpus and dynamic resize-triggered D3D device recreation remain incomplete.",
+        "Blind same-scene HD-versus-stock selection remains incomplete."
+      ],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "The exact user-owned AshenbubsHD v1.02 archive, complete nested inventory, and reproducible project-owned 59NL large-asset build are SHA-256 pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json",
+            "repo:src/PSOBB.LargeAssets/build-manifest.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "The catalog confines the unchanged proprietary texture assets to a private local-only profile and excludes them from Git, repacking, modification, and every public release graph.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json",
+            "repo:docs/ASHENBUBS-HD-LOCAL-LAB.md"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "The HD profile clones the no-CAS widescreen layout, keeps dgVoodoo as the sole D3D8 owner, and declares the exact private overlay plus one project-owned large-assets ASI and enabled companion INI.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json",
+            "repo:scripts/Set-PSOBBAshenbubsHDClientActivation.ps1"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "Characters, Objects, Monsters, and Maps passed isolated activation and load runs; live inspection of the historical exact All process found the approved local dgVoodoo D3D8 owner, DInput loader, widescreen ASI, and PSOBB.LargeAssets.asi loaded from the LocalLab client tree. Its rolled-back activation remains hash-pinned, and the stopped current-ready All installation binds a new exact activation and materialized profile for the same 484-source-entry to 481-composed-file layout.",
+          "artifactRefs": [
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/rejected/rolled-back-20260714T223224198Z/activation.json#sha256=b68f5c3fe98cb06314f046d08964070f028e46443990ea169bcfcd2db96d7e99",
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=76835d8deaee0eeb35794fad7a7bbcae8c0ed41e2cfeae6ae9ba8a52681b51c5",
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=2d476fa24a6df40dd33ace8d618bab27400e22f1e19b14ed27d75b26ac907cfe"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "The exact All profile passed both presentation policies. Initial Resizable opened as a responsive 1600x1000 client at aspect ratio 1.6 with a caption and thick frame; a reversible 1280x800 window-size test returned to responsive 1600x1000. Borderless then returned to a watermark-free 2560x1600 client at (0,0). Dynamic resize-triggered D3D device recreation remains pending.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T211202742Z-renderdoc-ff1a51e90744/renderdoc-launch-manifest.json#sha256=6e2484ea83fa5619c61b615b1e74b37f9291aabf81022500fe3ed45940b3899f"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "RenderDoc v1.45 launched and armed the exact All profile at an exact 2560x1600 client window, but no .rdc artifact was produced. Configured internal and output dimensions remain expectations until replay inspection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T211202742Z-renderdoc-ff1a51e90744/renderdoc-launch-manifest.json#sha256=6e2484ea83fa5619c61b615b1e74b37f9291aabf81022500fe3ed45940b3899f"
+          ]
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "Lossless exact-2560x1600 Forest frames are indexed for the Objects, Monsters, and exact All runs. Character screens, Pioneer 2, Episodes 2 and 4, menus, chat, inventory, shop, bank, effects, fog, Photon Blasts, and bosses remain incomplete.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/objects-20260714/objects-forest-index.json#sha256=badc34221537280599cbaf95acc931e07a5a2d3600d347f10fbe1a622a86b4f9",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/monsters-20260714/monsters-forest-index.json#sha256=4e156e2b629809e3667ad91586c9cd34e924a32224ffe2bb46870b3e1a73a9a5",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "The exact All Forest index decodes at 2560x1600, detects 2560 pixels of active content at aspect ratio 1.6, and detects zero pillars. Initial Resizable and its reversible window-size test preserved 16:10 window geometry, and Borderless returned to exact 2560x1600. Visual inspection found no obvious stretching, watermark, or HUD or minimap clipping, but circle, FOV, anchor, multi-scene, and dynamic resize-triggered device-recreation measurements remain incomplete.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "The initial HD candidate is explicitly no-CAS and contains no ReShade layer.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pass",
+          "note": "The exact All profile completed 600.165 seconds of representative gameplay with 17,995 valid frames: p50 33.3314 ms, p95 33.7042 ms, and p99 33.9950 ms. The trace recorded zero cadence misses, zero over-100-ms stalls, and 100% Hardware: Independent Flip presentation.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T212234517Z-gameplay-a97d14e3246e/capture-manifest.json#sha256=69e008f19e664c194ac0ed5c7f8c8c22d5bbe8dc566e3260fe9335c23f8c8baa",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T212234517Z-gameplay-a97d14e3246e/presentmon-metrics.json#sha256=2fbed23df1431192f663f0897eaed82233f70270bae8f6874d3dacbe4e276856"
+          ]
+        },
+        "stabilitySoak": {
+          "state": "pass",
+          "note": "The exact All profile completed a 1800.104-second soak with 53,991 valid frames: p50 33.3340 ms, p95 33.8003 ms, and p99 34.1893 ms. The trace recorded zero cadence misses, zero over-100-ms stalls, and 100% Hardware: Independent Flip presentation.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T213416004Z-soak-9f28efe3452c/capture-manifest.json#sha256=caf1a2e04eb48435bf2889f8b8f56b2870f8ebf7bcdde9f701a15349a639a237",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T213416004Z-soak-9f28efe3452c/presentmon-metrics.json#sha256=b329adae6a818e5acabac7a2bfc3e21100bdf51508930e6ae804e579517e19c9"
+          ]
+        },
+        "rollback": {
+          "state": "pass",
+          "note": "Rollback from snapshot activation-20260714T210908201Z-4c9eeba7 restored all 481 targets and the strict clean lab-widescreen-16x10 profile with no overlay, local modules, activation manifest, client, server, or listener remaining. Exact All was then reactivated while stopped from snapshot activation-20260714T223411472Z-2079fe37 as 481 files totaling 3,447,006,836 bytes, with new current activation and profile hashes.",
+          "artifactRefs": [
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/rejected/rolled-back-20260714T223224198Z/activation.json#sha256=b68f5c3fe98cb06314f046d08964070f028e46443990ea169bcfcd2db96d7e99",
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=2d476fa24a6df40dd33ace8d618bab27400e22f1e19b14ed27d75b26ac907cfe",
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=76835d8deaee0eeb35794fad7a7bbcae8c0ed41e2cfeae6ae9ba8a52681b51c5"
+          ]
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "A blind same-scene HD-versus-stock comparison is not complete.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "lab-widescreen-cas-16x10",
+      "stage": "runtime-verified",
+      "disposition": "pending",
+      "blockers": [
+        "CAS 0.15 is technically rejected; aligned lossless pairs for 0.25 and 0.35 are still missing, so the no-CAS default cannot yet be finalized from the complete candidate set.",
+        "The required RenderDoc proof, full scene corpus, gameplay pacing, thirty-minute soak, rollback, and blind visual selection remain incomplete.",
+        "The widescreen reference and ReShade binary remain local-only and cannot enter a public release."
+      ],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "The exact widescreen reference, standard ReShade import, project CAS source, dgVoodoo wrapper, and ASI loader are hash-pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "The combined profile is explicitly local-only; it is evidence for CAS behavior and not a public distribution candidate.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "dgVoodoo is the sole D3D8 owner; UAL, the widescreen ASI, standard ReShade dxgi, immutable template, one preset, and one project shader are explicitly allowlisted.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json",
+            "repo:patches/reshade/PSOBB_NeutralCAS.fx"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact combined profile loaded the approved dgVoodoo, dinput8/widescreen ASI, and standard ReShade dxgi chain with the normalized project-only CAS configuration.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/client-profile.json#sha256=67be5a730590bef84d4efd208d1733df4f41807e7b84816d982525a528c526a0",
+            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/ReShade.log#sha256=6cc5e09e2260255637e56b4a4f4b0f9fb50d1f9057be0f60c50629abff2af554",
+            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/pso_widescreen.log#sha256=ab7f300f1c50039a572b2916b86992328060c8f91180756d9002971d4402604f"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "The combined profile remained responsive in an exact 2560x1600 borderless true-widescreen window with the ReShade effect active; resizable presentation remains a separate pending gate.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/cas-comparison-20260714/indexes/cas-0.15.json#sha256=4b029bdce40f393dea86b77cbd070e20605fc1e3d7aef8e4260e8ac50fba86a5"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture is indexed for this exact combined profile.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "One aligned no-CAS/CAS 0.15 pair is indexed, but 0.25, 0.35, and the required scene corpus are missing.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/cas-comparison-20260714/indexes/cas-0.15.json#sha256=4b029bdce40f393dea86b77cbd070e20605fc1e3d7aef8e4260e8ac50fba86a5"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "The 0.15 pair passes exact 2560x1600 output and 16:10 decoded-aspect checks, but it has no circle/HUD landmarks and does not complete the full geometry corpus.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/cas-comparison-20260714/indexes/cas-0.15.json#sha256=4b029bdce40f393dea86b77cbd070e20605fc1e3d7aef8e4260e8ac50fba86a5"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "pending",
+          "note": "CAS 0.15 is rejected: it introduced 12 exact-black pixels (0.000293%) and reached 6.27451% maximum halo overshoot against the 3% limit (p95 2.352941%). Aligned 0.25 and 0.35 pairs remain missing.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/cas-comparison-20260714/indexes/cas-0.15.json#sha256=4b029bdce40f393dea86b77cbd070e20605fc1e3d7aef8e4260e8ac50fba86a5"
+          ]
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "The 0.15 120-second trace is exploratory. The run labeled 0.25/lobby binds materialized client-profile SHA-256 603b1d3d06fb41ff72a67b958dec24cfca9a9fdf1a4e1f181b36d5086ad7d3fe but actually captured character selection (p95 33.6798 ms, p99 34.2392 ms), so it is quarantined from lobby acceptance; valid 0.25, 0.35, gameplay, and soak traces remain missing.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/20260714T183132038Z-lobby-6b4aabde31df/capture-manifest.json#sha256=074a28f71b2e17a877b904d3a58a7fe6ac47a3f3bf071bc0fc347141fb6ac687",
+            "runtime:graphics-evidence/lab-widescreen-cas-16x10/20260714T184558348Z-lobby-89cd9f828420/capture-manifest.json#sha256=c0ff966b0b4da34be48f5f5b6ad3bf496fa2b62d44b2971465855b55916b4614"
+          ]
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute combined-profile soak evidence is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Rollback to the no-CAS local widescreen reference requires live proof.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "The required blind A/B has not selected a CAS strength.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "cleanroom-widescreen-canary",
+      "stage": "runtime-verified",
+      "disposition": "rejected",
+      "blockers": [],
+      "rejectionReason": "The project enhancement rendered only an approximately 640x480 viewport in the upper-left of the 2560x1600 window and left the remainder black; this is not a valid 16:10 presentation.",
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "The project source, MIT license, source-input build manifest, exact x86 artifact digest, base-client digest, and verification results are pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json",
+            "repo:src/PSOBB.Enhancement/build-manifest.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "Project source and project-built artifacts use MIT; the proprietary base client remains excluded.",
+          "artifactRefs": [
+            "repo:src/PSOBB.Enhancement/LICENSE.md"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "The profile has one dgVoodoo D3D8 owner, an explicit ASI loader and partial clean-room patch, fail-closed feature settings, and no ReShade layer.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json",
+            "repo:src/PSOBB.Enhancement/PSOBB.Enhancement.ini.example"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact project enhancement ASI loaded and passed its guarded 59NL preflight in the isolated evaluation chain.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/client-profile.json#sha256=a33815bd4751fe2027edff8bae8d7c6a49263ba3fa6482266bd10d230c005bec",
+            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/plugins/PSOBB.Enhancement.asi#sha256=63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674"
+          ]
+        },
+        "liveWindow": {
+          "state": "fail",
+          "note": "The live 2560x1600 window contained only an approximately 640x480 upper-left render viewport with the remaining area black.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture is indexed for the project module.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "fail",
+          "note": "The diagnostic frame proves the clean-room layout is invalid before a wider scene corpus can be accepted.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "fail",
+          "note": "The observed active viewport does not fill the 16:10 output, and HUD/minimap transformation is not implemented.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "This isolation profile intentionally has no post-processing.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon traces are not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak evidence is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Pointer/window rollback and full profile rollback remain live acceptance gates.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "fail",
+          "note": "The objectively invalid upper-left viewport disqualifies this build from blind visual selection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        }
+      }
+    },
+    {
+      "profileId": "cas-evaluation-16x10",
+      "stage": "runtime-verified",
+      "disposition": "rejected",
+      "blockers": [],
+      "rejectionReason": "The underlying clean-room chain rendered only an approximately 640x480 upper-left viewport with the remainder black, so CAS could not be evaluated on a valid 16:10 image.",
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "The normal x86 ReShade binary, project CAS source, AMD CAS source commit, and partial clean-room module are hash-locked.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json",
+            "repo:patches/reshade/THIRD-PARTY-NOTICES.md"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "The profile is local-only: ReShade is user-imported, while project CAS and enhancement source retain their MIT notices.",
+          "artifactRefs": [
+            "repo:patches/reshade/LICENSE.md",
+            "repo:src/PSOBB.Enhancement/LICENSE.md"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "dgVoodoo is the sole D3D8 owner; UAL, the project ASI, and standard ReShade dxgi are explicit ordered layers, and the generated preset enables only project CAS.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json",
+            "repo:patches/reshade/PSOBB_NeutralCAS.fx"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact dgVoodoo, loader, project enhancement, and standard ReShade chain loaded; the ReShade log records the project CAS effect without an add-on bundle.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/client-profile.json#sha256=a33815bd4751fe2027edff8bae8d7c6a49263ba3fa6482266bd10d230c005bec",
+            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/ReShade.log#sha256=2de01fbacaaf5d98a14c69a76273566db02299219c50b2136acc7085d03da8f1"
+          ]
+        },
+        "liveWindow": {
+          "state": "fail",
+          "note": "The live output showed the same approximately 640x480 upper-left viewport and black remainder as the clean-room base.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture proves the post-process chain and internal target.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "fail",
+          "note": "The diagnostic frame proves the base layout is invalid, so no CAS scene corpus from this chain is eligible.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "fail",
+          "note": "The active viewport does not fill the 16:10 output and the underlying project module does not implement HUD/minimap transformation.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "pending",
+          "note": "Not evaluated: the invalid clean-room viewport prevents a valid same-scene CAS comparison, so no CAS strength conclusion is drawn from this profile.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon traces for each strength are not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute final-strength soak evidence is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Removal of dxgi, ReShade configuration, preset, and shader must be proven to restore the clean-room profile exactly.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "fail",
+          "note": "The invalid underlying viewport disqualifies this chain before blind CAS selection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/cas-evaluation-16x10/cleanroom-layout-rejection-0.15.jpg#sha256=3598a6f293c7ca712ba947b74fe639f17c062d71efa31aab4e5a2c476a3f847d"
+          ]
+        }
+      }
+    },
+    {
+      "profileId": "fidelity-modern-16x10",
+      "stage": "declared",
+      "disposition": "blocked",
+      "blockers": [
+        "The project-owned module is implemented only for guarded resolution, horizontal FOV, window policy, game-initiated reset, and capability reporting; HUD/minimap transformation and automatic resize-triggered device recreation remain absent.",
+        "ReShade has been locally imported, hash-checked, and Defender-scanned, but its signer chain terminates at an untrusted root and it has not passed the isolated-load evidence gate.",
+        "No CAS candidate has passed halo, clipping, frame-pacing, or manual A/B acceptance."
+      ],
+      "rejectionReason": null,
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "Renderer, loader, ReShade source tag, FidelityFX CAS source, and project shader provenance are declared.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json",
+            "repo:patches/reshade/THIRD-PARTY-NOTICES.md"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "blocked",
+          "note": "The enhancement is MIT-licensed, but public promotion remains blocked on its missing required capabilities and ReShade's user-import distribution boundary.",
+          "artifactRefs": []
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "The declared chain has one D3D8 owner, explicit dinput8/dxgi layers, and only neutral CAS.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "blocked",
+          "note": "The partial clean-room component exists, but the complete public-target capability set and accepted post-process chain do not.",
+          "artifactRefs": []
+        },
+        "liveWindow": {
+          "state": "blocked",
+          "note": "A partial project-owned canary exists but has not passed live acceptance and cannot yet satisfy the target profile.",
+          "artifactRefs": []
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No RenderDoc capture is indexed.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "No project-owned 16:10 scene corpus is indexed.",
+          "artifactRefs": []
+        },
+        "aspectAndHud": {
+          "state": "pending",
+          "note": "Guarded horizontal projection exists, but live visual acceptance and all HUD/minimap anchors remain incomplete.",
+          "artifactRefs": []
+        },
+        "casHaloAndClipping": {
+          "state": "pending",
+          "note": "CAS 0.15, 0.25, and 0.35 have not been compared.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon trace is not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "One-click rollback is not proven.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "pending",
+          "note": "Same-scene blind A/B selection is not complete.",
+          "artifactRefs": []
+        }
+      }
+    },
+    {
+      "profileId": "dxvk-canary",
+      "stage": "runtime-verified",
+      "disposition": "rejected",
+      "blockers": [],
+      "rejectionReason": "The live DXVK chain stretched the client's 4:3 image across the 2560x1600 window, so it fails the no-distortion 16:10 requirement.",
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "DXVK v3.0.1 tag, peeled commit, release digest, and Zlib license are pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "Zlib terms are recorded; the profile remains local because Windows use is unsupported upstream.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "DXVK d3d8.dll is the sole D3D8 owner; its d3d9.dll is an explicit same-component dependency.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact x86 DXVK d3d8/d3d9 pair loaded as the declared sole D3D8 chain and produced a valid DXVK log.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T175613791Z-local-lab-d3d8to9-canary/client-profile.json#sha256=8a2bed8e118679f762d8cdd9327c80784846d7ec1c0281a9e195d814634e28ae",
+            "runtime:last-known-good/clients/client-20260714T175613791Z-local-lab-d3d8to9-canary/Psobb_d3d9.log#sha256=40541e96b2b8051ec5d5b9523fd4fec8c7ef0bb24f9a02dd5b3ecae1944629ac"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "The isolated client remained responsive in an exact 2560x1600 window; the content geometry failed separately.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/dxvk-canary/dxvk-stretched-4x3-rejection.jpg#sha256=dbe15a393437b5ee5eff57435ecbce7ca217aadd05b40772dfeba48bcb118746"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No graphics capture is indexed.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "One diagnostic rejection frame exists; no full scene corpus was collected after the geometry failure.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/dxvk-canary/dxvk-stretched-4x3-rejection.jpg#sha256=dbe15a393437b5ee5eff57435ecbce7ca217aadd05b40772dfeba48bcb118746"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "fail",
+          "note": "The 4:3 client image was horizontally stretched across 16:10 rather than pillarboxed or expanded with corrected projection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/dxvk-canary/dxvk-stretched-4x3-rejection.jpg#sha256=dbe15a393437b5ee5eff57435ecbce7ca217aadd05b40772dfeba48bcb118746"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "The renderer canary has no post-processing.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "The DXVK log is preserved, but no eligible PresentMon trace was collected after the geometry rejection.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T175613791Z-local-lab-d3d8to9-canary/Psobb_d3d9.log#sha256=40541e96b2b8051ec5d5b9523fd4fec8c7ef0bb24f9a02dd5b3ecae1944629ac"
+          ]
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Isolated-profile rollback is not proven.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "fail",
+          "note": "Visible horizontal stretching disqualifies DXVK from the fidelity A/B before preference selection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/dxvk-canary/dxvk-stretched-4x3-rejection.jpg#sha256=dbe15a393437b5ee5eff57435ecbce7ca217aadd05b40772dfeba48bcb118746"
+          ]
+        }
+      }
+    },
+    {
+      "profileId": "d3d8to9-canary",
+      "stage": "runtime-verified",
+      "disposition": "rejected",
+      "blockers": [],
+      "rejectionReason": "The live d3d8to9 chain stretched the client's 4:3 image across the 2560x1600 window and provided no fidelity benefit, so it fails the no-distortion requirement.",
+      "gates": {
+        "provenance": {
+          "state": "pass",
+          "note": "d3d8to9 v1.15.1 commit, release digest, and BSD-2-Clause license are pinned.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "rightsAndDistribution": {
+          "state": "pass",
+          "note": "BSD-2-Clause terms are recorded.",
+          "artifactRefs": [
+            "repo:config/sources.lock.json"
+          ]
+        },
+        "staticConfiguration": {
+          "state": "pass",
+          "note": "d3d8to9 is the sole D3D8 owner and no quality gain is assumed.",
+          "artifactRefs": [
+            "repo:config/graphics-profiles.json"
+          ]
+        },
+        "runtimeModuleAllowlist": {
+          "state": "pass",
+          "note": "The exact d3d8to9 DLL loaded as the sole D3D8 owner in the isolated local-lab profile.",
+          "artifactRefs": [
+            "runtime:last-known-good/clients/client-20260714T180405535Z-local-lab-lab-widescreen-cas-16x10/client-profile.json#sha256=ba716e745cf8440b34491cf4aff58de85616dce5992cb7c2211068086d78ee1f"
+          ]
+        },
+        "liveWindow": {
+          "state": "pass",
+          "note": "The isolated client remained responsive in an exact 2560x1600 window; the content geometry failed separately.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/d3d8to9-canary/d3d8to9-stretched-4x3-rejection.jpg#sha256=2bdb19e4a07739df3519b2411b4448020d579fa6cb566485ea5191c814192cd1"
+          ]
+        },
+        "backbufferCapture": {
+          "state": "pending",
+          "note": "No graphics capture is indexed.",
+          "artifactRefs": []
+        },
+        "screenshotCorpus": {
+          "state": "pending",
+          "note": "One diagnostic rejection frame exists; no full scene corpus was collected after the geometry failure.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/d3d8to9-canary/d3d8to9-stretched-4x3-rejection.jpg#sha256=2bdb19e4a07739df3519b2411b4448020d579fa6cb566485ea5191c814192cd1"
+          ]
+        },
+        "aspectAndHud": {
+          "state": "fail",
+          "note": "The 4:3 client image was horizontally stretched across 16:10 rather than pillarboxed or expanded with corrected projection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/d3d8to9-canary/d3d8to9-stretched-4x3-rejection.jpg#sha256=2bdb19e4a07739df3519b2411b4448020d579fa6cb566485ea5191c814192cd1"
+          ]
+        },
+        "casHaloAndClipping": {
+          "state": "not-applicable",
+          "note": "The renderer canary has no post-processing.",
+          "artifactRefs": []
+        },
+        "framePacing": {
+          "state": "pending",
+          "note": "PresentMon trace is not indexed.",
+          "artifactRefs": []
+        },
+        "stabilitySoak": {
+          "state": "pending",
+          "note": "Thirty-minute soak is not indexed.",
+          "artifactRefs": []
+        },
+        "rollback": {
+          "state": "pending",
+          "note": "Isolated-profile rollback is not proven.",
+          "artifactRefs": []
+        },
+        "manualVisualSelection": {
+          "state": "fail",
+          "note": "Visible horizontal stretching and no quality gain disqualify d3d8to9 before preference selection.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/d3d8to9-canary/d3d8to9-stretched-4x3-rejection.jpg#sha256=2bdb19e4a07739df3519b2411b4448020d579fa6cb566485ea5191c814192cd1"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,599 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-14T19:00:00Z",
+  "components": [
+    {
+      "id": "newserv-stable-release",
+      "role": "server",
+      "sourceUrl": "https://github.com/fuzziqersoftware/newserv/releases/download/v2026-02-27/release.zip",
+      "releaseUrl": "https://github.com/fuzziqersoftware/newserv/releases/tag/v2026-02-27",
+      "version": "v2026-02-27",
+      "commit": "a649a4a146d04dba320bb579ac291527db0febb5",
+      "retrievedAtUtc": "2026-07-13T21:42:08Z",
+      "size": 47080030,
+      "sha256": "aee0696b4392407d46ef584e1b8117307474b791ef09a02282458d1444655869",
+      "signatureState": "GitHub release digest verified; archive and executable have no Authenticode signature",
+      "license": "MIT",
+      "redistribution": "Allowed with the upstream MIT license; runtime remains outside Git",
+      "compatibility": "configuration, patch parity, process start, loopback listeners, root login, character creation, lobby entry, and autosave passed; combat, bank, restart, and relog acceptance remain pending",
+      "rollbackTarget": "last-known-good/server-v2026-02-27",
+    "members": [
+      {
+        "path": "release/newserv-windows.exe",
+        "size": 31162999,
+        "sha256": "7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd",
+        "authenticode": "NotSigned"
+      },
+      {
+        "path": "release/system/client-functions/AccurateKillCount/AccurateKillCount.59NL.patch.s",
+        "size": 3013,
+        "sha256": "286f175ea52a9bfa5754f320425f847c4157f2cb465e2699342834d7cb77e4d0",
+        "authenticode": "NotApplicable"
+      },
+      {
+        "path": "release/system/client-functions/FastTekker/FastTekker.59NL.patch.s",
+        "size": 480,
+        "sha256": "e4ab14cd3adaea59a181c649354da1208f6bee0286a3d81009f4395a5adf0095",
+        "authenticode": "NotApplicable"
+      },
+      {
+        "path": "release/system/client-functions/HungryMagSound/HungryMagSound.59NL.patch.s",
+        "size": 808,
+        "sha256": "56c548defbd42540ce191f5357a39232d97355e0409e685dd6a0bc3986bf286e",
+        "authenticode": "NotApplicable"
+      },
+      {
+        "path": "release/system/client-functions/NoRareSelling/NoRareSelling.59NL.patch.s",
+        "size": 1560,
+        "sha256": "24cb6c046e70ee616c822f8c2e602be5287ec77f6c40b5b1e0160529b3892587",
+        "authenticode": "NotApplicable"
+      },
+      {
+        "path": "release/system/client-functions/Palette/Palette.59NL.patch.s",
+        "size": 5735,
+        "sha256": "b88303e016c1ac49695ef5cc27d40521a702f4c8f234242853312806202016a4",
+        "authenticode": "NotApplicable"
+      }
+    ]
+    },
+    {
+      "id": "newserv-stable-source",
+      "role": "server-source",
+      "sourceUrl": "https://github.com/fuzziqersoftware/newserv/archive/refs/tags/v2026-02-27.zip",
+      "releaseUrl": "https://github.com/fuzziqersoftware/newserv/tree/a649a4a146d04dba320bb579ac291527db0febb5",
+      "version": "v2026-02-27",
+      "commit": "a649a4a146d04dba320bb579ac291527db0febb5",
+      "retrievedAtUtc": "2026-07-13T22:09:00Z",
+      "size": 43820606,
+      "sha256": "c721731193a0cb5544871d810cdf29d9cd391d4233df032d8cc680520e7f287a",
+      "signatureState": "Commit-pinned GitHub-generated archive; acquisition hash recorded locally",
+      "license": "MIT",
+      "redistribution": "Allowed with the upstream MIT license",
+      "compatibility": "source audit reference only; 573 Unix symlinks independently resolve to regular files inside the archive, and this archive is forbidden from runtime extraction",
+      "rollbackTarget": "newserv-stable-release"
+    },
+    {
+      "id": "newserv-canary-source",
+      "role": "server-source",
+      "sourceUrl": "https://github.com/fuzziqersoftware/newserv.git",
+      "releaseUrl": "https://github.com/fuzziqersoftware/newserv/commit/d754a34e271a4fb387be63db34ef0c303e49dcf2",
+      "version": "master-2026-07-11",
+      "commit": "d754a34e271a4fb387be63db34ef0c303e49dcf2",
+      "checkedAtUtc": "2026-07-14T15:38:36Z",
+      "retrievedAtUtc": "2026-07-14T15:38:36Z",
+      "size": 44444488,
+      "sha256": "f7492ace07c333c49d50ac0bfb358c8007a0215106f1405403c3ea094850d7d3",
+      "signatureState": "Commit-pinned GitHub source archive acquired and locally SHA-256 hashed; no binary signature applies",
+      "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked artifact",
+      "license": "MIT",
+      "redistribution": "Allowed with the upstream MIT license",
+      "compatibility": "source archive acquired outside Git; not built and cannot replace the accepted stable release without the canary suite",
+      "rollbackTarget": "newserv-stable-release"
+    },
+    {
+      "id": "tethealla-59nl-english",
+      "role": "base-client",
+      "sourceUrl": "https://web.archive.org/web/20240402011115id_/https://ragol.org/files/bb/TethVer12513_English.zip",
+      "version": "1.25.13-59NL-English",
+      "retrievedAtUtc": "2026-07-13T21:42:08Z",
+      "size": 531148946,
+      "sha256": "45b6afb677de8c97ec2c650756441b357016bb6ddd28ae9af86b1ce0508aa767",
+      "signatureState": "No publisher digest or archive signature; Psobb.exe has no Authenticode signature",
+      "license": "SEGA proprietary game assets; reuse terms not supplied with the archive",
+      "redistribution": "Local import only; never commit, mirror, or publish without separate rights",
+      "compatibility": "archive path safety, Defender scan, executable hash, patch-data parity, root login, character creation, lobby entry, and autosave passed; combat, bank, restart, and relog acceptance remain pending",
+      "rollbackTarget": "immutable stable/client base",
+      "members": [
+        {
+          "path": "Psobb.exe",
+          "size": 6971904,
+          "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535",
+          "authenticode": "NotSigned"
+        }
+      ]
+    },
+    {
+      "id": "dgvoodoo2-x86-d3d8",
+      "role": "renderer",
+      "sourceUrl": "https://github.com/dege-diosg/dgVoodoo2/releases/download/v2.87.3/dgVoodoo2_87_3.zip",
+      "releaseUrl": "https://github.com/dege-diosg/dgVoodoo2/releases/tag/v2.87.3",
+      "version": "2.87.3",
+      "retrievedAtUtc": "2026-07-13T22:01:00Z",
+      "size": 9082391,
+      "sha256": "6fb954bed55bf70e948c5045a663a9df31ea206faf105e327bafe46c318f867f",
+      "signatureState": "Archive hash recorded; x86 D3D8.dll has no Authenticode signature",
+      "license": "dgVoodoo freeware license",
+      "redistribution": "Public bundling remains gated on review of the upstream per-game distribution terms",
+      "compatibility": "downloaded, path-safety checked, Defender scanned, extracted, and launched in a separate D3D11 FL11 canary; exact local wrapper, D3D11 module load, responsive ship-select rendering, and Native isolation passed; the deterministic Ultra clarity profile passes 37 non-running graphics checks, while a fresh live module/window and in-game clarity comparison remain pending",
+      "rollbackTarget": "Native renderer profile",
+      "members": [
+        {
+          "path": "MS/x86/D3D8.dll",
+          "size": 418304,
+          "sha256": "2fe0314195d0caf2c72c5496352c4235858b0f104a3a2b0d88832f15f76faf57",
+          "authenticode": "NotSigned"
+        },
+        {
+          "path": "dgVoodoo.conf",
+          "size": 21903,
+          "sha256": "fd2c19ea2b7c1bd3ae38d86571ac2484e0681294f0783cf5197ad349495a35bd",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "blue-burst-patch-project",
+      "role": "licensed-client-patch-source",
+      "sourceUrl": "https://github.com/Solybum/Blue-Burst-Patch-Project.git",
+      "releaseUrl": "https://github.com/Solybum/Blue-Burst-Patch-Project/commit/dc123c5630b36c1bbf5a98660b178ba1ed316db8",
+      "version": "master-2026-07-13",
+      "commit": "dc123c5630b36c1bbf5a98660b178ba1ed316db8",
+      "checkedAtUtc": "2026-07-14T15:38:37Z",
+      "retrievedAtUtc": "2026-07-14T15:38:37Z",
+      "size": 2135366,
+      "sha256": "683812d22c095db554a6529df050b4db852c977a33598166365dfdfe7baf88f1",
+      "signatureState": "Commit-pinned GitHub source archive acquired and locally SHA-256 hashed; no binary signature applies",
+      "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked artifact",
+      "license": "MIT for source files carrying the project license",
+      "redistribution": "Use licensed source or project-built deltas only; do not redistribute its bundled modified PSOBB executable",
+      "compatibility": "not integrated; gated on native first-login acceptance and per-patch review",
+      "rollbackTarget": "clean 59NL client runtime"
+    },
+    {
+      "id": "psobb-widescreen-local-evaluation",
+      "role": "widescreen-reference",
+      "sourceUrl": "https://github.com/therealpixelated/psobb-widescreen/releases/download/v1.0.2/pso-widescreen-1.0.2-asi-only.zip",
+      "repositoryUrl": "https://github.com/therealpixelated/psobb-widescreen.git",
+      "releaseUrl": "https://github.com/therealpixelated/psobb-widescreen/releases/tag/v1.0.2",
+      "version": "v1.0.2",
+      "tagObjectSha": "4927d5599692eddd3acc0ec6241b7d27c6838b3e",
+      "commit": "c5703cd304215b629ceb2d00e847ee20ca8d8c17",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:58Z",
+      "size": 51448788,
+      "sha256": "57e60bc6cfe1dbd231b34e27c01e5e6f066b7b725c49588d24cd3c5c930e96ce",
+      "signatureState": "Official GitHub release digest matched the acquired archive; pso_widescreen.asi is not Authenticode-signed",
+      "scanState": "Microsoft Defender custom scans passed 2026-07-14 with no new detection for the locked archive and extracted ASI",
+      "license": "No explicit reuse license found for the project code or binary",
+      "redistribution": "Local evaluation only; excluded from every public release pending written permission or replacement",
+      "compatibility": "acquired and extracted outside Git but not integrated; ASI-only artifact is the only eligible local-evaluation package",
+      "rollbackTarget": "clean 59NL client runtime",
+      "members": [
+    {
+      "path": "patches/pso_widescreen.asi",
+      "size": 50767360,
+      "sha256": "7c9f6ecdb28d6ebdf7752154c59fd87ecd3f59d86b901b1bfda3423ac472c775",
+      "authenticode": "NotSigned"
+    },
+    {
+      "path": "patches/pso_widescreen.ini",
+      "size": 7519,
+      "sha256": "f823dba611d20467652ac6e376666fe44571b1009a8270c6a1c80365446e79f5",
+      "authenticode": "NotApplicable"
+    }
+      ]
+    },
+    {
+      "id": "dxvk-x86-d3d8-d3d9",
+      "role": "renderer-canary",
+      "sourceUrl": "https://github.com/doitsujin/dxvk/releases/download/v3.0.1/dxvk-3.0.1.tar.gz",
+      "releaseUrl": "https://github.com/doitsujin/dxvk/releases/tag/v3.0.1",
+      "version": "v3.0.1",
+      "tagObjectSha": "5432235794a56585ea87090be02213d7c94a5fdb",
+      "commit": "c850747f1df24180ce97b7a9094603f39da1251d",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:57Z",
+      "size": 17873057,
+      "sha256": "bebb6284db590535b7b005c102ebf6850c98842cff0fded9aacb74babae14c49",
+      "signatureState": "Official GitHub release digest matched the acquired archive; extracted x86 members are locally SHA-256 locked",
+      "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked archive",
+      "license": "Zlib",
+      "redistribution": "Source and binaries follow the upstream Zlib license; Windows use remains an unsupported local canary",
+      "compatibility": "acquired outside Git but not integrated; x32 D3D8 and D3D9 files must be evaluated without any competing proxy",
+      "rollbackTarget": "clarity-dgvoodoo-4x3",
+      "members": [
+        {
+          "path": "x32/d3d8.dll",
+          "size": 1691662,
+          "sha256": "328da9ad39995748a47a15f47124c4cc99ec4d8b1d6daf628e3f669564bbaf9a",
+          "authenticode": "NotEvaluated"
+        },
+        {
+          "path": "x32/d3d9.dll",
+          "size": 7786510,
+          "sha256": "3bcc7134759ac64897e492e3fb666ae00d341fa06edb4b27867d5a6ab2c6e5a7",
+          "authenticode": "NotEvaluated"
+        }
+      ]
+    },
+    {
+      "id": "d3d8to9-x86",
+      "role": "renderer-canary",
+      "sourceUrl": "https://github.com/crosire/d3d8to9/releases/download/v1.15.1/d3d8.dll",
+      "releaseUrl": "https://github.com/crosire/d3d8to9/releases/tag/v1.15.1",
+      "version": "v1.15.1",
+      "commit": "65870f2302e9c496cd6d873d6095961d5c777668",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:56Z",
+      "size": 124416,
+      "sha256": "ab6bf7a9a9f4b3e66a75ca038d8d10289c88acbfe8d52c3b5a8a9a259cb26cd5",
+      "signatureState": "Official GitHub release digest matched the acquired DLL; DLL is not Authenticode-signed",
+      "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked DLL",
+      "license": "BSD-2-Clause",
+      "redistribution": "Allowed with the upstream BSD-2-Clause notice",
+      "compatibility": "acquired outside Git but not integrated; translation and stability canary only, not an assumed quality enhancement",
+      "rollbackTarget": "clarity-dgvoodoo-4x3"
+    },
+    {
+      "id": "ultimate-asi-loader-x86",
+      "role": "client-plugin-loader-local",
+      "sourceUrl": "https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/download/v9.7.2/Ultimate-ASI-Loader.zip",
+      "releaseUrl": "https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/tag/v9.7.2",
+      "version": "v9.7.2",
+      "commit": "ab722befd52581a34449b603926cfab476e66b05",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:55Z",
+      "size": 3906673,
+      "sha256": "0f34758b30eaa0efb59f7ae04100db789914e1a08891b89878b8fdb189c2a7c5",
+      "signatureState": "Official GitHub release digest matched the acquired archive; x86 dinput8.dll signer is CN=FusionFix but its certificate chain terminates at an untrusted root",
+      "scanState": "Microsoft Defender custom scans passed 2026-07-14 with no new detection for the locked archive and extracted DLL",
+      "license": "MIT",
+      "redistribution": "Allowed with the upstream MIT license; only the reviewed x86 DInput8 build may be selected",
+      "compatibility": "acquired and extracted outside Git but not integrated; intended solely as the explicit dinput8.dll ASI layer",
+      "rollbackTarget": "clean 59NL client runtime",
+      "members": [
+        {
+          "path": "dinput8.dll",
+          "size": 5413776,
+          "sha256": "c7277e832f6f07af64903a99ecebab2936260cbf55eda70787c5d7b2d5b9fe60",
+          "authenticode": "UnknownError-UntrustedRoot-CN=FusionFix"
+        }
+      ]
+    },
+    {
+      "id": "reshade-6.7.3-local-import",
+      "role": "post-process-local-import",
+      "sourceUrl": "https://reshade.me/downloads/ReShade_Setup_6.7.3.exe",
+      "releaseUrl": "https://reshade.me/",
+      "repositoryUrl": "https://github.com/crosire/reshade.git",
+      "version": "v6.7.3",
+      "commit": "4a50d1eddace85734871d91792ff214f13f66c01",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:55Z",
+      "size": 3982792,
+      "sha256": "56791fd065358e899c581ebefe2ad871399b7c7ae83fb85e1154c08a75a44147",
+      "signatureState": "Official-site installer acquired and locally hashed; installer and extracted ReShade32.dll are signed by CN=ReShade but the certificate chain terminates at an untrusted root",
+      "scanState": "Microsoft Defender custom scans passed 2026-07-14 with no new detection for the locked installer and extracted DLL",
+      "license": "BSD-3-Clause source; upstream binary and shader redistribution instructions also apply",
+      "redistribution": "Local user import only; never bundle the installer, ReShade binary, or upstream shader package",
+      "compatibility": "normal x86 build acquired and extracted outside Git but not integrated; explicit D3D11 dxgi.dll layer behind dgVoodoo only",
+      "rollbackTarget": "clarity-dgvoodoo-4x3",
+      "members": [
+        {
+          "path": "ReShade32.dll",
+          "size": 4015384,
+          "sha256": "b63df921946967d2cd8ddb1bf8a5f66b4f3c9b269a5f4ea8ba49b6dba330658b",
+          "authenticode": "UnknownError-UntrustedRoot-CN=ReShade"
+        }
+      ]
+    },
+    {
+      "id": "presentmon-portable",
+      "role": "graphics-diagnostic",
+      "sourceUrl": "https://github.com/GameTechDev/PresentMon/releases/download/v2.5.1/PresentMon-2.5.1-x64.exe",
+      "releaseUrl": "https://github.com/GameTechDev/PresentMon/releases/tag/v2.5.1",
+      "version": "v2.5.1",
+      "commit": "3e06c7dcb922e411bae38503b51ab501be61c37f",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:55Z",
+      "size": 956768,
+      "sha256": "9bec3083069f58f911e6a512f4806db51a27bd096103087bc1d05ef54c80a191",
+      "signatureState": "Official GitHub release digest matched the acquired portable executable; Authenticode signature is valid",
+      "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked executable",
+      "license": "MIT",
+      "redistribution": "Diagnostic-only local acquisition; public bundling is not required",
+      "compatibility": "acquired as an external evidence tool; never part of a playable client profile",
+      "rollbackTarget": "remove diagnostic tool"
+    },
+    {
+      "id": "renderdoc-diagnostic",
+      "role": "graphics-diagnostic",
+      "sourceUrl": "https://renderdoc.org/builds",
+      "releaseUrl": "https://github.com/baldurk/renderdoc/releases/tag/v1.45",
+      "version": "v1.45",
+      "tagObjectSha": "7c35ccd80ca49ce4091b18a741016df848ff130a",
+      "commit": "2fc0bc04cb95499635f63986a55bc6f67849dd9f",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T15:31:57Z",
+      "size": 97805614,
+      "sha256": "bd665c348a8245d10a1f513e35b83603edc1a78006277583d09ec0769286eea4",
+      "signatureState": "Version and signed source release are pinned; renderdoc.org portable archive is locally hashed and its qrenderdoc.exe and x86 renderdoc.dll signatures are valid",
+      "scanState": "Microsoft Defender custom scans passed 2026-07-14 with no new detection for the locked archive and selected executables",
+      "license": "MIT",
+      "redistribution": "Diagnostic-only local acquisition; public bundling is not required",
+      "compatibility": "acquired and extracted as an external evidence tool; never part of a playable client profile",
+      "rollbackTarget": "remove diagnostic tool",
+      "members": [
+        {
+          "path": "qrenderdoc.exe",
+          "size": 12962968,
+          "sha256": "c9904905fe380b2869d48c7a4209c2331370e0bfda502a24da26ec4031cf885b",
+          "authenticode": "Valid"
+        },
+        {
+          "path": "x86/renderdoc.dll",
+          "size": 21964440,
+          "sha256": "89a7b07f232514eb1a70960d43011f8de7cf7958303ff6b1e6c7e34bfb9789f7",
+          "authenticode": "Valid"
+        }
+      ]
+    },
+    {
+      "id": "sevenzip-local-extraction-tool",
+      "role": "local-archive-extraction-tool",
+      "sourceUrl": "https://www.7-zip.org/",
+      "releaseUrl": "https://www.7-zip.org/download.html",
+      "version": "26.02",
+      "checkedAtUtc": "2026-07-14T19:00:00Z",
+      "retrievedAtUtc": null,
+      "size": 576000,
+      "sha256": "83967f1b02b43c4efeda302795722c809e0e81b8307de73558d10484d5676a7d",
+      "signatureState": "The locally installed official 7z.exe and 7z.dll are not Authenticode-signed; both exact binaries are SHA-256 locked",
+      "license": "GNU LGPL-2.1-or-later, BSD-2-Clause, BSD-3-Clause, and the upstream unRAR restriction as documented by 7-Zip",
+      "redistribution": "Not redistributed by this project; the operator supplies the separately installed exact local tool",
+      "compatibility": "Official 7-Zip 26.02 on Windows 11; used only to list, test, and extract locked RAR inputs into an isolated local-lab staging tree",
+      "rollbackTarget": "remove the staged asset overlay; no game or server file is changed by tool acquisition",
+      "members": [
+        {
+          "path": "7z.dll",
+          "size": 1906688,
+          "sha256": "69fd4df057985c40e510e2fac182881c7f85e90aa13ec703f763a8fdb2ce61f8",
+          "authenticode": "NotSigned"
+        }
+      ]
+    },
+    {
+      "id": "ashenbubs-hd-psobb-v1.02-local-import",
+      "role": "user-imported-local-texture-assets",
+      "sourceUrl": "https://www.nexusmods.com/phantasystaronline/mods/3",
+      "releaseUrl": "https://www.nexusmods.com/phantasystaronline/mods/3?tab=files",
+      "version": "1.02",
+      "checkedAtUtc": "2026-07-14T19:00:00Z",
+      "retrievedAtUtc": "2026-07-14T17:17:44.7690544Z",
+      "size": 1147485243,
+      "sha256": "cfe0fd182485e34d05f5d93b08580453a351ad7ba8ad35056d9167a412b2efea",
+      "signatureState": "User-owned Nexus archive has no publisher signature; the complete outer ZIP and every nested RAR are SHA-256 locked",
+      "scanState": "Microsoft Defender custom scans of the exact outer ZIP and the extracted quarantine root both completed 2026-07-14 with zero detections before and after each scan",
+      "license": "Proprietary mod assets; Nexus permissions require author approval for modification or asset use",
+      "redistribution": "Local use only. Do not upload, repack, modify, publish, commit, or add these assets to a release manifest",
+      "distributionClass": "local-only",
+      "compatibilityState": "ephinea-only-upstream-warning",
+      "compatibility": "The author states v1.02 currently works only on Ephinea because its client raises texture allocation limits. This project may stage the unchanged files but must not activate them until an exact-59NL large-asset patch and isolated acceptance pass",
+      "rollbackTarget": "local-lab/asset-overlays/ashenbubs-hd-psobb-v1.02/snapshots",
+      "maximumAssetBytes": 100000000,
+      "maximumObservedAssetBytes": 85533184,
+      "expandedAssetBytes": 3449734004,
+      "activationRequirements": {
+        "requiredClientExecutableSha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535",
+        "requiredComponentId": "project-owned-psobb-large-assets",
+        "requiredCapability": "large-assets-59nl",
+        "requiredMaximumAssetBytes": 100000000,
+        "integrationState": "not-attached-by-this-asset-materializer"
+      },
+      "members": [
+        {
+          "path": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD - PSO - Monster Pack v0-02.rar",
+          "size": 186034758,
+          "sha256": "bcfa18ef8c590b5695f23c0f285fc89f768bf89c9fa424a0f35713b72152a754",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD - PSO - Object NPC Pack v0-03.rar",
+          "size": 49783223,
+          "sha256": "4beee774b2bbfa88cdc8b4ab277f81dda876913e1b5a340e65d278bfb3d27abc",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD PSO - Character Pack V0-01.rar",
+          "size": 100737823,
+          "sha256": "de38c9517a41ab6dea1757ea5b2468559245d0a97d79b753ba0fb580ae690192",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/Scene/AshenbubsHD - PSO - Map Pack v0-01.rar",
+          "size": 810750630,
+          "sha256": "b02cf25119ee2f61c7c7f9be98960b1f4171d9d19dac1da1c319f24a6678d1f5",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "AshenbubsHD - PSOBB - All Mods/Read Me.txt",
+          "size": 5718,
+          "sha256": "9aec8149308d0287483193fec2ca1fb5534b04f85eda2f94dd7fc50e58577991",
+          "authenticode": "NotApplicable"
+        }
+      ],
+      "packArchives": [
+        {
+          "id": "monster",
+          "memberPath": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD - PSO - Monster Pack v0-02.rar",
+          "destinationRoot": "data",
+          "extension": ".bml",
+          "entryCount": 137,
+          "expandedBytes": 231514592,
+          "maximumEntryBytes": 22422432
+        },
+        {
+          "id": "object-npc",
+          "memberPath": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD - PSO - Object NPC Pack v0-03.rar",
+          "destinationRoot": "data",
+          "extension": ".bml",
+          "entryCount": 192,
+          "expandedBytes": 77103296,
+          "maximumEntryBytes": 8782144
+        },
+        {
+          "id": "character",
+          "memberPath": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/AshenbubsHD PSO - Character Pack V0-01.rar",
+          "destinationRoot": "data",
+          "extension": ".afs",
+          "entryCount": 12,
+          "expandedBytes": 444502016,
+          "maximumEntryBytes": 61546496
+        },
+        {
+          "id": "map",
+          "memberPath": "AshenbubsHD - PSOBB - All Mods/AshenbubsHD - PSO BB/Data/Scene/AshenbubsHD - PSO - Map Pack v0-01.rar",
+          "destinationRoot": "data/scene",
+          "extension": ".xvm",
+          "entryCount": 143,
+          "expandedBytes": 2696614100,
+          "maximumEntryBytes": 85533184
+        }
+      ],
+      "allowedIdenticalCollisions": [
+        "data/bm_obj_ep4_bee_a.bml",
+        "data/bm_obj_ep4_bee_b.bml",
+        "data/bm_obj_ep4_bee_nest.bml"
+      ]
+    },
+    {
+      "id": "fidelityfx-cas-source",
+      "role": "licensed-shader-source",
+      "sourceUrl": "https://github.com/GPUOpen-Effects/FidelityFX-CAS.git",
+      "releaseUrl": "https://github.com/GPUOpen-Effects/FidelityFX-CAS/tree/9fabcc9a2c45f958aff55ddfda337e74ef894b7f",
+      "version": "master-2026-07-14",
+      "commit": "9fabcc9a2c45f958aff55ddfda337e74ef894b7f",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": null,
+      "size": null,
+      "sha256": null,
+      "signatureState": "Commit and official MIT license object are pinned; no runtime binary exists",
+      "license": "MIT; LICENSE.txt object 6adade01787c4a679e61de9bf39fe865f15ee21f",
+      "redistribution": "Source-derived work is allowed with the AMD copyright and MIT notice",
+      "compatibility": "reviewed as the algorithm and license provenance for the project-owned neutral CAS shader",
+      "rollbackTarget": "disable PSOBB neutral CAS"
+    },
+    {
+      "id": "psobb-neutral-cas-source",
+      "role": "project-owned-shader-source",
+      "sourceUrl": "repo:patches/reshade/PSOBB_NeutralCAS.fx",
+      "releaseUrl": null,
+      "version": "0.1.0-dev",
+      "checkedAtUtc": "2026-07-14T17:25:14Z",
+      "retrievedAtUtc": "2026-07-14T15:30:36Z",
+      "size": 2750,
+      "sha256": "5bfe5565fdc06d39682f612f20fe146dda24f76b76d5c18b3ee76e6858747adf",
+      "signatureState": "Source-controlled SHA-256; release signing remains pending",
+      "license": "MIT at repo:patches/reshade/LICENSE.md with AMD FidelityFX CAS MIT notice",
+      "redistribution": "Source redistribution allowed with repository and AMD notices; compiled/runtime promotion remains evidence-gated",
+      "compatibility": "self-contained source and conservative 0.15 preset added; no external shader header is required and no runtime is yet promoted",
+      "rollbackTarget": "disable PSOBB neutral CAS",
+      "members": [
+        {
+          "path": "patches/reshade/PSOBB-NeutralCAS-Preset.ini",
+          "size": 178,
+          "sha256": "416f420795602a8e3b81fd2e815de394635db003772496acad63d1ba43eee0f6",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "project-owned-psobb-enhancement",
+      "role": "project-owned-client-enhancement",
+      "sourceUrl": "repo:src/PSOBB.Enhancement/build-manifest.json",
+      "releaseUrl": null,
+      "version": "0.1.0-dev",
+      "checkedAtUtc": "2026-07-14T15:30:36Z",
+      "retrievedAtUtc": "2026-07-14T16:26:33Z",
+      "size": 5414,
+      "sha256": "23e1d67e910850ca4bd57d51a4b07a0f12dd671690a23af771dd43b2e24377d5",
+      "signatureState": "Source-controlled build manifest is hash-locked; the exact x86 canary artifact is unsigned",
+      "scanState": "Project-built source and artifact; exact build, unit, ABI, and client-byte verification passed; live runtime acceptance remains pending",
+      "license": "MIT at repo:src/PSOBB.Enhancement/LICENSE.md",
+      "redistribution": "Project source and project-built artifact may be redistributed with the MIT license; proprietary client files remain excluded",
+      "compatibility": "Exact 59NL only; guarded 16:10 presentation and horizontal FOV exist, but HUD/minimap transformation and automatic resize-triggered device recreation are not implemented",
+      "rollbackTarget": "clarity-dgvoodoo-4x3",
+      "members": [
+        {
+          "path": "src/PSOBB.Enhancement/LICENSE.md",
+          "size": 1083,
+          "sha256": "7cc0d61fcc3f3fe8d13b39dd6dedf464275ed0ee201874190e7aabf503f29c9e",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "src/PSOBB.Enhancement/PSOBB.Enhancement.ini.example",
+          "size": 528,
+          "sha256": "72fe88b6d639df18cb887edc06b76a233dd12e937cdbe8a551da1895c061513b",
+          "authenticode": "NotApplicable"
+        }
+      ],
+      "runtimeArtifacts": [
+        {
+          "path": "PSOBB.Enhancement.asi",
+          "buildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.asi",
+          "size": 216576,
+          "sha256": "63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674",
+          "authenticode": "NotSigned"
+        }
+      ]
+    },
+    {
+      "id": "project-owned-psobb-large-assets",
+      "role": "project-owned-client-large-asset-patch",
+      "sourceUrl": "repo:src/PSOBB.LargeAssets/build-manifest.json",
+      "releaseUrl": null,
+      "version": "0.1.0-pinned-59nl",
+      "checkedAtUtc": "2026-07-14T19:05:18Z",
+      "retrievedAtUtc": "2026-07-14T19:05:18Z",
+      "size": 6264,
+      "sha256": "5efd70efd8e8b013b9a115bcc4cdaac882d24ac5e621f9510610b9142947379c",
+      "signatureState": "Source-controlled reproducible build manifest is hash-locked; the exact x86 ASI is unsigned",
+      "scanState": "Project-built source and artifact; clean rebuild, CTest, ABI, exact-client byte preflight, and inert-without-enabled-INI checks passed",
+      "license": "MIT at repo:src/PSOBB.LargeAssets/LICENSE.md with the Blue Burst Patch Project MIT notice preserved",
+      "redistribution": "Project source and project-built artifact may be redistributed with LICENSE.md and THIRD-PARTY-NOTICES.md; proprietary client and AshenbubsHD assets remain excluded",
+      "compatibility": "Exact 59NL only; raises the 17 deduplicated client image-allocation sites to 100000000 bytes and remains inert unless its exact adjacent INI enables it",
+      "rollbackTarget": "lab-widescreen-16x10",
+      "runtimeArtifacts": [
+        {
+          "path": "PSOBB.LargeAssets.asi",
+          "buildPath": "src/PSOBB.LargeAssets/bin/build-x86/Release/PSOBB.LargeAssets.asi",
+          "size": 230400,
+          "sha256": "bede4e0a9117a10c0b07a32712a04594604eea586dc779b1f81c34ae8a0b0bcf",
+          "authenticode": "NotSigned"
+        }
+      ]
+    }
+  ],
+  "behaviorReferences": [
+    {
+      "id": "ephinea-features",
+      "url": "https://ephinea.pioneer2.net/about-ephinea/",
+      "use": "behavior benchmark only; no code, binaries, quests, tables, branding, or assets copied"
+    },
+    {
+      "id": "ragol-features",
+      "url": "https://ragol.org/features",
+      "use": "Vanilla-plus design reference only; Ragol is not treated as a Blue Burst implementation"
+    }
+  ]
+}

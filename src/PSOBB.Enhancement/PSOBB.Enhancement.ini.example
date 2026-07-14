@@ -1,0 +1,19 @@
+[Enhancement]
+; Fail-safe default. Copy beside PSOBB.Enhancement.asi as
+; PSOBB.Enhancement.ini and explicitly opt in only after review.
+Enabled=0
+
+; The only accepted render targets are 2560x1600 and 3840x2400.
+Width=2560
+Height=1600
+
+; Unchanged, Borderless, or Resizable.
+WindowMode=Unchanged
+
+; Adjusts only matrices that pass the perspective-shape guard.
+HorizontalFov=0
+
+; These gates intentionally reject 1/true until corresponding hooks are
+; independently proven and accepted.
+HudMinimap=0
+AutomaticDeviceRecreation=0

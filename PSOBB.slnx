@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/PSOBB.AccountBroker/PSOBB.AccountBroker.csproj" />
+  <Project Path="src/PSOBB.Launcher/PSOBB.Launcher.csproj" />
+  <Project Path="src/PSOBB.Portal/PSOBB.Portal.csproj" />
+  <Project Path="tests/PSOBB.Accounts.Tests/PSOBB.Accounts.Tests.csproj" />
+  <Project Path="tests/PSOBB.Launcher.Tests/PSOBB.Launcher.Tests.csproj" />
+</Solution>

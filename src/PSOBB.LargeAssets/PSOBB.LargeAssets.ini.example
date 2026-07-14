@@ -1,0 +1,3 @@
+[LargeAssets]
+# The ASI remains inert unless this value is exactly 1.
+Enabled=0

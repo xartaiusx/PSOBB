@@ -1,0 +1,5 @@
+EXPORTS
+  PSOBBEnhancement_GetCapabilities=_PSOBBEnhancement_GetCapabilities@4
+  PSOBBEnhancement_GetVersion=_PSOBBEnhancement_GetVersion@0
+  PSOBBEnhancement_Initialize=_PSOBBEnhancement_Initialize@0
+  PSOBBEnhancement_Rollback=_PSOBBEnhancement_Rollback@0

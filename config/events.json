@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "rotation": ["experience", "rare-enemy", "drop", "rare-drop"],
+  "boostPercent": 25,
+  "startsAtUtc": null,
+  "endsAtUtc": null,
+  "puristOptOut": true
+}

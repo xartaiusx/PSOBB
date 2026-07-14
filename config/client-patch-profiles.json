@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "defaultProfile": "stable-qol",
+  "profiles": [
+    {
+      "id": "baseline",
+      "channel": "stable",
+      "description": "Unmodified 59NL client behavior; emergency rollback profile.",
+      "autoPatches": [],
+      "bbRequiredPatches": []
+    },
+    {
+      "id": "stable-qol",
+      "channel": "stable",
+      "description": "Pinned-release, non-protocol client QoL patches for the exact 59NL baseline.",
+      "autoPatches": [
+        "AccurateKillCount",
+        "FastTekker",
+        "HungryMagSound",
+        "NoRareSelling",
+        "Palette"
+      ],
+      "bbRequiredPatches": []
+    }
+  ],
+  "gated": {
+    "sourceCanaryOnly": [
+      "DrawDistance",
+      "EnemyHPBars",
+      "ItemPickup"
+    ],
+    "protocolRequired": [
+      "EnemyDamageSync",
+      "ServerEXPDisplay",
+      "StackLimits"
+    ],
+    "migrationRequired": [
+      "MoreSaveSlots"
+    ]
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "componentId": "project-owned-psobb-enhancement",
+  "version": "0.1.0-dev",
+  "builtAtUtc": "2026-07-14T16:26:33Z",
+  "baseClient": {
+    "relativePath": "Psobb.exe",
+    "size": 6971904,
+    "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535"
+  },
+  "toolchain": {
+    "generator": "Visual Studio 18 2026",
+    "platform": "Win32",
+    "configuration": "Release",
+    "compiler": "MSVC x86 19.51.36248.0",
+    "windowsSdk": "10.0.28000.0",
+    "cmakeMinimum": "3.25",
+    "languageStandard": "C++20",
+    "runtimeLibrary": "MultiThreaded",
+    "compileOptions": [
+      "/W4",
+      "/WX",
+      "/permissive-",
+      "/sdl",
+      "/guard:cf",
+      "/utf-8",
+      "/Zc:__cplusplus",
+      "/Zc:inline"
+    ],
+    "linkOptions": [
+      "/DYNAMICBASE",
+      "/NXCOMPAT",
+      "/GUARD:CF"
+    ]
+  },
+  "sourceInputs": [
+    {
+      "path": "src/PSOBB.Enhancement/CMakeLists.txt",
+      "size": 2384,
+      "sha256": "a68cb18cecf168ef6397a38ff262869fcfd7a6df80d541ca0e2d17e4aa45c46b"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/include/psobb_enhancement/api.h",
+      "size": 1841,
+      "sha256": "d9e8b9b27c29e151ae13a0b1bdebfae169c794104b1c318920791fa98a0b0735"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/include/psobb_enhancement/d3d8_abi.h",
+      "size": 1551,
+      "sha256": "5aecbd2f62d7638d0f6d6d45a851cbd363a4a7e53f06d334f6cad03149c1d4d7"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/include/psobb_enhancement/pinned_image.h",
+      "size": 1260,
+      "sha256": "7ef9ce9d551773c12eca69d29fe3667fc4e4fd9b9f24f11c4841d2ab92042eea"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/include/psobb_enhancement/policy.h",
+      "size": 1092,
+      "sha256": "4b380a7d2a334abc50cc4630cac09749b74fc5c2dfee45efeac08203b439e908"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/LICENSE.md",
+      "size": 1083,
+      "sha256": "7cc0d61fcc3f3fe8d13b39dd6dedf464275ed0ee201874190e7aabf503f29c9e"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/PSOBB.Enhancement.ini.example",
+      "size": 528,
+      "sha256": "72fe88b6d639df18cb887edc06b76a233dd12e937cdbe8a551da1895c061513b"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/README.md",
+      "size": 3130,
+      "sha256": "db5ca9cfdead996a5c7c537c17a92a40f074701629f40634452c9978fdac982d"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/dllmain.cpp",
+      "size": 952,
+      "sha256": "d5c5e7de7aef194b21c824125dc1460a217bd46ee46f1ae7da67e0153d1a37ee"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/enhancement_internal.h",
+      "size": 219,
+      "sha256": "151609a256cbeecc1d99ab33060e7b3addb14a21a78954bcb12d9146c35467c2"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/enhancement.cpp",
+      "size": 32055,
+      "sha256": "01ddb95cfae2c0a18e328886a844e022cb01e81490a9f10d30e9d45156971a1c"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/exports.def",
+      "size": 258,
+      "sha256": "cb1a2a9ea185457680a1c5e8619de2bad3b3a4adbbc651c24e929da36726bc40"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/pinned_image.cpp",
+      "size": 8578,
+      "sha256": "05e58e4ec390dc2920d70d21fc8be72610ea041490fa43c0ac3706f50c541b2d"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/policy.cpp",
+      "size": 3286,
+      "sha256": "0dda26e3aafeccfe3b2143419c326b1b70c6d98a99b75bd57e7650ace5133e17"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/sha256.cpp",
+      "size": 3472,
+      "sha256": "5302e206945b12f7d41b9563c96495770d1b92d411381b6810a21870a721fb48"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/src/sha256.h",
+      "size": 402,
+      "sha256": "64ba008483dd59f56d5295f3e5d4dbded7ea19d01fee7583ecd0817429aa1d7d"
+    },
+    {
+      "path": "src/PSOBB.Enhancement/tools/verify_main.cpp",
+      "size": 1642,
+      "sha256": "78123c94e043c2aa43292e0d3d18382c00937f56cef3874dcd0da23770ead38e"
+    },
+    {
+      "path": "tests/PSOBB.Enhancement/abi_smoke.cpp",
+      "size": 2339,
+      "sha256": "42a28840e914b3dfd2b99fd47349d750d608e156cebfd515b251236d26e00477"
+    },
+    {
+      "path": "tests/PSOBB.Enhancement/CMakeLists.txt",
+      "size": 1199,
+      "sha256": "6033b022e30fb28a86e5907d0b4447771f059c95ab09ff4cf1b58a11a684b093"
+    },
+    {
+      "path": "tests/PSOBB.Enhancement/policy_tests.cpp",
+      "size": 5396,
+      "sha256": "aa7d89889c196fdbda371d44d8c900a7f51ec985e2ad61b6afbd6f04bf897f3a"
+    }
+  ],
+  "artifacts": [
+    {
+      "relativeBuildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.asi",
+      "runtimeName": "PSOBB.Enhancement.asi",
+      "machine": "x86",
+      "size": 216576,
+      "sha256": "63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674",
+      "authenticode": "NotSigned"
+    }
+  ],
+  "verification": {
+    "ctest": "2/2 passed",
+    "exactClientVerifier": "passed",
+    "securityProperties": [
+      "ASLR",
+      "NX",
+      "Control Flow Guard"
+    ]
+  },
+  "license": "MIT",
+  "redistribution": "Project source and project-built artifacts may be redistributed with LICENSE.md; the proprietary base client is excluded.",
+  "acceptance": "Unsigned canary only until live graphics, HUD, resize, soak, and rollback gates pass.",
+  "knownLimitations": [
+    "No resolution-independent HUD or minimap transformation.",
+    "No automatic resize-triggered D3D device recreation.",
+    "Live client and scene-by-scene visual acceptance remain pending."
+  ]
+}

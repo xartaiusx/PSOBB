@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "activeKeyId": "local-acceptance-2026-07-13",
+  "keys": [
+    {
+      "id": "local-acceptance-2026-07-13",
+      "purpose": "local acceptance only; replace with the offline production release key before publication",
+      "spkiSha256": "26dbc6e3756ccb39866fd798767f415dda27e84c92277ea131c571ea5da4d680",
+      "production": false
+    }
+  ]
+}
