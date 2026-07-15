@@ -32,7 +32,29 @@ public sealed class LauncherCommandLineTests
         Assert.AreEqual(ReleaseChannel.Canary, options.Selection.Channel);
         Assert.AreEqual(GraphicsProfileOption.ClarityDgVoodoo, options.Selection.Profile);
         Assert.AreEqual(LauncherWindowMode.Borderless, options.Selection.WindowMode);
+        Assert.IsFalse(options.Selection.PreserveForeground);
         Assert.AreEqual(Path.GetFullPath(runtime.Root), options.RuntimeRoot);
+    }
+
+    [TestMethod]
+    public void Parse_AcceptsPreserveForegroundFlag()
+    {
+        var options = LauncherCommandLine.Parse(
+        [
+            "--play",
+            "--preserve-foreground",
+        ]);
+
+        Assert.IsTrue(options.Selection.PreserveForeground);
+    }
+
+    [TestMethod]
+    public void Parse_RejectsPreserveForegroundValue()
+    {
+        var exception = Assert.ThrowsExactly<ArgumentException>(
+            () => LauncherCommandLine.Parse(["--play", "--preserve-foreground=true"]));
+
+        StringAssert.Contains(exception.Message, "does not accept a value");
     }
 
     [TestMethod]

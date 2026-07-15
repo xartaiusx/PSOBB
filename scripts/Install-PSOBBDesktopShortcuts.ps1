@@ -14,6 +14,7 @@ param(
     [string]$PlayProfile,
     [ValidateSet('Borderless', 'Resizable')]
     [string]$PlayWindowMode = 'Borderless',
+    [switch]$PlayPreserveForeground,
     [Parameter(DontShow)][string]$ShortcutDirectory
 )
 
@@ -403,6 +404,9 @@ $playArguments = '--play --channel {0} --profile {1} --window-mode {2} --runtime
     $PlayProfile,
     $PlayWindowMode.ToLowerInvariant(),
     $layout.Root.Replace('"', '\"')
+if ($PlayPreserveForeground) {
+    $playArguments += ' --preserve-foreground'
+}
 if ($playArguments -match '(?i)(password|credential|twills|secret)') {
     throw 'A desktop shortcut must never contain an account name or credential'
 }
@@ -417,7 +421,11 @@ $playDefinition = Get-PSOBBShortcutDefinition `
     -TargetPath $launcher.Path `
     -Arguments $playArguments `
     -WorkingDirectory $launcher.Root `
-    -Description 'Start the local server and PSOBB client in borderless mode'
+    -Description $(if ($PlayPreserveForeground) {
+        'Start PSOBB and try to keep the current application focused'
+    } else {
+        'Start the local server and PSOBB client in borderless mode'
+    })
 $definitions = @($controlCenterDefinition, $playDefinition)
 
 $shell = New-Object -ComObject WScript.Shell

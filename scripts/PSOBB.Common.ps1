@@ -91,6 +91,56 @@ function Assert-PathWithinRoot {
     $fullPath
 }
 
+function New-PSOBBProtectedSecurityDescriptor {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][bool]$IsContainer)
+
+    $security = if ($IsContainer) {
+        [System.Security.AccessControl.DirectorySecurity]::new()
+    } else {
+        [System.Security.AccessControl.FileSecurity]::new()
+    }
+    $security.SetAccessRuleProtection($true, $false)
+    $inheritance = if ($IsContainer) {
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    foreach ($sid in @(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        [void]$security.AddAccessRule($rule)
+    }
+    $security
+}
+
+function Set-PSOBBProtectedAcl {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $item = Get-Item -Force -LiteralPath $Path
+    # Do not reuse a whole descriptor returned by Get-Acl here. On an audited
+    # parent, Set-Acl can attempt to persist its SACL section after applying the
+    # DACL, which requires SeSecurityPrivilege. A fresh descriptor contains only
+    # the access rules this operation owns. FileSystemAclExtensions then persists
+    # only its modified DACL section and leaves owner, group, and SACL untouched.
+    $security = New-PSOBBProtectedSecurityDescriptor -IsContainer $item.PSIsContainer
+    if ($item.PSIsContainer) {
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.DirectoryInfo]$item, [System.Security.AccessControl.DirectorySecurity]$security)
+    } else {
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.FileInfo]$item, [System.Security.AccessControl.FileSecurity]$security)
+    }
+}
+
 function Initialize-PSOBBRuntimeMarker {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
@@ -893,6 +943,14 @@ public static class PSOBBWindowPresentation
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(
         IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
     [DllImport("user32.dll", SetLastError = true)]
@@ -912,8 +970,10 @@ public static class PSOBBWindowPresentation
     private const long WsSystemMenu = 0x00080000L;
     private const long WsPopup = unchecked((long)0x80000000);
     private const long WsVisible = 0x10000000L;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
     private const uint SwpFrameChanged = 0x0020;
-    private const uint SwpShowWindow = 0x0040;
+    private const uint SwpNoOwnerZOrder = 0x0200;
 
     private static long GetStyle(IntPtr window) => IntPtr.Size == 8
         ? GetWindowLong64(window, GwlStyle).ToInt64()
@@ -961,7 +1021,14 @@ public static class PSOBBWindowPresentation
         var newStyle = (oldStyle & ~(WsCaption | WsThickFrame | WsMinimizeBox | WsMaximizeBox | WsSystemMenu))
             | WsPopup | WsVisible;
         SetStyle(window, newStyle);
-        if (!SetWindowPos(window, IntPtr.Zero, x, y, width, height, SwpFrameChanged | SwpShowWindow))
+        if (!SetWindowPos(
+            window,
+            IntPtr.Zero,
+            x,
+            y,
+            width,
+            height,
+            SwpFrameChanged | SwpNoActivate | SwpNoZOrder | SwpNoOwnerZOrder))
         {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
@@ -997,14 +1064,126 @@ public static class PSOBBWindowPresentation
         var outerHeight = outer.Bottom - outer.Top;
         var x = workAreaX + Math.Max(0, (workAreaWidth - outerWidth) / 2);
         var y = workAreaY + Math.Max(0, (workAreaHeight - outerHeight) / 2);
-        if (!SetWindowPos(window, IntPtr.Zero, x, y, outerWidth, outerHeight, SwpFrameChanged | SwpShowWindow))
+        if (!SetWindowPos(
+            window,
+            IntPtr.Zero,
+            x,
+            y,
+            outerWidth,
+            outerHeight,
+            SwpFrameChanged | SwpNoActivate | SwpNoZOrder | SwpNoOwnerZOrder))
         {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
         return GetState(window);
     }
+
+    public static IntPtr CaptureForegroundWindow() => GetForegroundWindow();
+
+    public static IntPtr CaptureLatestNonClientForegroundWindow(
+        IntPtr priorWindow,
+        int clientProcessId)
+    {
+        var currentWindow = GetForegroundWindow();
+        if (currentWindow != IntPtr.Zero && IsWindow(currentWindow))
+        {
+            GetWindowThreadProcessId(currentWindow, out var currentProcessId);
+            if (currentProcessId != 0 &&
+                currentProcessId != unchecked((uint)clientProcessId))
+            {
+                return currentWindow;
+            }
+        }
+
+        return priorWindow != IntPtr.Zero && IsWindow(priorWindow)
+            ? priorWindow
+            : IntPtr.Zero;
+    }
+
+    public static string RestoreForegroundIfClientActive(
+        IntPtr previousWindow,
+        IntPtr clientWindow,
+        int expectedClientProcessId)
+    {
+        if (previousWindow == IntPtr.Zero || previousWindow == clientWindow || !IsWindow(previousWindow))
+        {
+            return "PreviousWindowUnavailable";
+        }
+        if (clientWindow == IntPtr.Zero || !IsWindow(clientWindow))
+        {
+            return "ClientWindowUnavailable";
+        }
+
+        GetWindowThreadProcessId(clientWindow, out var clientProcessId);
+        GetWindowThreadProcessId(previousWindow, out var previousProcessId);
+        if (clientProcessId != unchecked((uint)expectedClientProcessId) ||
+            previousProcessId == clientProcessId)
+        {
+            return "WindowOwnershipMismatch";
+        }
+
+        var currentWindow = GetForegroundWindow();
+        if (currentWindow == previousWindow)
+        {
+            return "Preserved";
+        }
+        if (currentWindow != clientWindow)
+        {
+            return "UserSelectedAnotherWindow";
+        }
+        if (!SetForegroundWindow(previousWindow))
+        {
+            return "Denied";
+        }
+        return GetForegroundWindow() == previousWindow ? "Restored" : "Denied";
+    }
 }
 '@
+}
+
+function Get-PSOBBForegroundWindowHandle {
+    [CmdletBinding()]
+    param()
+
+    Initialize-PSOBBWindowPresentationType
+    [PSOBBWindowPresentation]::CaptureForegroundWindow()
+}
+
+function Update-PSOBBNonClientForegroundWindowTarget {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$CurrentTarget,
+        [Parameter(Mandatory)]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ClientProcessId
+    )
+
+    Initialize-PSOBBWindowPresentationType
+    [PSOBBWindowPresentation]::CaptureLatestNonClientForegroundWindow(
+        $CurrentTarget,
+        $ClientProcessId)
+}
+
+function Restore-PSOBBForegroundWindowAfterClientLaunch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory)][IntPtr]$PreviousWindow
+    )
+
+    $Process.Refresh()
+    if ($Process.HasExited) {
+        throw 'The PSOBB client exited before foreground restoration'
+    }
+    Initialize-PSOBBWindowPresentationType
+    $status = [PSOBBWindowPresentation]::RestoreForegroundIfClientActive(
+        $PreviousWindow,
+        $Process.MainWindowHandle,
+        $Process.Id)
+    [pscustomobject]@{
+        Status = $status
+        Preserved = $status -in @('Preserved', 'Restored', 'UserSelectedAnotherWindow')
+    }
 }
 
 function Get-PSOBBClientWindowPresentation {
@@ -3078,6 +3257,105 @@ function Assert-PSOBBNoRunningClients {
         throw "Refusing to stop newserv while an approved PSOBB client is running ($($identities -join ', ')). Stop the client first or use Stop-PSOBBSession.ps1 -Target All."
     }
     $true
+}
+
+function Assert-PSOBBClientLoginRegistry {
+    [CmdletBinding()]
+    param([string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB')
+
+    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Container)) {
+        throw "PSOBB client registry key is missing: $RegistryPath"
+    }
+    $registry = Get-Item -LiteralPath $RegistryPath
+    $names = @($registry.GetValueNames())
+    foreach ($name in @('ACCOUNT_CHECK', 'ACCOUNT', 'PASSWORD')) {
+        if ($names -cnotcontains $name) {
+            throw "PSOBB client login registry value is missing: $name"
+        }
+    }
+    $passwordKind = $registry.GetValueKind('PASSWORD')
+    if ($registry.GetValueKind('ACCOUNT_CHECK') -ne
+            [Microsoft.Win32.RegistryValueKind]::DWord -or
+        $registry.GetValueKind('ACCOUNT') -ne
+            [Microsoft.Win32.RegistryValueKind]::String -or
+        $passwordKind -notin @(
+            [Microsoft.Win32.RegistryValueKind]::String,
+            [Microsoft.Win32.RegistryValueKind]::Binary)) {
+        throw 'PSOBB client login registry values have unexpected types'
+    }
+    $accountCheck = [int]$registry.GetValue(
+        'ACCOUNT_CHECK',
+        -1,
+        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($accountCheck -notin @(0, 1)) {
+        throw 'PSOBB client ACCOUNT_CHECK must be 0 or 1'
+    }
+
+    [pscustomobject]@{
+        RegistryPath = $RegistryPath
+        RememberLoginEnabled = ($accountCheck -eq 1)
+    }
+}
+
+function Set-PSOBBClientRememberedLogin {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][bool]$Enabled,
+        [switch]$ClearCredentials,
+        [string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB'
+    )
+
+    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Container)) {
+        throw "PSOBB client registry key is missing: $RegistryPath"
+    }
+    $registry = Get-Item -LiteralPath $RegistryPath
+    $names = @($registry.GetValueNames())
+    if ($names -cnotcontains 'ACCOUNT') {
+        New-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT' `
+            -PropertyType String -Value '' -Force | Out-Null
+    } elseif ($registry.GetValueKind('ACCOUNT') -ne
+            [Microsoft.Win32.RegistryValueKind]::String) {
+        throw 'PSOBB client login registry value has an unexpected type: ACCOUNT'
+    }
+    if ($names -cnotcontains 'PASSWORD') {
+        New-ItemProperty -LiteralPath $RegistryPath -Name 'PASSWORD' `
+            -PropertyType String -Value '' -Force | Out-Null
+    } elseif ($registry.GetValueKind('PASSWORD') -notin @(
+            [Microsoft.Win32.RegistryValueKind]::String,
+            [Microsoft.Win32.RegistryValueKind]::Binary)) {
+        throw 'PSOBB client login registry value has an unexpected type: PASSWORD'
+    }
+    if ($ClearCredentials) {
+        New-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT' `
+            -PropertyType String -Value '' -Force | Out-Null
+        New-ItemProperty -LiteralPath $RegistryPath -Name 'PASSWORD' `
+            -PropertyType String -Value '' -Force | Out-Null
+    }
+    New-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT_CHECK' `
+        -PropertyType DWord -Value $(if ($Enabled) { 1 } else { 0 }) `
+        -Force | Out-Null
+    Assert-PSOBBClientLoginRegistry -RegistryPath $RegistryPath
+}
+
+function Clear-PSOBBClientSavedCredentials {
+    [CmdletBinding()]
+    param([string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB')
+
+    $policy = Assert-PSOBBClientLoginRegistry -RegistryPath $RegistryPath
+    Set-PSOBBClientRememberedLogin `
+        -Enabled ([bool]$policy.RememberLoginEnabled) `
+        -ClearCredentials `
+        -RegistryPath $RegistryPath
+}
+
+function Set-PSOBBClientManualLogin {
+    [CmdletBinding()]
+    param([string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB')
+
+    Set-PSOBBClientRememberedLogin `
+        -Enabled $false `
+        -ClearCredentials `
+        -RegistryPath $RegistryPath | Out-Null
 }
 
 function Test-PSOBBGamePasswordLength {

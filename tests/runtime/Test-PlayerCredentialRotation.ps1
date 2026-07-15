@@ -85,8 +85,44 @@ Add-Result 'player secrets cannot be supplied as shell arguments' (
     ($parameterNames -notcontains 'Username') -and
     ($parameterNames -notcontains 'Password') -and
     ($parameterNames -notcontains 'CurrentPassword')) ($parameterNames -join ', ')
-Add-Result 'player helper does not persist or export the new password' (
-    $scriptText -notmatch '(?i)Export-Clixml|Set-Clipboard|list-accounts') 'new password exists only in memory and the required newserv license'
+Add-Result 'player helper does not export the new password' (
+    $scriptText -notmatch '(?i)Export-Clixml|Set-Clipboard|list-accounts') `
+    'newserv license storage is required; only the native client may populate its optional cache after login'
+
+$entryPointStart = $scriptText.LastIndexOf(
+    '$layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot',
+    [System.StringComparison]::Ordinal)
+$entryPoint = if ($entryPointStart -ge 0) {
+    $scriptText.Substring($entryPointStart)
+} else {
+    ''
+}
+$preflightIndex = $entryPoint.IndexOf(
+    'Assert-PSOBBClientLoginRegistry | Out-Null',
+    [System.StringComparison]::Ordinal)
+$initialStateIndex = $entryPoint.IndexOf(
+    '$initialState = Get-PSOBBPlayerState',
+    [System.StringComparison]::Ordinal)
+$cacheClearIndex = $entryPoint.IndexOf(
+    '$loginPolicy = Clear-PSOBBClientSavedCredentials',
+    [System.StringComparison]::Ordinal)
+$completedIndex = $entryPoint.IndexOf(
+    "-Status 'completed'",
+    [System.StringComparison]::Ordinal)
+Add-Result 'player rotation preflights native login state before prompting or mutation' (
+    $preflightIndex -ge 0 -and
+    $initialStateIndex -gt $preflightIndex) `
+    'a malformed or inaccessible client cache cannot cause a post-commit false failure'
+Add-Result 'player cache clearing is inside rollback coverage before commit status' (
+    $cacheClearIndex -ge 0 -and
+    $completedIndex -gt $cacheClearIndex -and
+    $entryPoint -match 'LoginCacheCleared\s*=\s*\[bool\]\$loginCacheCleared') `
+    'cache failure reaches the credential rollback catch before completed status is recorded'
+Add-Result 'player output distinguishes required and optional credential storage' (
+    $entryPoint -match "PasswordStorage\s*=\s*'newserv-license-json'" -and
+    $entryPoint -match "ProjectCredentialStorage\s*=\s*'manual-only'" -and
+    $entryPoint -match 'NativeClientCredentialCache\s*=') `
+    'the native remembered-login cache is not described as manual-only storage'
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-PlayerCredentialTests-' + [Guid]::NewGuid().ToString('N'))

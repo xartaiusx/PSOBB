@@ -16,6 +16,7 @@ $scriptNames = @(
     'Start-PSOBBSession.ps1',
     'Stop-PSOBBSession.ps1',
     'Install-PSOBBDesktopShortcuts.ps1',
+    'Set-PSOBBRememberedLogin.ps1',
     'Start-PSOBBClient.ps1',
     'Stop-PSOBB.ps1'
 )
@@ -703,12 +704,13 @@ try {
         -ShortcutDirectory $hdShortcutRoot `
         -PlayChannel LocalLab `
         -PlayProfile lab-widescreen-hd-16x10 `
-        -PlayWindowMode Borderless
+        -PlayWindowMode Borderless `
+        -PlayPreserveForeground
     $hdShell = New-Object -ComObject WScript.Shell
     try {
         $hdPlay = $hdShell.CreateShortcut((Join-Path $hdShortcutRoot 'PSOBB Play.lnk'))
-        $expectedHdArguments = '--play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --runtime-root "{0}"' -f $layout.Root
-        Add-Result 'PSOBB Play can bind the exact private LocalLab HD profile' (
+        $expectedHdArguments = '--play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --runtime-root "{0}" --preserve-foreground' -f $layout.Root
+        Add-Result 'PSOBB Play can bind the exact private LocalLab HD background profile' (
             $hdInstall.Installed -and
             [string]$hdPlay.Arguments -ceq $expectedHdArguments) $expectedHdArguments
     } finally {
@@ -758,10 +760,12 @@ Add-Result 'server stop holds the client-operation guard' $serverGuardWired 'cli
 
 $startSessionSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-PSOBBSession.ps1')
 $startServerSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-PSOBB.ps1')
-$supervisorDetached = $startServerSource -match 'RedirectStandardInput\s*=\s*\$true' -and
-    $startServerSource -match 'RedirectStandardOutput\s*=\s*\$true' -and
-    $startServerSource -match 'RedirectStandardError\s*=\s*\$true' -and
-    $startServerSource -match 'StandardInput\.Close\(\)'
+$supervisorDetached = $startServerSource -match 'NativeSupervisorLauncher' -and
+    $startServerSource -match 'CreateProcessW\(' -and
+    $startServerSource -match 'false,\s*\r?\n\s*CreateNoWindow \| CreateSuspended,' -and
+    $startServerSource -match 'GetProcessTimes\(' -and
+    $startServerSource -match 'ResumeThread\(processInformation\.hThread\)' -and
+    $startServerSource -notmatch 'RedirectStandard(?:Input|Output|Error)\s*=\s*\$true'
 Add-Result 'server supervisor detaches caller capture handles' $supervisorDetached 'start returns while the hidden supervisor remains alive'
 $startSessionLocked = $startSessionSource -match 'Enter-PSOBBClientOperationLock' -and
     $startSessionSource -match 'Get-PSOBBClientProcessRecords' -and
@@ -770,6 +774,48 @@ $startSessionLocked = $startSessionSource -match 'Enter-PSOBBClientOperationLock
 Add-Result 'session start is one guarded lifecycle transaction' $startSessionLocked 'server readiness and client start share the client-operation lock'
 
 $startClientSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-PSOBBClient.ps1')
+$credentialPath = Join-Path $repositoryRoot 'scripts\Set-PSOBBAdminCredential.ps1'
+$credentialSource = Get-Content -Raw -LiteralPath $credentialPath
+$credentialTokens = $null
+$credentialParseErrors = $null
+$credentialAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $credentialPath,
+    [ref]$credentialTokens,
+    [ref]$credentialParseErrors)
+$clientProcessFunctions = @($credentialAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Start-PSOBBClientProcess'
+}, $true))
+$clientProcessSource = if ($clientProcessFunctions.Count -eq 1) {
+    $clientProcessFunctions[0].Extent.Text
+} else {
+    ''
+}
+$registryInitializationSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Initialize-PSOBBClientRegistry.ps1')
+$rememberedLoginSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Set-PSOBBRememberedLogin.ps1')
+Add-Result 'central client process helper validates login persistence before process creation' (
+    $credentialParseErrors.Count -eq 0 -and
+    $clientProcessFunctions.Count -eq 1 -and
+    $clientProcessSource -match
+        'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null\s*\r?\n\s*\$processId\s*=\s*\[PSOBBClientProcessLauncher\]::Start\(') `
+    'launcher, shortcut, session, and credential-relaunch starts preserve the native login policy without reading secrets'
+Add-Result 'registry initialization selects manual authentication' (
+    $registryInitializationSource -match 'ACCOUNT_CHECK\s*=\s*\[uint32\]0') `
+    'a fresh client registry disables saved credentials and starts with blank fields'
+Add-Result 'registry initialization protects and labels the prior whole-key backup' (
+    $registryInitializationSource -match 'Set-PSOBBProtectedAcl\s+-Path\s+\$safeBackups' -and
+    ([regex]::Matches(
+        $registryInitializationSource,
+        'Set-PSOBBProtectedAcl\s+-Path\s+\$backupPath').Count -ge 2) -and
+    $registryInitializationSource -match 'BackupMayContainPriorCredentials\s*=') `
+    'the recovery export is protected before and after reg.exe and reported as potentially credential-bearing'
+Add-Result 'remembered-login changes share the lifecycle lock and reject a live client' (
+    $rememberedLoginSource -match 'Enter-PSOBBClientOperationLock\s+-Layout\s+\$layout' -and
+    $rememberedLoginSource -match 'Get-PSOBBClientProcessRecords\s+-Layout\s+\$layout\s+-Channel\s+All' -and
+    $rememberedLoginSource -match '\$running\.Count\s+-gt\s+0' -and
+    $rememberedLoginSource -match 'Exit-PSOBBClientOperationLock\s+-Mutex\s+\$clientOperationMutex') `
+    'enable and disable cannot race a running approved client or another lifecycle operation'
 Add-Result 'client-patch presentation has one reference-only initial correction' (
     $startClientSource -match "presentationOwner -eq 'client-patch'" -and
     $startClientSource -match 'Set-PSOBBLocalLabClientWindowMode' -and
@@ -800,6 +846,9 @@ $safeStopWired = $stopClientSource -match 'CloseMainWindow' -and
     $stopClientSource -match 'Assert-PSOBBApprovedClientExecutable' -and
     $stopClientSource -match 'Stop-Process -Id \$process.Id -Force'
 Add-Result 'client force fallback is identity-revalidated' $safeStopWired 'normal close precedes explicit validated force'
+Add-Result 'client stop preserves saved credential fields' (
+    $stopClientSource -notmatch 'Set-PSOBBClientManualLogin|Clear-PSOBBClientSavedCredentials') `
+    'normal and idempotent shutdown paths do not mutate the native login cache'
 
 $results | Format-Table -AutoSize
 $failed = @($results | Where-Object { -not $_.Passed })

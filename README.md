@@ -27,6 +27,7 @@ pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Player
 pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Player -Provision
 pwsh -File .\scripts\Set-PSOBBAdminCredential.ps1 -Relaunch
 pwsh -File .\scripts\Set-PSOBBPlayerCredential.ps1 -Relaunch -RelaunchChannel LocalLab
+pwsh -File .\scripts\Set-PSOBBRememberedLogin.ps1 -Mode Enable -Confirm:$false
 pwsh -File .\scripts\Reset-PSOBBClientRuntime.ps1 -Renderer Native
 pwsh -File .\scripts\Start-PSOBB.ps1
 pwsh -File .\scripts\Start-PSOBBClient.ps1
@@ -45,6 +46,7 @@ pwsh -File .\scripts\Reset-PSOBBClientRuntime.ps1 -Channel Canary -Renderer DgVo
 pwsh -File .\scripts\Test-PSOBBClientGraphics.ps1 -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
 pwsh -File .\scripts\Start-PSOBBClient.ps1 -Channel Canary -WindowMode Borderless
 pwsh -File .\scripts\Start-PSOBBClient.ps1 -Channel Canary -WindowMode Resizable
+pwsh -File .\scripts\Start-PSOBBSession.ps1 -Channel LocalLab -WindowMode Borderless -PreserveForeground
 ```
 
 The approved Ultra canary uses the exact x86 dgVoodoo D3D8 wrapper with D3D11
@@ -55,6 +57,10 @@ textures, applies 16x anisotropic filtering only where appropriate, keeps
 mipmaps application-driven, disables forced bilinear 2D scaling and redundant
 MSAA, and disables the dgVoodoo watermark. `Borderless` fills the desktop;
 `Resizable` starts with a movable, captioned 1600x1200 client area.
+Add `-PreserveForeground` to a client or session start to make a best-effort
+launch that keeps the most recently selected non-game application focused. The
+launcher exposes the same opt-in behavior as **Try to keep current app focused**.
+Activating PSOBB is still required for normal keyboard and mouse gameplay.
 
 Supersampling improves geometry and edge clarity but cannot manufacture detail
 missing from the original low-resolution HUD, font, or texture assets. True
@@ -75,8 +81,19 @@ manually. Protected transaction/state backups remain sensitive rollback data.
 `Set-PSOBBAdminCredential.ps1 -Relaunch` securely prompts for a custom admin
 username and a 1-16-character password (12-16 recommended), closes
 script-managed processes normally, backs up and rotates the existing root
-license, clears only the cached login fields, verifies the baseline, and opens
-the client for manual credential entry.
+license, clears stale cached login fields, verifies the baseline, and opens the
+client for one manual credential entry. Normal start, stop, and graphics-capture
+workflows preserve the selected native login policy without reading the cached
+username or password.
+
+Remembered login is local and opt-in. `Set-PSOBBRememberedLogin.ps1 -Mode
+Enable` sets the native `ACCOUNT_CHECK=1` option; enter the credentials once in
+PSOBB and later launches can reuse them. `-Mode Disable` clears the cached
+fields. Treat the current Windows account as trusted: the legacy client stores a
+locally recoverable password value in the user registry, so never export or
+share that registry key. Reinitializing client settings creates a protected
+whole-key recovery export that may contain the prior cached login; treat that
+runtime backup as credential-bearing and never copy or publish it.
 
 `Set-PSOBBPlayerCredential.ps1` provides the corresponding authorization-test
 workflow for exactly one metadata-bound `Player` account with `Flags=0`. It

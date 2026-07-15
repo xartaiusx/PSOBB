@@ -201,30 +201,56 @@ try {
     New-ItemProperty -LiteralPath $registryPath -Name ACCOUNT -PropertyType String -Value 'oldadmin' | Out-Null
     New-ItemProperty -LiteralPath $registryPath -Name PASSWORD -PropertyType Binary -Value ([byte[]](1, 2, 3)) | Out-Null
     New-ItemProperty -LiteralPath $registryPath -Name WIDTH -PropertyType DWord -Value 2560 | Out-Null
-    Set-PSOBBClientManualLogin -RegistryPath $registryPath
+    $savedState = Set-PSOBBClientRememberedLogin `
+        -Enabled $true `
+        -RegistryPath $registryPath
     $registry = Get-Item -LiteralPath $registryPath
     $values = Get-ItemProperty -LiteralPath $registryPath
-    $manualLogin = ($values.ACCOUNT_CHECK -eq 0) -and ($values.ACCOUNT -eq '') -and ($values.PASSWORD -eq '') -and
+    $savedLoginPreserved = ($values.ACCOUNT_CHECK -eq 1) -and
+        ($values.ACCOUNT -ceq 'oldadmin') -and
+        (@($values.PASSWORD) -join ',' -ceq '1,2,3') -and
         ($values.WIDTH -eq 2560) -and
+        ($registry.GetValueKind('ACCOUNT_CHECK') -eq [Microsoft.Win32.RegistryValueKind]::DWord) -and
         ($registry.GetValueKind('ACCOUNT') -eq [Microsoft.Win32.RegistryValueKind]::String) -and
-        ($registry.GetValueKind('PASSWORD') -eq [Microsoft.Win32.RegistryValueKind]::String)
-    Add-Result 'manual-login reset is narrow and type-correct' $manualLogin 'graphics value preserved; password cache no longer binary'
+        ($registry.GetValueKind('PASSWORD') -eq [Microsoft.Win32.RegistryValueKind]::Binary) -and
+        $savedState.RememberLoginEnabled -and
+        (($savedState | ConvertTo-Json -Compress) -notmatch 'oldadmin|1,2,3')
+    Add-Result 'saved-login policy preserves native credential fields' $savedLoginPreserved `
+        'only ACCOUNT_CHECK changes; binary password and unrelated graphics state remain untouched'
 
-    $clientStartInfo = New-PSOBBClientStartInfo -ClientExecutable 'C:\fixture\Psobb.exe' -WorkingDirectory 'C:\fixture'
-    $clientRunsAsInvoker =
-        ($clientStartInfo.FileName -eq 'C:\fixture\Psobb.exe') -and
-        ($clientStartInfo.WorkingDirectory -eq 'C:\fixture') -and
-        $clientStartInfo.UseShellExecute -and
-        (-not $clientStartInfo.RedirectStandardInput) -and
-        (-not $clientStartInfo.RedirectStandardOutput) -and
-        (-not $clientStartInfo.RedirectStandardError)
-    Add-Result 'client relaunch uses a detached process-local RunAsInvoker fix' $clientRunsAsInvoker 'legacy embedded requireAdministrator manifest does not force a high-integrity client or inherit caller capture handles'
+    $clearedState = Clear-PSOBBClientSavedCredentials -RegistryPath $registryPath
+    $registry = Get-Item -LiteralPath $registryPath
+    $values = Get-ItemProperty -LiteralPath $registryPath
+    $staleCacheCleared = ($values.ACCOUNT_CHECK -eq 1) -and
+        ($values.ACCOUNT -ceq '') -and ($values.PASSWORD -ceq '') -and
+        ($values.WIDTH -eq 2560) -and
+        ($registry.GetValueKind('PASSWORD') -eq [Microsoft.Win32.RegistryValueKind]::String) -and
+        $clearedState.RememberLoginEnabled
+    Add-Result 'credential rotation can clear stale cache without disabling saved login' `
+        $staleCacheCleared 'the next successful manual login can repopulate the native cache'
+
+    $manualLoginOutput = @(Set-PSOBBClientManualLogin -RegistryPath $registryPath)
+    $values = Get-ItemProperty -LiteralPath $registryPath
+    Add-Result 'explicit manual-login reset disables and clears saved login' (
+        $manualLoginOutput.Count -eq 0 -and
+        $values.ACCOUNT_CHECK -eq 0 -and
+        $values.ACCOUNT -ceq '' -and
+        $values.PASSWORD -ceq '') 'forget-login remains an explicit credential-clearing action'
+    $missingRegistryRejected = $false
+    try {
+        Set-PSOBBClientManualLogin -RegistryPath ($registryPath + '-missing')
+    } catch {
+        $missingRegistryRejected = $_.Exception.Message -like 'PSOBB client registry key is missing:*'
+    }
+    Add-Result 'manual-login reset rejects a missing registry key' $missingRegistryRejected `
+        'explicit credential clearing fails closed when its target key is absent'
 } finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $scriptPath = Join-Path $repositoryRoot 'scripts\Set-PSOBBAdminCredential.ps1'
+$scriptText = Get-Content -Raw -LiteralPath $scriptPath
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
@@ -232,6 +258,36 @@ Add-Result 'credential helper parses cleanly' ($parseErrors.Count -eq 0) "$($par
 $parameterNames = @($ast.ParamBlock.Parameters.Name.VariablePath.UserPath)
 $noSecretArguments = ($parameterNames -notcontains 'Username') -and ($parameterNames -notcontains 'Password')
 Add-Result 'credentials cannot be supplied as shell arguments' $noSecretArguments ($parameterNames -join ', ')
+
+$entryPointStart = $scriptText.LastIndexOf(
+    '$layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot',
+    [System.StringComparison]::Ordinal)
+$entryPoint = if ($entryPointStart -ge 0) {
+    $scriptText.Substring($entryPointStart)
+} else {
+    ''
+}
+$preflightIndex = $entryPoint.IndexOf(
+    'Assert-PSOBBClientLoginRegistry | Out-Null',
+    [System.StringComparison]::Ordinal)
+$initialStateIndex = $entryPoint.IndexOf(
+    '$initialState = Get-PSOBBAdminState',
+    [System.StringComparison]::Ordinal)
+$cacheClearIndex = $entryPoint.IndexOf(
+    '$loginPolicy = Clear-PSOBBClientSavedCredentials',
+    [System.StringComparison]::Ordinal)
+$completedIndex = $entryPoint.IndexOf(
+    "Set-PSOBBRotationBackupStatus -Layout `$layout -RotationBackup `$rotationBackup -Status 'completed'",
+    [System.StringComparison]::Ordinal)
+Add-Result 'admin rotation preflights native login state before prompting or mutation' (
+    $preflightIndex -ge 0 -and
+    $initialStateIndex -gt $preflightIndex) `
+    'a malformed or inaccessible client cache cannot cause a post-commit false failure'
+Add-Result 'admin cache clearing is inside rollback coverage before commit status' (
+    $cacheClearIndex -ge 0 -and
+    $completedIndex -gt $cacheClearIndex -and
+    $entryPoint -match 'LoginCacheCleared\s*=\s*\[bool\]\$loginCacheCleared') `
+    'cache failure reaches the credential rollback catch before completed status is recorded'
 
 $emptyCloseAccepted = $true
 try {

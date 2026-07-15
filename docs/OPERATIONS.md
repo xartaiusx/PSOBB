@@ -50,10 +50,32 @@
    rotation, use **Stop all** or let the approved `-Relaunch` helper perform its
    guarded stop, mutation, and restart sequence; do not terminate either
    process from Task Manager as a normal workflow.
+   Select **Try to keep current app focused**, or pass `-PreserveForeground` to
+   `Start-PSOBBClient.ps1` or `Start-PSOBBSession.ps1`, when another application
+   should remain foreground during startup. This is a best-effort Windows focus
+   request: the lifecycle tracks the latest non-game foreground window and never
+   stops a healthy client merely because focus restoration is unavailable. The
+   client remains visible, responsive, and connected; click it normally when
+   login or gameplay input is needed. Screenshot and RenderDoc evidence flows
+   intentionally continue to require foreground access.
    The historic client embeds `requireAdministrator`; credential relaunch uses
    a process-local Windows `RunAsInvoker` compatibility fix. This preserves the
    immutable client, leaves UAC enabled, and creates no persistent AppCompat
    registry setting.
+   Remembered login is a local opt-in. Run
+   `Set-PSOBBRememberedLogin.ps1 -Mode Enable` to set the native
+   `ACCOUNT_CHECK=1` option, then enter the credentials once in PSOBB. Normal
+   start, stop, and RenderDoc paths validate the registry types but never read,
+   export, log, or clear `ACCOUNT` and `PASSWORD`. Credential rotation clears a
+   stale cache while preserving the selected policy; `-Mode Disable` explicitly
+   disables and clears it. Pioneer 2 community guidance confirms the flag and
+   warns that the saved password becomes a sensitive `REG_BINARY` value:
+   [save-login flag](https://www.pioneer2.net/community/threads/another-way-to-save-id-and-pass-or-fix-that-cannot-change-resolution.1997/#post-20151),
+   [registry security](https://www.pioneer2.net/community/threads/script-for-switching-accounts.511/).
+   Client-registry reinitialization first writes a whole-key recovery export to
+   the protected runtime backup directory. That export may contain the prior
+   cached username and password; keep it private and never publish or copy it to
+   the source repository.
    Credential backup ACL changes construct a DACL-only security descriptor;
    they never request SACL access or `SeSecurityPrivilege` from the operator.
 5. Rebuild a disposable native client with

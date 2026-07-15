@@ -30,6 +30,41 @@ public sealed class LifecycleScriptControllerTests
         Assert.IsFalse(executor.Calls.SelectMany(call => call.Arguments).Any(argument =>
             argument.Contains("password", StringComparison.OrdinalIgnoreCase)
             || argument.Contains("username", StringComparison.OrdinalIgnoreCase)));
+        CollectionAssert.DoesNotContain(executor.Calls[0].Arguments.ToArray(), "-PreserveForeground");
+    }
+
+    [TestMethod]
+    public async Task PlayAsync_ForwardsPreserveForegroundToSessionScript()
+    {
+        using var runtime = new TestRuntime();
+        var observer = new MutableObserver(Stopped());
+        var executor = new RecordingExecutor((script, _) => observer.Current =
+            script == "Start-PSOBBSession.ps1" ? Running() : observer.Current);
+        var controller = new LifecycleScriptController(observer, executor);
+        var selection = CanarySelection() with { PreserveForeground = true };
+
+        await controller.PlayAsync(runtime.Root, selection);
+
+        Assert.HasCount(1, executor.Calls);
+        Assert.AreEqual("Start-PSOBBSession.ps1", executor.Calls[0].Script);
+        CollectionAssert.Contains(executor.Calls[0].Arguments.ToArray(), "-PreserveForeground");
+    }
+
+    [TestMethod]
+    public async Task StartClientAsync_ForwardsPreserveForegroundToClientScript()
+    {
+        using var runtime = new TestRuntime();
+        var observer = new MutableObserver(ServerReady());
+        var executor = new RecordingExecutor((script, _) => observer.Current =
+            script == "Start-PSOBBClient.ps1" ? Running() : observer.Current);
+        var controller = new LifecycleScriptController(observer, executor);
+        var selection = CanarySelection() with { PreserveForeground = true };
+
+        await controller.StartClientAsync(runtime.Root, selection);
+
+        Assert.HasCount(1, executor.Calls);
+        Assert.AreEqual("Start-PSOBBClient.ps1", executor.Calls[0].Script);
+        CollectionAssert.Contains(executor.Calls[0].Arguments.ToArray(), "-PreserveForeground");
     }
 
     [TestMethod]

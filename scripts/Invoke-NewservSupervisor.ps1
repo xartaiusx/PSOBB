@@ -132,10 +132,27 @@ try {
         [string]$startup.installationId -ne [string]$marker.installationId -or
         [string]$startup.executablePath -ne $executable -or
         [string]$startup.executableSha256 -ne $approved.Sha256 -or
+        [string]$startup.startupRequestId -notmatch '^[0-9a-f]{32}$' -or
         [string]$startup.controlToken -notmatch '^[A-Za-z0-9_-]{43}$') {
         throw 'The protected supervisor startup state is invalid'
     }
     $controlToken = [string]$startup.controlToken
+    $startupRequestId = [string]$startup.startupRequestId
+
+    $hostProcess = Get-Process -Id $PID -ErrorAction Stop
+    try {
+        $hostExecutablePath = [System.IO.Path]::GetFullPath($hostProcess.Path)
+        $expectedHostExecutablePath = [System.IO.Path]::GetFullPath((Join-Path $PSHOME 'pwsh.exe'))
+        $hostStartUtc = $hostProcess.StartTime.ToUniversalTime()
+        $hostStartTimeFileTimeUtc = $hostStartUtc.ToFileTimeUtc()
+        if (-not $hostExecutablePath.Equals(
+                $expectedHostExecutablePath,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The supervisor host executable identity is invalid'
+        }
+    } finally {
+        $hostProcess.Dispose()
+    }
 
     New-Item -ItemType Directory -Path $layout.Logs -Force | Out-Null
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmssfff')
@@ -165,7 +182,6 @@ try {
     $stdoutPump = $child.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
     $stderrPump = $child.StandardError.BaseStream.CopyToAsync($stderrStream)
     $childStartUtc = $child.StartTime.ToUniversalTime()
-    $hostStartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime()
     # ConvertFrom-Json treats round-trip ISO timestamps as DateTime values in
     # current PowerShell, then stringifies them in local time. RFC1123 remains
     # a string and is still unambiguously parseable by Get-NewservProcess.
@@ -182,6 +198,9 @@ try {
         startTimeUtc = $childStartRecord
         hostPid = $PID
         hostStartTimeUtc = $hostStartRecord
+        hostStartTimeFileTimeUtc = [long]$hostStartTimeFileTimeUtc
+        hostExecutablePath = $hostExecutablePath
+        startupRequestId = $startupRequestId
         controlToken = $controlToken
         controlProtocol = 'protected-filesystem-exit-v1'
         stdoutLog = $stdoutPath
@@ -197,6 +216,8 @@ try {
         installationId = [string]$marker.installationId
         pid = $child.Id
         hostPid = $PID
+        hostStartTimeFileTimeUtc = [long]$hostStartTimeFileTimeUtc
+        startupRequestId = $startupRequestId
         startTimeUtc = $childStartUtc.ToString('o')
         updatedAtUtc = [DateTime]::UtcNow.ToString('o')
     }
@@ -207,18 +228,27 @@ try {
             try {
                 Assert-LifecycleFileAcl -Path $layout.ControlRequest
                 $request = Get-Content -Raw -LiteralPath $layout.ControlRequest | ConvertFrom-Json
-                $requestStartUtc = if ($request.startTimeUtc -is [DateTime]) {
-                    ([DateTime]$request.startTimeUtc).ToUniversalTime()
-                } else {
-                    [DateTimeOffset]::Parse(
-                        [string]$request.startTimeUtc,
-                        [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+                $validExitRequest = $false
+                if ($request.schemaVersion -eq 1 -and $request.action -eq 'exit') {
+                    $requestStartUtc = if ($request.startTimeUtc -is [DateTime]) {
+                        ([DateTime]$request.startTimeUtc).ToUniversalTime()
+                    } else {
+                        [DateTimeOffset]::Parse(
+                            [string]$request.startTimeUtc,
+                            [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+                    }
+                    $validExitRequest =
+                        [int]$request.pid -eq $child.Id -and
+                        [Math]::Abs(($requestStartUtc - $childStartUtc).TotalSeconds) -le 2 -and
+                        (Test-FixedTimeToken -Expected $controlToken -Actual ([string]$request.controlToken))
                 }
-                $validRequest = $request.schemaVersion -eq 1 -and
-                    $request.action -eq 'exit' -and
-                    [int]$request.pid -eq $child.Id -and
-                    [Math]::Abs(($requestStartUtc - $childStartUtc).TotalSeconds) -le 2 -and
+                $validCancelRequest = $request.schemaVersion -eq 1 -and
+                    $request.action -eq 'cancel-start' -and
+                    [int]$request.hostPid -eq $PID -and
+                    [long]$request.hostStartTimeFileTimeUtc -eq [long]$hostStartTimeFileTimeUtc -and
+                    [string]$request.startupRequestId -eq $startupRequestId -and
                     (Test-FixedTimeToken -Expected $controlToken -Actual ([string]$request.controlToken))
+                $validRequest = $validExitRequest -or $validCancelRequest
                 if ($validRequest -and -not $gracefulRequested) {
                     $child.StandardInput.WriteLine('exit')
                     $child.StandardInput.Flush()

@@ -396,6 +396,7 @@ if (-not $PSCmdlet.ShouldProcess(
     return
 }
 
+Assert-PSOBBClientLoginRegistry | Out-Null
 $initialState = Get-PSOBBPlayerState -Layout $layout
 $newCredential = Read-PSOBBPlayerCredential
 $promptedCurrentPassword = $null
@@ -405,6 +406,8 @@ $stateBackup = $null
 $rotationBackup = $null
 $playerState = $null
 $verifiedState = $null
+$loginPolicy = $null
+$loginCacheCleared = $false
 try {
     if ($initialState.Credential) {
         $oldPassword = $initialState.Credential.GetNetworkCredential().Password
@@ -463,6 +466,8 @@ try {
             -ExpectedAccountId $playerState.AccountId `
             -ExpectedUsername $newCredential.UserName `
             -ExpectedPassword $newPassword
+        $loginPolicy = Clear-PSOBBClientSavedCredentials
+        $loginCacheCleared = $true
         Set-PSOBBRotationBackupStatus `
             -Layout $layout `
             -RotationBackup $rotationBackup `
@@ -482,7 +487,6 @@ try {
 
     $session = $null
     if ($Relaunch) {
-        Set-PSOBBClientManualLogin
         $session = & (Join-Path $PSScriptRoot 'Start-PSOBBSession.ps1') `
             -RuntimeRoot $layout.Root `
             -Channel $RelaunchChannel `
@@ -496,15 +500,22 @@ try {
         Username = $verifiedState.Username
         StateBackup = $stateBackup.BackupPath
         CredentialBackup = $rotationBackup.Path
-        PasswordStorage = 'manual-only'
+        PasswordStorage = 'newserv-license-json'
+        ProjectCredentialStorage = 'manual-only'
+        NativeClientCredentialCache = if ($loginPolicy.RememberLoginEnabled) {
+            'enabled-after-next-successful-login'
+        } else {
+            'disabled'
+        }
         ServerRelaunched = [bool]$Relaunch
         ClientChannel = if ($session) { $session.ClientChannel } else { $null }
         ClientPid = if ($session) { $session.ClientPid } else { $null }
-        LoginCacheCleared = [bool]$Relaunch
+        LoginCacheCleared = [bool]$loginCacheCleared
+        RememberLoginEnabled = [bool]$loginPolicy.RememberLoginEnabled
         NextStep = if ($Relaunch) {
-            'Enter the player username and password manually in the PSOBB login window'
+            'Enter the player username and password once in PSOBB; remembered login will save them when enabled'
         } else {
-            'Remember or independently store the password, then start a session and enter it manually'
+            'The stale saved login was cleared; enter the new player credentials once at the next client launch'
         }
     }
 } finally {

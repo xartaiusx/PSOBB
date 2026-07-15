@@ -4,6 +4,7 @@ param(
     [string]$Channel = 'Canary',
     [ValidateSet('ProfileDefault', 'Borderless', 'Resizable')]
     [string]$WindowMode = 'Borderless',
+    [switch]$PreserveForeground,
     [string]$RuntimeRoot,
     [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45
 )
@@ -66,6 +67,7 @@ try {
     $clientResult = & (Join-Path $PSScriptRoot 'Start-PSOBBClient.ps1') `
         -Channel $Channel `
         -WindowMode $WindowMode `
+        -PreserveForeground:$PreserveForeground `
         -RuntimeRoot $layout.Root `
         -ClientOperationLockHeld
 
@@ -77,6 +79,9 @@ try {
         ServerHostPid = if ($serverStartResult) { $serverStartResult.HostPid } else { $null }
         ClientChannel = $clientResult.Channel
         ClientPid = $clientResult.Pid
+        PreserveForeground = [bool]$clientResult.PreserveForeground
+        ForegroundPreserved = [bool]$clientResult.ForegroundPreserved
+        ForegroundStatus = [string]$clientResult.ForegroundStatus
         WindowMode = $clientResult.WindowMode
         Borderless = $clientResult.Borderless
         WindowWidth = $clientResult.WindowWidth

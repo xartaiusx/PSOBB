@@ -77,6 +77,11 @@ $commandGuard =
 Add-Result 'capture uses the official launch command without presentation overrides' `
     $commandGuard 'working directory, private template, and exact executable are the only launch inputs'
 
+Add-Result 'capture preserves validated local login persistence before delegated process creation' (
+    $captureSource -match
+        'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null\s*\r?\n\s*\$runner\s*=\s*\[System\.Diagnostics\.Process\]::Start\(\$startInfo\)') `
+    'RenderDoc validates registry types without reading or clearing the saved login'
+
 $identityGuard =
     $captureSource -match 'Launched as ID \(\[0-9\]\+\)' -and
     $captureSource -match 'ConvertTo-PSOBBUInt32ExitCode' -and

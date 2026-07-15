@@ -129,56 +129,6 @@ function Test-PSOBBProtectedAcl {
     $found.SetEquals($allowed)
 }
 
-function New-PSOBBProtectedSecurityDescriptor {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][bool]$IsContainer)
-
-    $security = if ($IsContainer) {
-        [System.Security.AccessControl.DirectorySecurity]::new()
-    } else {
-        [System.Security.AccessControl.FileSecurity]::new()
-    }
-    $security.SetAccessRuleProtection($true, $false)
-    $inheritance = if ($IsContainer) {
-        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-    } else {
-        [System.Security.AccessControl.InheritanceFlags]::None
-    }
-    foreach ($sid in @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
-        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-            $sid,
-            [System.Security.AccessControl.FileSystemRights]::FullControl,
-            $inheritance,
-            [System.Security.AccessControl.PropagationFlags]::None,
-            [System.Security.AccessControl.AccessControlType]::Allow)
-        [void]$security.AddAccessRule($rule)
-    }
-    $security
-}
-
-function Set-PSOBBProtectedAcl {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path)
-
-    $item = Get-Item -Force -LiteralPath $Path
-    # Do not reuse a whole descriptor returned by Get-Acl here. On an audited
-    # parent, Set-Acl can attempt to persist its SACL section after applying the
-    # DACL, which requires SeSecurityPrivilege. A fresh descriptor contains only
-    # the access rules this operation owns. FileSystemAclExtensions then persists
-    # only its modified DACL section and leaves owner, group, and SACL untouched.
-    $security = New-PSOBBProtectedSecurityDescriptor -IsContainer $item.PSIsContainer
-    if ($item.PSIsContainer) {
-        [System.IO.FileSystemAclExtensions]::SetAccessControl(
-            [System.IO.DirectoryInfo]$item, [System.Security.AccessControl.DirectorySecurity]$security)
-    } else {
-        [System.IO.FileSystemAclExtensions]::SetAccessControl(
-            [System.IO.FileInfo]$item, [System.Security.AccessControl.FileSecurity]$security)
-    }
-}
-
 function Write-PSOBBProtectedText {
     [CmdletBinding()]
     param(
@@ -748,52 +698,133 @@ function Test-PSOBBRotatedAdminState {
     $state
 }
 
-function Set-PSOBBClientManualLogin {
+function Initialize-PSOBBClientProcessLauncherType {
     [CmdletBinding()]
-    param([string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB')
+    param()
 
-    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Container)) {
-        throw "PSOBB client registry key is missing: $RegistryPath"
+    if ($null -ne ('PSOBBClientProcessLauncher' -as [type])) {
+        return
     }
-    Remove-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT_CHECK', 'ACCOUNT', 'PASSWORD' -ErrorAction SilentlyContinue
-    New-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT_CHECK' -PropertyType DWord -Value 0 -Force | Out-Null
-    New-ItemProperty -LiteralPath $RegistryPath -Name 'ACCOUNT' -PropertyType String -Value '' -Force | Out-Null
-    New-ItemProperty -LiteralPath $RegistryPath -Name 'PASSWORD' -PropertyType String -Value '' -Force | Out-Null
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class PSOBBClientProcessLauncher
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfo
+    {
+        public uint Size;
+        public IntPtr Reserved;
+        public IntPtr Desktop;
+        public IntPtr Title;
+        public uint X;
+        public uint Y;
+        public uint XSize;
+        public uint YSize;
+        public uint XCountChars;
+        public uint YCountChars;
+        public uint FillAttribute;
+        public uint Flags;
+        public ushort ShowWindow;
+        public ushort Reserved2Size;
+        public IntPtr Reserved2;
+        public IntPtr StandardInput;
+        public IntPtr StandardOutput;
+        public IntPtr StandardError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessInformation
+    {
+        public IntPtr Process;
+        public IntPtr Thread;
+        public uint ProcessId;
+        public uint ThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcessW(
+        string applicationName,
+        StringBuilder commandLine,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inheritHandles,
+        uint creationFlags,
+        IntPtr environment,
+        string currentDirectory,
+        ref StartupInfo startupInfo,
+        out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private const uint CreateNoWindow = 0x08000000;
+    private const uint StartfUseShowWindow = 0x00000001;
+    private const ushort SwShowNormal = 1;
+    private const ushort SwShowNoActivate = 4;
+
+    public static int Start(string executable, string workingDirectory, bool preserveForeground)
+    {
+        if (string.IsNullOrWhiteSpace(executable) || executable.IndexOf('\0') >= 0 ||
+            string.IsNullOrWhiteSpace(workingDirectory) || workingDirectory.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("Executable and working-directory paths must be non-empty and contain no nulls.");
+        }
+
+        var startupInfo = new StartupInfo
+        {
+            Size = unchecked((uint)Marshal.SizeOf<StartupInfo>()),
+            Flags = StartfUseShowWindow,
+            ShowWindow = preserveForeground ? SwShowNoActivate : SwShowNormal,
+        };
+        var commandLine = new StringBuilder("\"" + executable + "\"");
+        if (!CreateProcessW(
+            executable,
+            commandLine,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            false,
+            CreateNoWindow,
+            IntPtr.Zero,
+            workingDirectory,
+            ref startupInfo,
+            out var processInformation))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            return checked((int)processInformation.ProcessId);
+        }
+        finally
+        {
+            if (processInformation.Thread != IntPtr.Zero)
+            {
+                CloseHandle(processInformation.Thread);
+            }
+            if (processInformation.Process != IntPtr.Zero)
+            {
+                CloseHandle(processInformation.Process);
+            }
+        }
+    }
 }
-
-function New-PSOBBClientStartInfo {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$ClientExecutable,
-        [Parameter(Mandatory)][string]$WorkingDirectory
-    )
-
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $ClientExecutable
-    $startInfo.WorkingDirectory = $WorkingDirectory
-    # ShellExecute keeps the GUI process detached from non-interactive capture
-    # handles. The compatibility layer is applied briefly by the launch helper
-    # and restored immediately after process creation.
-    $startInfo.UseShellExecute = $true
-    $startInfo.CreateNoWindow = $false
-
-    # The historic 59NL executable embeds requireAdministrator even though the
-    # disposable runtime is user-writable. Apply Microsoft's RunAsInvoker
-    # compatibility fix only to this child process so a normal operator shell
-    # can verify and close it without weakening UAC or changing the base client.
-    $startInfo
+'@
 }
 
 function Start-PSOBBClientProcess {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ClientExecutable,
-        [Parameter(Mandatory)][string]$WorkingDirectory
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [switch]$PreserveForeground
     )
 
-    $startInfo = New-PSOBBClientStartInfo `
-        -ClientExecutable $ClientExecutable `
-        -WorkingDirectory $WorkingDirectory
+    Initialize-PSOBBClientProcessLauncherType
     $previousCompatibilityLayer =
         [Environment]::GetEnvironmentVariable('__COMPAT_LAYER', 'Process')
     try {
@@ -802,7 +833,12 @@ function Start-PSOBBClientProcess {
         # RunAsInvoker compatibility layer only during this child creation.
         [Environment]::SetEnvironmentVariable(
             '__COMPAT_LAYER', 'RunAsInvoker', 'Process')
-        $process = [System.Diagnostics.Process]::Start($startInfo)
+        Assert-PSOBBClientLoginRegistry | Out-Null
+        $processId = [PSOBBClientProcessLauncher]::Start(
+            $ClientExecutable,
+            $WorkingDirectory,
+            [bool]$PreserveForeground)
+        $process = [System.Diagnostics.Process]::GetProcessById($processId)
     } finally {
         [Environment]::SetEnvironmentVariable(
             '__COMPAT_LAYER', $previousCompatibilityLayer, 'Process')
@@ -825,6 +861,7 @@ if (-not $PSCmdlet.ShouldProcess(
     return
 }
 
+Assert-PSOBBClientLoginRegistry | Out-Null
 $initialState = Get-PSOBBAdminState -Layout $layout
 $newCredential = Read-PSOBBAdminCredential
 $newPassword = $null
@@ -834,6 +871,8 @@ $stateBackup = $null
 $adminState = $null
 $verifiedState = $null
 $shutdownPassword = $null
+$loginPolicy = $null
+$loginCacheCleared = $false
 try {
     $newPassword = $newCredential.GetNetworkCredential().Password
     $oldPassword = $initialState.Credential.GetNetworkCredential().Password
@@ -864,6 +903,8 @@ try {
         Set-PSOBBProtectedAcl -Path $adminState.LicensePath
         Set-PSOBBAdminSecretState -Layout $layout -AdminState $adminState -Credential $newCredential
         $verifiedState = Test-PSOBBRotatedAdminState -Layout $layout -ExpectedUsername $newCredential.UserName -ExpectedPassword $newPassword
+        $loginPolicy = Clear-PSOBBClientSavedCredentials
+        $loginCacheCleared = $true
         Set-PSOBBRotationBackupStatus -Layout $layout -RotationBackup $rotationBackup -Status 'completed'
     } catch {
         $rotationError = $_
@@ -877,7 +918,6 @@ try {
 
     $clientProcess = $null
     if ($Relaunch) {
-        Set-PSOBBClientManualLogin
         $serverStarted = $false
         try {
             & (Join-Path $PSScriptRoot 'Start-PSOBB.ps1') -RuntimeRoot $layout.Root | Out-Host
@@ -907,11 +947,12 @@ try {
         CredentialBackup = $rotationBackup.Path
         ServerRelaunched = [bool]$Relaunch
         ClientPid = if ($clientProcess) { $clientProcess.Id } else { $null }
-        LoginCacheCleared = [bool]$Relaunch
+        LoginCacheCleared = [bool]$loginCacheCleared
+        RememberLoginEnabled = [bool]$loginPolicy.RememberLoginEnabled
         NextStep = if ($Relaunch) {
-            'Enter the new username and password manually in the PSOBB login window'
+            'Enter the new username and password once in PSOBB; remembered login will save them when enabled'
         } else {
-            'Run with -Relaunch when ready to start the server and client with an empty login form'
+            'The stale saved login was cleared; enter the new credentials once at the next client launch'
         }
     }
 } finally {

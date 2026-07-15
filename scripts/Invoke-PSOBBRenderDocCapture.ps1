@@ -294,6 +294,9 @@ $stderrTask = $null
 $stdout = ''
 $stderr = ''
 try {
+    # renderdoccmd creates the game process itself. Validate the registry
+    # contract without reading or altering locally remembered credentials.
+    Assert-PSOBBClientLoginRegistry | Out-Null
     $runner = [System.Diagnostics.Process]::Start($startInfo)
     if (-not $runner) {
         throw 'Windows did not start the locked RenderDoc command-line executable'

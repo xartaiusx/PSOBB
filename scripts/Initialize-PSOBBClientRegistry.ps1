@@ -14,11 +14,23 @@ if (-not $PSCmdlet.ShouldProcess($nativeRegistryPath, 'Initialize local PSOBB cl
 
 if (Test-Path -LiteralPath $registryPath) {
     New-Item -ItemType Directory -Force -Path $safeBackups | Out-Null
+    Set-PSOBBProtectedAcl -Path $safeBackups
     $backupPath = Join-Path $safeBackups ('psobb-registry-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ') + '.reg')
     Assert-PathWithinRoot -Path $backupPath -Root $layout.Root | Out-Null
-    & reg.exe export $nativeRegistryPath $backupPath /y | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not back up the existing PSOBB registry key'
+    try {
+        New-Item -ItemType File -Path $backupPath -Force | Out-Null
+        Set-PSOBBProtectedAcl -Path $backupPath
+        & reg.exe export $nativeRegistryPath $backupPath /y | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not back up the existing PSOBB registry key'
+        }
+        # reg.exe may replace the destination while exporting. Reassert the
+        # DACL on both the containing directory and completed sensitive file.
+        Set-PSOBBProtectedAcl -Path $safeBackups
+        Set-PSOBBProtectedAcl -Path $backupPath
+    } catch {
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        throw
     }
 }
 
@@ -59,5 +71,12 @@ foreach ($entry in $values.GetEnumerator()) {
     Windowed = $true
     ExternalWebLinksDisabled = $true
     CredentialsStored = $false
+    CredentialSavingDisabled = $true
+    CredentialFieldsCleared = $true
+    AccountCheck = [uint32]0
     BackupPath = if (Get-Variable -Name backupPath -ErrorAction SilentlyContinue) { $backupPath } else { $null }
+    BackupMayContainPriorCredentials = [bool](
+        Get-Variable -Name backupPath -ErrorAction SilentlyContinue)
+    BackupProtected = [bool](
+        Get-Variable -Name backupPath -ErrorAction SilentlyContinue)
 }

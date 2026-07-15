@@ -58,6 +58,7 @@ public static partial class LauncherCommandLine
         string? profileId = null;
         string? monitorId = null;
         LauncherWindowMode? windowMode = null;
+        var preserveForeground = false;
 
         for (var index = 0; index < arguments.Count; index++)
         {
@@ -123,6 +124,10 @@ public static partial class LauncherCommandLine
                 case "--window-mode":
                     windowMode = ParseWindowMode(ReadValue(option, inlineValue, arguments, ref index));
                     break;
+                case "--preserve-foreground":
+                    preserveForeground = true;
+                    RequireNoValue(option, inlineValue);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown launcher option '{option}'.");
             }
@@ -162,7 +167,8 @@ public static partial class LauncherCommandLine
                 selectedChannel,
                 selectedProfile,
                 selectedMonitor,
-                windowMode ?? defaults.Selection.WindowMode));
+                windowMode ?? defaults.Selection.WindowMode,
+                preserveForeground));
 
         void SetOperation(LauncherOperation selected)
         {

@@ -17,6 +17,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private GraphicsProfileOption _selectedGraphicsProfile;
     private MonitorOption _selectedMonitor;
     private LauncherWindowMode _selectedWindowMode;
+    private bool _preserveForeground;
     private bool _safeMode;
     private LauncherLifecycleState _lifecycleState = LauncherLifecycleState.Stopped;
     private string _manifestSummary = "No manifest loaded.";
@@ -39,6 +40,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _selectedGraphicsProfile = options.Selection.Profile;
         _selectedMonitor = options.Selection.Monitor;
         _selectedWindowMode = options.Selection.WindowMode;
+        _preserveForeground = options.Selection.PreserveForeground;
         _safeMode = options.Selection.Profile.SafeMode;
 
         _manifestLoader = new LauncherManifestLoader(new ReleaseManifestService());
@@ -136,6 +138,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         get => _selectedWindowMode;
         set => SetProperty(ref _selectedWindowMode, value);
+    }
+
+    public bool PreserveForeground
+    {
+        get => _preserveForeground;
+        set => SetProperty(ref _preserveForeground, value);
     }
 
     public bool SafeMode
@@ -349,7 +357,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectedChannel,
         SelectedGraphicsProfile,
         SelectedMonitor,
-        SelectedWindowMode);
+        SelectedWindowMode,
+        PreserveForeground);
 
     private void ApplySnapshot(LifecycleSnapshot snapshot)
     {

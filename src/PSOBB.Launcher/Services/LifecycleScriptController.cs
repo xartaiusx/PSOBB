@@ -428,14 +428,11 @@ public sealed class LifecycleScriptController
             throw new InvalidOperationException("The local server must be healthy before starting the client.");
         }
 
+        var arguments = ClientLaunchArguments(runtimeRoot, selection);
         await _executor.ExecuteAsync(
             "Start-PSOBBClient.ps1",
             runtimeRoot,
-            [
-                "-Channel", selection.Channel.ToString(),
-                "-WindowMode", ToScriptWindowMode(selection.WindowMode),
-                "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
-            ],
+            arguments,
             cancellationToken).ConfigureAwait(false);
         return await WaitForAsync(runtimeRoot, state => state.ClientRunning, cancellationToken).ConfigureAwait(false);
     }
@@ -456,14 +453,11 @@ public sealed class LifecycleScriptController
             throw new InvalidOperationException(current.Detail);
         }
 
+        var arguments = ClientLaunchArguments(runtimeRoot, selection);
         await _executor.ExecuteAsync(
             "Start-PSOBBSession.ps1",
             runtimeRoot,
-            [
-                "-Channel", selection.Channel.ToString(),
-                "-WindowMode", ToScriptWindowMode(selection.WindowMode),
-                "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
-            ],
+            arguments,
             cancellationToken).ConfigureAwait(false);
         return await WaitForAsync(runtimeRoot, state => state.ClientRunning, cancellationToken).ConfigureAwait(false);
     }
@@ -631,6 +625,24 @@ public sealed class LifecycleScriptController
         LauncherWindowMode.Resizable => "Resizable",
         _ => throw new ArgumentOutOfRangeException(nameof(windowMode)),
     };
+
+    private static List<string> ClientLaunchArguments(
+        string runtimeRoot,
+        LifecycleSelection selection)
+    {
+        var arguments = new List<string>
+        {
+            "-Channel", selection.Channel.ToString(),
+            "-WindowMode", ToScriptWindowMode(selection.WindowMode),
+            "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
+        };
+        if (selection.PreserveForeground)
+        {
+            arguments.Add("-PreserveForeground");
+        }
+
+        return arguments;
+    }
 
     private sealed record RepairScript(string Script, IReadOnlyList<string> Arguments);
 }

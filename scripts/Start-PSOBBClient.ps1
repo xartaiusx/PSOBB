@@ -4,12 +4,42 @@ param(
     [string]$Channel = 'Stable',
     [ValidateSet('ProfileDefault', 'Borderless', 'Resizable')]
     [string]$WindowMode = 'ProfileDefault',
+    [switch]$PreserveForeground,
     [string]$RuntimeRoot,
     [Parameter(DontShow)][switch]$ClientOperationLockHeld
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Set-PSOBBAdminCredential.ps1')
+
+function Wait-PSOBBClientStartupDelay {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 60000)]
+        [int]$DelayMilliseconds,
+        [Parameter(Mandatory)][IntPtr]$ForegroundTarget,
+        [Parameter(Mandatory)]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ClientProcessId,
+        [switch]$TrackForeground
+    )
+
+    if (-not $TrackForeground) {
+        Start-Sleep -Milliseconds $DelayMilliseconds
+        return $ForegroundTarget
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.ElapsedMilliseconds -lt $DelayMilliseconds) {
+        $remaining = $DelayMilliseconds - [int]$stopwatch.ElapsedMilliseconds
+        Start-Sleep -Milliseconds ([Math]::Min(100, [Math]::Max(1, $remaining)))
+        $ForegroundTarget = Update-PSOBBNonClientForegroundWindowTarget `
+            -CurrentTarget $ForegroundTarget `
+            -ClientProcessId $ClientProcessId
+    }
+    $ForegroundTarget
+}
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
@@ -75,17 +105,28 @@ if ((-not $useManagedPresentation) -and ($WindowMode -ne 'ProfileDefault')) {
 }
 
 $process = $null
+$previousForegroundWindow = if ($PreserveForeground) {
+    Get-PSOBBForegroundWindowHandle
+} else {
+    [IntPtr]::Zero
+}
 try {
     $process = Start-PSOBBClientProcess `
         -ClientExecutable $clientExecutable `
-        -WorkingDirectory $clientRoot
+        -WorkingDirectory $clientRoot `
+        -PreserveForeground:$PreserveForeground
 
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds $(if ($PreserveForeground) { 100 } else { 200 })
         $process.Refresh()
         if ($process.HasExited) {
             throw "The PSOBB client exited during startup with code $($process.ExitCode)"
+        }
+        if ($PreserveForeground) {
+            $previousForegroundWindow = Update-PSOBBNonClientForegroundWindowTarget `
+                -CurrentTarget $previousForegroundWindow `
+                -ClientProcessId $process.Id
         }
     } while (($process.MainWindowHandle -eq [IntPtr]::Zero) -and
         ([DateTime]::UtcNow -lt $deadline))
@@ -98,13 +139,29 @@ try {
         throw 'The PSOBB client did not create a verified game window during startup'
     }
 
+    if ($PreserveForeground) {
+        # Restore promptly after the first verified window, then keep sampling
+        # for a newer user-selected application while the client settles.
+        Restore-PSOBBForegroundWindowAfterClientLaunch `
+            -Process $process `
+            -PreviousWindow $previousForegroundWindow | Out-Null
+    }
+
     $presentation = $null
     if ($useManagedPresentation) {
-        Start-Sleep -Seconds 3
+        $previousForegroundWindow = Wait-PSOBBClientStartupDelay `
+            -DelayMilliseconds 3000 `
+            -ForegroundTarget $previousForegroundWindow `
+            -ClientProcessId $process.Id `
+            -TrackForeground:$PreserveForeground
         if ($presentationOwner -eq 'client-patch') {
             # Observe only. Mutating a window already owned by the enhancement
             # module can race its device-reset and style-recreation logic.
-            Start-Sleep -Seconds 5
+            $previousForegroundWindow = Wait-PSOBBClientStartupDelay `
+                -DelayMilliseconds 5000 `
+                -ForegroundTarget $previousForegroundWindow `
+                -ClientProcessId $process.Id `
+                -TrackForeground:$PreserveForeground
             $presentation = Get-PSOBBClientWindowPresentation -Process $process
             if ($selectedWindowMode -eq 'Borderless') {
                 if (($presentation.X -ne 0) -or ($presentation.Y -ne 0) -or
@@ -133,7 +190,11 @@ try {
                         -Process $process `
                         -ClientWidth ([int]$clientProfile.resizableClientWidth) `
                         -ClientHeight ([int]$clientProfile.resizableClientHeight) | Out-Null
-                    Start-Sleep -Milliseconds 750
+                    $previousForegroundWindow = Wait-PSOBBClientStartupDelay `
+                        -DelayMilliseconds 750 `
+                        -ForegroundTarget $previousForegroundWindow `
+                        -ClientProcessId $process.Id `
+                        -TrackForeground:$PreserveForeground
                     $presentation = Get-PSOBBClientWindowPresentation -Process $process
                 }
                 $aspect = [double]$presentation.ClientWidth / [double]$presentation.ClientHeight
@@ -159,10 +220,31 @@ try {
                         -ClientHeight ([int]$clientProfile.resizableClientHeight)
                 }
                 if ($attempt -eq 1) {
-                    Start-Sleep -Seconds 5
+                    $previousForegroundWindow = Wait-PSOBBClientStartupDelay `
+                        -DelayMilliseconds 5000 `
+                        -ForegroundTarget $previousForegroundWindow `
+                        -ClientProcessId $process.Id `
+                        -TrackForeground:$PreserveForeground
                 }
             }
         }
+    }
+
+    $foreground = if ($PreserveForeground) {
+        $previousForegroundWindow = Update-PSOBBNonClientForegroundWindowTarget `
+            -CurrentTarget $previousForegroundWindow `
+            -ClientProcessId $process.Id
+        Restore-PSOBBForegroundWindowAfterClientLaunch `
+            -Process $process `
+            -PreviousWindow $previousForegroundWindow
+    } else {
+        [pscustomobject]@{
+            Status = 'NotRequested'
+            Preserved = $false
+        }
+    }
+    if ($PreserveForeground -and -not $foreground.Preserved) {
+        Write-Warning "PSOBB started successfully, but Windows did not restore the previous foreground window ($($foreground.Status)). Use Alt+Tab once to continue multitasking."
     }
 
     [pscustomobject]@{
@@ -172,6 +254,9 @@ try {
         Executable = $clientExecutable
         WindowTitle = $process.MainWindowTitle
         RunAsInvoker = $true
+        PreserveForeground = [bool]$PreserveForeground
+        ForegroundPreserved = [bool]$foreground.Preserved
+        ForegroundStatus = [string]$foreground.Status
         WindowMode = if ($presentation) { $selectedWindowMode } else { 'ApplicationControlled' }
         PresentationOwner = $presentationOwner
         Borderless = ($null -ne $presentation) -and ($selectedWindowMode -eq 'Borderless')

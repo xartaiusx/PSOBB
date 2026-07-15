@@ -67,13 +67,15 @@ public sealed record LifecycleSelection(
     ReleaseChannel Channel,
     GraphicsProfileOption Profile,
     MonitorOption Monitor,
-    LauncherWindowMode WindowMode)
+    LauncherWindowMode WindowMode,
+    bool PreserveForeground = false)
 {
     public static LifecycleSelection Create(
         ReleaseChannel channel,
         GraphicsProfileOption profile,
         MonitorOption monitor,
-        LauncherWindowMode windowMode)
+        LauncherWindowMode windowMode,
+        bool preserveForeground = false)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(monitor);
@@ -94,7 +96,7 @@ public sealed record LifecycleSelection(
             throw new InvalidOperationException($"Monitor target '{monitor.Id}' is not supported by this launcher.");
         }
 
-        return new(channel, profile, monitor, windowMode);
+        return new(channel, profile, monitor, windowMode, preserveForeground);
     }
 
     public LaunchProfile ToLaunchProfile()
