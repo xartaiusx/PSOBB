@@ -69,5 +69,8 @@ Use `-VerifiedDgVoodooCacheDirectory <absolute-temp-cache-path>` and
 `-RemoveVerifiedReShadeCache` only when those optional caches should also be
 audited. Windows Error Reporting archives can require a one-off elevated
 PowerShell. In that case, rerun only this command with
-`-SkipDocumentsDirectories -SkipTemporaryDirectories`; do not take ownership,
+`-SkipDocumentsDirectories -SkipTemporaryDirectories`. Add
+`-RemoveArchivedCrashReports` only after reviewing the preview; it accepts an
+archived PSOBB crash folder only when it contains exactly one ordinary
+`Report.wer` file no larger than 1 MiB and nothing else. Do not take ownership,
 change WER ACLs, stop WER, or delete the parent archive or queue.

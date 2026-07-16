@@ -3,6 +3,7 @@ param(
     [string]$RuntimeRoot,
     [string]$VerifiedDgVoodooCacheDirectory,
     [switch]$RemoveVerifiedReShadeCache,
+    [switch]$RemoveArchivedCrashReports,
     [switch]$SkipDocumentsDirectories,
     [switch]$SkipTemporaryDirectories,
     [switch]$SkipCrashReports
@@ -145,6 +146,33 @@ function Assert-PSOBBEmptyCleanupDirectory {
         throw "Refusing to remove a nonempty legacy directory: $fullPath"
     }
     $fullPath
+}
+
+function Assert-PSOBBArchivedCrashReportDirectory {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = Assert-PSOBBOrdinaryDirectoryTree -Path $Path
+    $directories = @(Get-ChildItem -LiteralPath $fullPath -Directory -Force -Recurse)
+    $files = @(Get-ChildItem -LiteralPath $fullPath -File -Force -Recurse)
+    if ($directories.Count -ne 0 -or
+        $files.Count -ne 1 -or
+        $files[0].Name -cne 'Report.wer' -or
+        $files[0].Length -le 0 -or
+        $files[0].Length -gt 1MB) {
+        throw "The PSOBB crash-report directory is not an exact one-file WER archive: $fullPath"
+    }
+    $fullPath
+}
+
+function Test-PSOBBArchivedCrashReportRemovalEnabled {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Candidate,
+        [Parameter(Mandatory)][bool]$AllowArchivedRemoval
+    )
+
+    [bool]($Candidate.ArchivedCrashReport -and $AllowArchivedRemoval)
 }
 
 function Invoke-PSOBBVerifiedDirectoryRemoval {
@@ -367,6 +395,7 @@ if (-not $SkipDocumentsDirectories) {
             Parent = $documentsRoot
             ExpectedName = $name
             Kind = 'retired Documents directory'
+            ArchivedCrashReport = $false
         })
     }
 }
@@ -376,16 +405,30 @@ if (-not $SkipTemporaryDirectories) {
         Parent = $temporaryRoot
         ExpectedName = 'psobb-launcher-tests'
         Kind = 'retired launcher-test directory'
+        ArchivedCrashReport = $false
     })
 }
 if (-not $SkipCrashReports) {
     $crashRoots = @(
-        (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive'),
-        (Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER\ReportArchive'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER\ReportQueue')
+        [pscustomobject]@{
+            Path = Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportArchive'
+            ArchivedCrashReport = $true
+        },
+        [pscustomobject]@{
+            Path = Join-Path $env:ProgramData 'Microsoft\Windows\WER\ReportQueue'
+            ArchivedCrashReport = $false
+        },
+        [pscustomobject]@{
+            Path = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER\ReportArchive'
+            ArchivedCrashReport = $true
+        },
+        [pscustomobject]@{
+            Path = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER\ReportQueue'
+            ArchivedCrashReport = $false
+        }
     )
-    foreach ($crashRoot in $crashRoots) {
+    foreach ($crashRootRecord in $crashRoots) {
+        $crashRoot = [string]$crashRootRecord.Path
         if (-not (Test-Path -LiteralPath $crashRoot -PathType Container)) {
             continue
         }
@@ -398,6 +441,7 @@ if (-not $SkipCrashReports) {
                 Parent = $crashRoot
                 ExpectedName = $directory.Name
                 Kind = 'empty PSOBB crash-report directory'
+                ArchivedCrashReport = [bool]$crashRootRecord.ArchivedCrashReport
             })
         }
     }
@@ -415,6 +459,9 @@ foreach ($candidate in $emptyCandidates) {
         continue
     }
     try {
+        $archivedRemovalEnabled = Test-PSOBBArchivedCrashReportRemovalEnabled `
+            -Candidate $candidate `
+            -AllowArchivedRemoval ([bool]$RemoveArchivedCrashReports)
         $verifier = {
             param($proposedTarget)
             $validated = Assert-PSOBBCleanupCandidate `
@@ -423,16 +470,21 @@ foreach ($candidate in $emptyCandidates) {
                 -ExpectedName $candidate.ExpectedName `
                 -RepositoryRoot $repositoryRoot `
                 -CanonicalRuntimeRoot $runtimeRootFull
-            Assert-PSOBBEmptyCleanupDirectory -Path $validated
-        }.GetNewClosure()
+            if ($archivedRemovalEnabled) {
+                Assert-PSOBBArchivedCrashReportDirectory -Path $validated
+            } else {
+                Assert-PSOBBEmptyCleanupDirectory -Path $validated
+            }
+        }
         $approval = {
             param($target)
             $PSCmdlet.ShouldProcess($target, "remove $($candidate.Kind)")
-        }.GetNewClosure()
+        }
         $removal = Invoke-PSOBBVerifiedDirectoryRemoval `
             -Path $displayPath `
             -Verifier $verifier `
-            -ShouldRemove $approval
+            -ShouldRemove $approval `
+            -Recurse:$archivedRemovalEnabled
         $status = $removal.Status
         $detail = $removal.Detail
     } catch {
@@ -498,11 +550,11 @@ if (-not [string]::IsNullOrWhiteSpace($VerifiedDgVoodooCacheDirectory)) {
                     -CacheDirectory $cachePath `
                     -ArchivePath $lockedArchive | Out-Null
                 $cachePath
-            }.GetNewClosure()
+            }
             $approval = {
                 param($target)
                 $PSCmdlet.ShouldProcess($target, 'remove verified duplicate dgVoodoo cache')
-            }.GetNewClosure()
+            }
             $removal = Invoke-PSOBBVerifiedDirectoryRemoval `
                 -Path $displayPath `
                 -Verifier $verifier `
@@ -544,11 +596,11 @@ if ($RemoveVerifiedReShadeCache) {
                     -CanonicalRuntimeRoot $runtimeRootFull
                 Assert-PSOBBReShadeCacheIsExclusive -CacheDirectory $cachePath | Out-Null
                 $cachePath
-            }.GetNewClosure()
+            }
             $approval = {
                 param($target)
                 $PSCmdlet.ShouldProcess($target, 'remove exclusive PSOBB ReShade cache')
-            }.GetNewClosure()
+            }
             $removal = Invoke-PSOBBVerifiedDirectoryRemoval `
                 -Path $displayPath `
                 -Verifier $verifier `

@@ -94,7 +94,7 @@ try {
             -RepositoryRoot $protectedRepository `
             -CanonicalRuntimeRoot $protectedRuntime
         Assert-PSOBBEmptyCleanupDirectory -Path $candidate
-    }.GetNewClosure()
+    }
     $planned = Invoke-PSOBBVerifiedDirectoryRemoval `
         -Path $empty `
         -Verifier $emptyVerifier `
@@ -108,6 +108,70 @@ try {
         -ShouldRemove { $true }
     Add-Result 'verified empty directory is removed nonrecursively' (
         $removed.Status -eq 'Removed' -and -not (Test-Path -LiteralPath $empty)) $removed.Detail
+
+    $archivedReport = Join-Path $allowedParent 'AppCrash_Psobb.exe_fixture'
+    New-Item -ItemType Directory -Path $archivedReport | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $archivedReport 'Report.wer'),
+        'archived diagnostic')
+    $archivedReportVerifier = {
+        param($proposedTarget)
+        Assert-PSOBBArchivedCrashReportDirectory -Path $proposedTarget
+    }
+    $archivedPlanned = Invoke-PSOBBVerifiedDirectoryRemoval `
+        -Path $archivedReport `
+        -Verifier $archivedReportVerifier `
+        -ShouldRemove { $false } `
+        -Recurse
+    Add-Result 'archived WER preview preserves exact report' (
+        $archivedPlanned.Status -eq 'Planned' -and
+        (Test-Path -LiteralPath (Join-Path $archivedReport 'Report.wer'))) $archivedPlanned.Detail
+    $archivedRemoved = Invoke-PSOBBVerifiedDirectoryRemoval `
+        -Path $archivedReport `
+        -Verifier $archivedReportVerifier `
+        -ShouldRemove { $true } `
+        -Recurse
+    Add-Result 'exact one-file archived WER report is removed' (
+        $archivedRemoved.Status -eq 'Removed' -and
+        -not (Test-Path -LiteralPath $archivedReport)) $archivedRemoved.Detail
+
+    $queuedReport = Join-Path $allowedParent 'ReportQueue_Psobb.exe_fixture'
+    New-Item -ItemType Directory -Path $queuedReport | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $queuedReport 'Report.wer'), 'pending diagnostic')
+    $queueCandidate = [pscustomobject]@{ ArchivedCrashReport = $false }
+    $queueArchivedRemoval = Test-PSOBBArchivedCrashReportRemovalEnabled `
+        -Candidate $queueCandidate `
+        -AllowArchivedRemoval $true
+    $queueVerifier = {
+        param($proposedTarget)
+        if ($queueArchivedRemoval) {
+            Assert-PSOBBArchivedCrashReportDirectory -Path $proposedTarget
+        } else {
+            Assert-PSOBBEmptyCleanupDirectory -Path $proposedTarget
+        }
+    }
+    Assert-Rejected `
+        -Name 'one-file queued WER reports remain empty-only and are rejected' `
+        -Action {
+            Invoke-PSOBBVerifiedDirectoryRemoval `
+                -Path $queuedReport `
+                -Verifier $queueVerifier `
+                -ShouldRemove { $true } `
+                -Recurse:$queueArchivedRemoval | Out-Null
+        } `
+        -MessagePattern 'nonempty legacy directory'
+    Add-Result 'queued WER rejection preserves pending report' (
+        (Test-Path -LiteralPath (Join-Path $queuedReport 'Report.wer'))) 'pending report remains'
+
+    New-Item -ItemType Directory -Path $archivedReport | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $archivedReport 'Report.wer'), 'diagnostic')
+    [System.IO.File]::WriteAllText((Join-Path $archivedReport 'extra.bin'), 'unexpected')
+    Assert-Rejected `
+        -Name 'archived WER reports with extra content are rejected' `
+        -Action {
+            Assert-PSOBBArchivedCrashReportDirectory -Path $archivedReport | Out-Null
+        } `
+        -MessagePattern 'not an exact one-file WER archive'
 
     $nonempty = Join-Path $allowedParent 'PSOBB'
     New-Item -ItemType Directory -Path $nonempty | Out-Null
@@ -228,7 +292,7 @@ try {
             -CacheDirectory $candidate `
             -ArchivePath $archive | Out-Null
         $candidate
-    }.GetNewClosure()
+    }
     $dgPlanned = Invoke-PSOBBVerifiedDirectoryRemoval `
         -Path $cacheRoot `
         -Verifier $dgVerifier `
@@ -296,7 +360,7 @@ try {
         param($proposedTarget)
         Assert-PSOBBReShadeCacheIsExclusive -CacheDirectory $proposedTarget | Out-Null
         $proposedTarget
-    }.GetNewClosure()
+    }
     $reshadePlanned = Invoke-PSOBBVerifiedDirectoryRemoval `
         -Path $reshadeRoot `
         -Verifier $reshadeVerifier `
@@ -323,6 +387,7 @@ try {
     $entrypointIsFixed =
         $source -notmatch 'DocumentsDirectory|TemporaryDirectory|CrashReportDirectories' -and
         $source -match "ExpectedName 'ReShade'" -and
+        $source -match 'RemoveArchivedCrashReports' -and
         $source -match "id -eq 'dgvoodoo2-x86-d3d8'" -and
         $source -match 'Join-Path \$layout\.Archives ''dgVoodoo2_87_3\.zip'''
     Add-Result 'production roots and archive identity are fixed' $entrypointIsFixed 'no caller-overridable system roots or archive path'
