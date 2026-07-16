@@ -23,7 +23,19 @@ pwsh -File .\tests\runtime\Test-CasF10PairImport.ps1
 The validator fails when a profile declares a second D3D8 owner, references an
 unknown component, exceeds the 3840x2400 true-widescreen ceiling, enables
 dgVoodoo D3D12, enables the watermark, selects an undeclared resolution/filter,
-drifts a project-owned source hash, or claims acceptance without all evidence.
+drifts a native `GRAPHICCTRL` DWORD or its raw-byte SHA-256, preselects virtual
+VRAM or VSync before acceptance, drifts a project-owned source hash, or claims
+acceptance without all evidence.
+
+`LocalPrivateGraphicallyAccepted` and
+`PublicDistributableGraphicallyAccepted` are explicit fail-closed booleans in
+the evidence registry. Both remain `false` while work is pending. Local
+completion cannot become `true` until exactly one local-only LocalLab profile
+is accepted, `safe-native-4x3` is independently accepted, the selected local
+profile's rollback chain reaches that native profile, and all five typed asset
+candidates have a final accepted or rejected disposition. Public completion is
+a separate later gate and cannot become `true` before local completion and the
+public `fidelity-modern-16x10` profile are accepted.
 
 ## Profile boundaries
 
@@ -32,7 +44,7 @@ drifts a project-owned source hash, or claims acceptance without all evidence.
 | `safe-native-4x3` | Stable, no proxy | Emergency rollback |
 | `clarity-dgvoodoo-4x3` | Canary, dgVoodoo D3D11 FL11 | Runtime-verified comparison baseline |
 | `lab-widescreen-16x10` | Local-only, dgVoodoo + explicit ASI layers | Black-box behavior reference only |
-| `lab-widescreen-hd-16x10` | Local-only reference layout + private AshenbubsHD + project LargeAssets ASI | Runtime-verified no-CAS private texture candidate; evidence incomplete |
+| `lab-widescreen-hd-16x10` | Local-only reference layout + private AshenbubsHD + project LargeAssets ASI | Exact-High runtime verified; final-winner evidence pending |
 | `lab-widescreen-cas-16x10` | Local-only reference layout + standard imported ReShade | Evidence materializer only; not launcher, CLI, or shortcut eligible |
 | `cleanroom-widescreen-canary` | Local-lab staging, dgVoodoo + project ASI, no ReShade | Partial clean-room widescreen isolation candidate |
 | `cas-evaluation-16x10` | Local-only, clean-room chain + standard imported ReShade | Explicit 0.15/0.25/0.35 CAS comparison only |
@@ -40,22 +52,53 @@ drifts a project-owned source hash, or claims acceptance without all evidence.
 | `dxvk-canary` | Local-only x32 D3D8/D3D9 pair | Unsupported-on-Windows comparison |
 | `d3d8to9-canary` | Isolated D3D8 translation | Compatibility comparison, not an upscaler |
 
+### Native settings and evidence-gated quality selections
+
+Every profile owns one exact nine-DWORD `GRAPHICCTRL` vector. Its SHA-256 is
+computed over the 36 raw little-endian bytes that Windows stores, not over JSON
+text. Fidelity and widescreen profiles declare the High End vector
+`0,0,0,0,1,1,1,0,0`; the native emergency and renderer-compatibility profiles
+declare the Mid compatibility vector `1,0,0,0,1,1,1,0,0`. Both require Pixel
+Fog, low-resolution textures off, and frame skip off. High End requires advanced
+effects; Mid records the advanced-effects compatibility policy.
+
+dgVoodoo profiles declare virtual-VRAM candidates of 256, 1024, 2048, and
+4096 MB and VSync-owner candidates of `none` and `dgvoodoo`. A null
+`selectedVirtualVramMb` or `selectedVsyncOwner` means that acceptance evidence
+has not selected a winner. The prior HD lab materialization's 256 MB and
+no-VSync values remain provisional runtime inputs, not accepted catalog
+selections. Native D3D8 uses explicit application-controlled sentinels; other
+translation renderers use renderer-controlled sentinels because dgVoodoo VRAM
+and VSync controls do not apply to them.
+
+An accepted profile must also select one declared internal resolution, scaling
+filter, MSAA value, virtual-VRAM policy, VSync owner, and presentation mode.
+CAS strength is mandatory when the profile declares CAS candidates. An accepted
+HD profile must record a non-null `selectedAssetComponentIds` list that exactly
+matches the accepted entries in the typed asset-candidate matrix, in activation
+order. Null selection fields continue to mean that the candidate is not
+accepted.
+
 The current evidence reconciliation records these outcomes:
+
+No profile is fully accepted yet. The remaining human gates are the visual
+VSync/no-VSync choice, blind stock-versus-HD comparison, manual qrenderdoc
+replay inspection of a real `.rdc`, and review of the complete lossless scene
+corpus. The native 4:3 rollback and the final resizable-window pass also remain
+technical acceptance gates; configuration or process telemetry alone cannot
+substitute for them.
 
 - `lab-widescreen-16x10` is runtime-verified but still pending RenderDoc,
   complete scene/HUD geometry, gameplay pacing, soak, rollback, and blind A/B
   gates. It remains a local-only black-box reference.
-- `lab-widescreen-hd-16x10` is runtime-verified and pending. Characters,
-  Objects, Monsters, and Maps passed isolated activation and load checks, and
-  exact All activation composed 484 source entries into 481 files while
-  loading the pinned LargeAssets module. A lossless 2560x1600 Forest frame, a
-  600.165-second gameplay trace, and a 1800.104-second soak are indexed.
-  RenderDoc was armed for the exact profile, but no `.rdc` was captured, so
-  replay-inspected render-target proof remains pending. The complete scene and
-  HUD corpus, dynamic resize-triggered D3D device recreation, and blind
-  stock/HD selection also remain incomplete. Full rollback of the exact All
-  activation passed, and the same composition was reactivated while stopped
-  with new exact current hashes.
+- `lab-widescreen-hd-16x10` is runtime-verified under the exact High
+  `GRAPHICCTRL` contract. The exact module allowlist, a lossless High Forest
+  frame, a representative ten-minute gameplay trace, and a 30-minute no-VSync
+  baseline are hash-indexed. The final VSync winner still requires a fresh
+  module/window pass, the complete lossless corpus, final lobby/gameplay/soak
+  traces, and RenderDoc replay proof. The protected schema-7 file rollback and
+  Mid-to-High registry restoration have passed; blind stock/HD selection and
+  project-owned resize-triggered device recreation remain incomplete.
 - `lab-widescreen-cas-16x10` is runtime-verified and pending. CAS `0.15` is
   technically rejected because it introduced 12 exact-black pixels and reached
   `6.27451%` maximum halo overshoot against the `3%` limit. The `0.25` trace
@@ -77,7 +120,10 @@ The current evidence reconciliation records these outcomes:
 it is never a clean-materializer target. Transactional activation alone creates
 it from `lab-widescreen-16x10`; launcher **Verify / repair** invokes activation
 `Verify` and cannot rebuild, reinstall, or remove private assets. The profile
-remains local-only and uses no CAS. Verified evidence now covers:
+remains local-only and uses no CAS. Absolute-path-bound historical launch,
+build, capture-job, and last-known-good artifacts were retired during the
+canonical relocation. Only path-independent, hash-indexed results from the
+superseded Mid-profile work are retained; they cover:
 
 - the exact AshenbubsHD archive and extracted inventory;
 - the exact large-asset module preflight, isolated character/object/monster/map
@@ -92,6 +138,8 @@ remains local-only and uses no CAS. Verified evidence now covers:
 
 It remains pending on:
 
+- the exact final VSync winner's module, borderless/resizable window, lobby,
+  gameplay pacing, and 30-minute soak reruns;
 - an actual RenderDoc `.rdc` capture and replay-inspected backbuffer and
   internal-render evidence;
 - the complete lossless scene/HUD/geometry corpus and arbitrary
@@ -157,7 +205,7 @@ or Defender exclusion is installed.
 ## Evidence storage and promotion
 
 Raw PNGs, RenderDoc captures, PresentMon traces, private local-asset tests, and
-Twills login screens stay outside Git under a run-specific path such as:
+Principal-account login screens stay outside Git under a run-specific path such as:
 
 ```text
 PSOBB-Runtime\graphics-evidence\<profile-id>\<UTC-run-id>\
@@ -166,6 +214,35 @@ PSOBB-Runtime\graphics-evidence\<profile-id>\<UTC-run-id>\
 The tracked evidence file stores only redacted `runtime:` references, hashes,
 metrics, and a reviewed pass/fail result. It must never contain credentials,
 raw account data, private client assets, or absolute secret paths.
+
+These raw evidence trees, author-origin local-asset archives, staged overlays,
+and activation/rollback manifests are included in the runtime ACL policy. The
+AshenbubsHD and widescreen references and every Luthee, item-box, or Echelon
+import remain private local evaluation material: none may be repacked, bundled,
+served, or promoted into a public launcher or release graph.
+
+RenderDoc capture integrity and replay interpretation are deliberately separate.
+First register the one manually triggered `.rdc` with
+`Register-PSOBBRenderDocCapture.ps1`; this records byte size and SHA-256 but
+makes no dimension claim. After opening that exact capture in qrenderdoc 1.45,
+inspect the Present event/backbuffer and the active internal D3D11 render
+target. Record the observed event, formats, and dimensions with:
+
+```powershell
+pwsh -File .\scripts\Register-PSOBBRenderDocReplayEvidence.ps1 `
+  -RunRoot $run `
+  -PresentEventId <event-id> `
+  -BackbufferWidth 2560 -BackbufferHeight 1600 `
+  -InternalRenderWidth 3840 -InternalRenderHeight 2400 `
+  -BackbufferFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+  -InternalRenderFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+  -ReplayConfirmed
+```
+
+The append-only replay record is accepted only when the observed dimensions
+match the exact registered profile and the `.rdc` still matches its registered
+hash. It remains an explicit manual qrenderdoc attestation, never an inference
+from configuration or the capture filename.
 
 Index one private lossless screenshot, or compare an aligned candidate against
 an aligned reference, with:
@@ -243,6 +320,12 @@ a crash/device reset, thermal cadence loss, or a p95 frame-time regression over
 aspect error. CAS must stay at or under 3 percent halo overshoot with no black
 or white clipping.
 
+Each timed PresentMon run automatically records hash-bound telemetry before
+and after capture: process working/private/virtual memory, presentation bounds,
+GPU VRAM, utilization, temperature, power, clocks, and NVIDIA thermal/power
+event reasons. Client startup also reports the elapsed time from the validated
+launch transaction through the settled verified window and presentation.
+
 The project-owned CAS source is under `patches/reshade`. It is disabled by
 default until `0.15`, `0.25`, and `0.35` are compared; the weakest passing value
 wins. Bloom, AO, depth of field, film grain, chromatic aberration, HDR/tone
@@ -285,9 +368,9 @@ from the exact LocalLab client and run the analyzer in one transaction with:
 
 ```powershell
 pwsh -File .\scripts\Import-PSOBBCasF10Pair.ps1 `
-  -RuntimeRoot 'C:\Users\xtyty\Documents\PSOBB-Runtime' `
+  -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" `
   -SceneId character-select-fixed-camera `
-  -ValidationSpecPath 'C:\Users\xtyty\Documents\PSOBB-Runtime\graphics-evidence\lab-widescreen-cas-16x10\cas-comparison-20260714\cas-2560x1600-validation.json'
+  -ValidationSpecPath "C:\Github Repo's\PSOBB-Runtime\graphics-evidence\lab-widescreen-cas-16x10\cas-comparison-20260714\cas-2560x1600-validation.json"
 ```
 
 The importer is safe whether the client is running or stopped: it never sends

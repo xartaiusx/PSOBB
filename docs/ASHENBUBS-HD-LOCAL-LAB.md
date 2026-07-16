@@ -11,7 +11,7 @@ composed client remain outside Git.
 The approved user-owned source is:
 
 ```text
-C:\Users\xtyty\Downloads\AshenbubsHD - PSOBB - All Mods-20260714T162344Z-1-001.zip
+C:\Github Repo's\PSOBB-Runtime\archives\graphics-lab\local-assets\AshenbubsHD-PSOBB-v1.02-cfe0fd18.zip
 size:   1,147,485,243 bytes
 SHA-256: cfe0fd182485e34d05f5d93b08580453a351ad7ba8ad35056d9167a412b2efea
 ```
@@ -113,7 +113,7 @@ pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\Set-PSOBBAshenbubsHDOverlay.ps1 `
   -Action Install `
   -Pack Characters `
-  -ArchivePath "C:\Users\xtyty\Downloads\AshenbubsHD - PSOBB - All Mods-20260714T162344Z-1-001.zip"
+  -ArchivePath "C:\Github Repo's\PSOBB-Runtime\archives\graphics-lab\local-assets\AshenbubsHD-PSOBB-v1.02-cfe0fd18.zip"
 ```
 
 Use `Objects`, `Monsters`, `Maps`, or `All` for later isolated stages. Verify the

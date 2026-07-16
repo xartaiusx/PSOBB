@@ -5,7 +5,7 @@
 This subtree was derived from read-only inspection of exactly:
 
 ```text
-C:\Users\xtyty\Documents\PSOBB-Runtime\stable\runtime\client\Psobb.exe
+C:\Github Repo's\PSOBB-Runtime\stable\runtime\client\Psobb.exe
 ```
 
 No local-lab widescreen overlay and no Ephinea, Ragol, Destiny, or Ultima
@@ -118,7 +118,7 @@ Toolchain used:
 Visual Studio 18 2026 Community
 MSVC x86 19.51.36248.0
 Windows SDK 10.0.28000.0
-CMake Visual Studio 18 2026 generator, -A Win32
+CMake 4.4.0, Visual Studio 18 2026 generator, -A Win32
 ```
 
 Commands:
@@ -131,18 +131,21 @@ cmake --build .\src\PSOBB.Enhancement\bin\build-x86 `
 ctest --test-dir .\src\PSOBB.Enhancement\bin\build-x86 `
   -C Release --output-on-failure
 & .\src\PSOBB.Enhancement\bin\build-x86\Release\PSOBB.Enhancement.Verify.exe `
-  'C:\Users\xtyty\Documents\PSOBB-Runtime\stable\runtime\client\Psobb.exe'
+  "C:\Github Repo's\PSOBB-Runtime\stable\runtime\client\Psobb.exe"
 ```
 
-Observed results on 2026-07-14:
+Observed results on 2026-07-15:
 
-- Release x86 build: pass with `/W4 /WX /sdl /guard:cf`.
+- Release x86 build: pass with `/W4 /WX /sdl /Brepro /guard:cf` and
+  `/Brepro /INCREMENTAL:NO` linking.
 - Native policy/byte-gate and disabled-default ABI tests: 2/2 pass.
 - Exact executable verifier: file-size, SHA-256, PE32, and byte gates pass.
 - ASI header: PE32 x86, ASLR, NX, and Control Flow Guard enabled.
 - Runtime dependencies: `KERNEL32.dll`, `USER32.dll`, and `bcrypt.dll` only.
+- Two clean output trees and a separate source root produced identical ASI and
+  verifier hashes.
 - Release ASI: `216,576` bytes; SHA-256
-  `63B565F940698D13D9D70B9EEE24551A7CD456A8B268F70663FC8638BEA92674`.
+  `B67A6F64AD35AD8535A7BA7FA5BE18F186757FA8AF2E31B1D6E1C0DEA26A716E`.
 
 Any source or toolchain change intentionally requires a new ASI digest.
 

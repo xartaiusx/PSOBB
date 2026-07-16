@@ -3,7 +3,8 @@
 This repository is the tracked control plane for a provenance-first,
 Tethealla-client-compatible PSO Blue Burst server. The playable runtime uses
 `newserv`; downloaded server releases, the SEGA client, player data, secrets,
-and backups live outside Git under `C:\Users\xtyty\Documents\PSOBB-Runtime`.
+and backups live outside Git under the adjacent
+`C:\Github Repo's\PSOBB-Runtime` directory.
 
 ## Safety boundary
 
@@ -13,6 +14,9 @@ and backups live outside Git under `C:\Users\xtyty\Documents\PSOBB-Runtime`.
 - Existing MariaDB data on this PC is not used or changed.
 - Client files and other copyrighted assets are never committed or
   redistributed by this repository.
+- AshenbubsHD, the local widescreen reference, Luthee UI, item-box, and Echelon
+  imports are private evaluation material and never enter a public client,
+  launcher payload, release manifest, or download.
 - No broad Microsoft Defender exclusions are created.
 
 ## Operator workflow
@@ -63,14 +67,17 @@ launcher exposes the same opt-in behavior as **Try to keep current app focused**
 Activating PSOBB is still required for normal keyboard and mouse gameplay.
 
 Supersampling improves geometry and edge clarity but cannot manufacture detail
-missing from the original low-resolution HUD, font, or texture assets. True
-16:10 camera and HUD expansion remains gated on a licensed or project-owned
-patch; no unlicensed widescreen binary is part of this runtime.
+missing from the original low-resolution HUD, font, or texture assets. The
+private LocalLab may import the separately acquired widescreen reference for
+black-box evaluation, but that unlicensed binary is never part of a public or
+distributable runtime. Public 16:10 camera and HUD expansion remains gated on a
+licensed, project-owned patch.
 
-The scripts default to the external runtime root above. Override it with the
-`PSOBB_RUNTIME_ROOT` environment variable when testing an isolated copy on a
-local volume. Runtime roots inside this Git repository and UNC/network roots
-are rejected by default.
+The scripts default to a `PSOBB-Runtime` directory beside the repository.
+Override it with the `PSOBB_RUNTIME_ROOT` environment variable when testing an
+isolated copy on a local volume. Runtime roots inside this Git repository and
+UNC/network roots are rejected by default. See [Project layout](docs/PROJECT-LAYOUT.md)
+for the canonical local organization.
 Passwords are not printed. Bootstrap credentials begin in user-DPAPI-protected
 files outside Git, and newserv's required BB license copy is protected by a
 narrow filesystem ACL. After `Set-PSOBBPlayerCredential.ps1` successfully
@@ -91,9 +98,9 @@ Enable` sets the native `ACCOUNT_CHECK=1` option; enter the credentials once in
 PSOBB and later launches can reuse them. `-Mode Disable` clears the cached
 fields. Treat the current Windows account as trusted: the legacy client stores a
 locally recoverable password value in the user registry, so never export or
-share that registry key. Reinitializing client settings creates a protected
-whole-key recovery export that may contain the prior cached login; treat that
-runtime backup as credential-bearing and never copy or publish it.
+share that registry key. Registry initialization and profile launch back up
+only the `GRAPHICCTRL` value as protected JSON; they never export the whole key
+or read the remembered account and password values.
 
 `Set-PSOBBPlayerCredential.ps1` provides the corresponding authorization-test
 workflow for exactly one metadata-bound `Player` account with `Flags=0`. It
@@ -121,6 +128,10 @@ the asset materializer only stages it. A separate transactional activation can
 create the exact no-CAS `lab-widescreen-hd-16x10` LocalLab candidate with the
 project-owned large-asset patch, full per-file verification, and exact rollback.
 Private assets and composed manifests remain outside Git and public releases.
+The separately acquired Luthee UI, item-box, and Echelon candidates use the
+[private local visual-asset workflow](docs/LOCAL-VISUAL-ASSETS.md), which
+enforces immutable source hashes, destination collision ownership, ordered
+activation, and exact rollback.
 The launcher can select this private HD identity only after activation and its
 **Verify / repair** action runs activation verification without rebuilding or
 reinstalling assets. Clean LocalLab materialization refuses an active private

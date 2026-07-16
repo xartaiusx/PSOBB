@@ -65,6 +65,10 @@ All 17 sites map to `.text`.
 
 ## Build and verify
 
+Use the manifest-pinned CMake 4.4.0 and Visual Studio 2026 x86 toolchain. The
+Release ASI and verifier use reproducible-build flags; acceptance requires
+matching hashes from a separate source root.
+
 ```powershell
 cmake -S .\src\PSOBB.LargeAssets `
   -B .\src\PSOBB.LargeAssets\bin\build-x86 -A Win32

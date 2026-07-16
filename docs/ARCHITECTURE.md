@@ -33,7 +33,7 @@ contract and is not implemented yet.
 ## Runtime layout
 
 ```text
-C:\Users\xtyty\Documents\PSOBB-Runtime\
+C:\Github Repo's\PSOBB-Runtime\
   archives\          immutable downloads
   sources\           immutable, commit-pinned source snapshots
   stable\server\     pinned newserv runtime and file-based game state
@@ -45,9 +45,17 @@ C:\Users\xtyty\Documents\PSOBB-Runtime\
   backups\            rotating local state copies
   secrets\            DPAPI credentials and local-only acceptance key
   logs\               operator and validation logs
+  graphics-evidence\  private captures, RenderDoc files, and measurements
+  archives\graphics-lab\local-assets\  immutable private author archives
+  local-lab\asset-overlays\             staged private asset inventories
+  local-lab\asset-activations\          Ashenbubs activation/rollback state
+  local-lab\visual-asset-activations\   supplemental activation/rollback state
 ```
 
-No path above is tracked by this Git repository.
+No path above is tracked by this Git repository. Sensitive game state, logs,
+evidence, private archives, staged overlays, and activation state are covered
+by the runtime's narrow recursively verified ACL. Local-only third-party assets
+remain excluded from every public launcher package and release manifest.
 
 The local acceptance signing key is deliberately labeled non-production. A
 production manifest is signed by a separate offline P-256 key; only its public

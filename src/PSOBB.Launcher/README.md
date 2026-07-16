@@ -68,16 +68,21 @@ commands do not take this UI mutex; their allowlisted PowerShell scripts retain
 the operation locks and remain the sole process authority.
 
 `Install-PSOBBDesktopShortcuts.ps1` resolves the current user's Desktop through
-the Windows special-folder API, stages and verifies both `.lnk` files before an
-atomic replacement, and is idempotent. **PSOBB Control Center** has no
-arguments. **PSOBB Play** contains only the selected channel, exact profile,
-window mode, and runtime root; credentials and account identifiers are never
-valid shortcut arguments. The private HD profile is eligible only by its exact
+the Windows special-folder API, stages and verifies all three `.lnk` files
+before an atomic replacement, removes the obsolete Control Center link, and is
+idempotent. **PSOBB Start Server** starts only newserv. **PSOBB Stop Server**
+uses the safe stop-all lifecycle so an active client closes before newserv.
+**PSOBB Play** starts the server when needed and launches the selected client.
+The links contain only lifecycle, channel, exact profile, window-mode, and
+runtime-root arguments; credentials and account identifiers are never valid
+shortcut arguments. The private HD profile is eligible only by its exact
 `lab-widescreen-hd-16x10` identity; CAS profiles remain evidence-only and are
-not valid GUI, command-line, or shortcut selections. Installation
+not valid GUI, command-line, or shortcut selections. Local-only widescreen,
+AshenbubsHD, Luthee, item-box, and Echelon files are never valid public launcher
+payloads or release-manifest artifacts. Installation
 rehashes every file in the signed launcher payload, rejects extra or unsafe
-paths, and recomputes the signed payload-index digest before creating either
-shortcut.
+paths, and recomputes the signed payload-index digest before creating all three
+shortcuts.
 
 Profile, monitor, and window-mode selection is written atomically to the schema-v2 `.launcher/active-profile.json` contract. Safe mode selects the stable native 4:3 runtime. Before client startup, the launcher checks the selected channel's materialized `client-profile.json`; a lab, modern, DXVK, or d3d8to9 selection is rejected unless that exact profile ID has actually been built. The private HD profile additionally requires D3D11, exact 2560x1600 true-16:10 output, a disabled watermark, no CAS or ReShade state, the exact local-only AshenbubsHD activation declaration, and exactly one hash-pinned project-owned LargeAssets ASI/INI module. Its **Verify / repair** operation runs activation `Verify`; it never rebuilds or silently reinstalls private assets. The known dgVoodoo clarity profile additionally requires D3D11, 2560x1600 output, the approved 3840x2880 4:3 preset, preserved aspect ratio, and a disabled watermark.
 
@@ -109,7 +114,8 @@ PSOBB.Launcher.exe --stop-all --runtime-root "C:\path\to\PSOBB-Runtime"
 `--stop-server` refuses while an approved client is active. `--stop-all`
 always requests client shutdown before the authenticated newserv shutdown
 script. The scripts directory is resolved from `PSOBB_SCRIPT_ROOT`, a parent
-repository directory, or the local `Documents\PSOBB\scripts` development path.
+repository directory, or the `PSOBB` repository beside the packaged
+`PSOBB-Runtime` directory.
 
 ## Build and test
 

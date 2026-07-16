@@ -20,7 +20,9 @@ acceptance work.
 
 ## Build and verify
 
-Use the installed Visual Studio 2026 x86 toolchain through CMake:
+Use the manifest-pinned CMake 4.4.0 and Visual Studio 2026 x86 toolchain. The
+Release targets compile and link with reproducible-build flags, and acceptance
+requires matching hashes from a separate source root:
 
 ```powershell
 cmake -S .\src\PSOBB.Enhancement `

@@ -5,10 +5,11 @@
    tracked `stable-qol` client-patch profile to the installation record.
 2. Run `Initialize-PSOBBClientRegistry.ps1`; it installs only the required
    per-user game values and disables the archive's obsolete web links.
-3. Harden the sensitive game-state, secrets, backup, and log directories with
-   `Set-PSOBBRuntimeAcl.ps1`. The log root is included because server output can
-   contain operational or player-related details even when credential-dumping
-   commands are never used. Then run the read-only
+3. Harden the sensitive game-state, secrets, backup, log, private-asset, and
+   graphics-evidence directories with `Set-PSOBBRuntimeAcl.ps1`. The log and
+   evidence roots are included because server output and captures can contain
+   operational or player-related details even when credential-dumping commands
+   are never used. Then run the read-only
    `Test-PSOBBRuntimeAcl.ps1`; it recursively checks the setter's shared target
    inventory, rejects reparse points, and requires a protected, canonical DACL
    containing exactly current-user, SYSTEM, and Administrators FullControl
@@ -17,14 +18,15 @@
    state because newly created children can inherit their parent DACL.
 
    ```powershell
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime"
+   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime"
    ```
 
    The current local target inventory is licenses (including account/license
-   records), players, teams, secrets, backups, and logs. Server configuration
-   and future portal state are not silently treated as covered; add them to the
-   shared policy when those stores are deliberately brought under this ACL
-   boundary.
+   records), players, teams, secrets, backups, logs, graphics evidence, local
+   asset archives, staged asset overlays, Ashenbubs activation state, and
+   supplemental visual-asset activation state. Server configuration and future
+   portal state are not silently treated as covered; add them to the shared
+   policy when those stores are deliberately brought under this ACL boundary.
 4. Generate and provision `Admin` and `Player` credentials with the two-step
    `New-PSOBBAccount.ps1` commands in the root README. Passwords are not
    printed or placed in process arguments. Never run or capture newserv's
@@ -65,17 +67,22 @@
    Remembered login is a local opt-in. Run
    `Set-PSOBBRememberedLogin.ps1 -Mode Enable` to set the native
    `ACCOUNT_CHECK=1` option, then enter the credentials once in PSOBB. Normal
-   start, stop, and RenderDoc paths validate the registry types but never read,
-   export, log, or clear `ACCOUNT` and `PASSWORD`. Credential rotation clears a
+   start, stop, graphics-profile, and RenderDoc paths validate the registry
+   types but never read, export, log, or clear `ACCOUNT` and `PASSWORD`.
+   Credential rotation clears a
    stale cache while preserving the selected policy; `-Mode Disable` explicitly
    disables and clears it. Pioneer 2 community guidance confirms the flag and
    warns that the saved password becomes a sensitive `REG_BINARY` value:
    [save-login flag](https://www.pioneer2.net/community/threads/another-way-to-save-id-and-pass-or-fix-that-cannot-change-resolution.1997/#post-20151),
    [registry security](https://www.pioneer2.net/community/threads/script-for-switching-accounts.511/).
-   Client-registry reinitialization first writes a whole-key recovery export to
-   the protected runtime backup directory. That export may contain the prior
-   cached username and password; keep it private and never publish or copy it to
-   the source repository.
+   Client-registry initialization and graphics-profile launch back up only the
+   36-byte `GRAPHICCTRL` value as ACL-protected JSON beneath the runtime backup
+   directory. Whole-key exports are forbidden: an existing `ACCOUNT`,
+   `PASSWORD`, and `ACCOUNT_CHECK` remain byte-for-byte untouched. Each launch
+   verifies the profile's nine DWORD values and SHA-256 before writing, reads
+   back the exact binary value, and restores its value-only backup if startup
+   fails. Launching the native rollback profile applies that profile's own
+   `GRAPHICCTRL` contract instead of relying on stale machine-global state.
    Credential backup ACL changes construct a DACL-only security descriptor;
    they never request SACL access or `SeSecurityPrivilege` from the operator.
 5. Rebuild a disposable native client with
@@ -96,10 +103,10 @@ relog acceptance sequence passes. A renderer can be prepared without touching
 the running stable client:
 
 ```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBClientGraphics.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime" -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime" -Channel Canary -WindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime" -Channel Canary -WindowMode Resizable
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBClientGraphics.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -WindowMode Borderless
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -WindowMode Resizable
 ```
 
 The canary is rebuilt from the immutable 59NL base. It accepts only the locked
@@ -139,7 +146,7 @@ For an existing runtime, stop newserv normally, then explicitly promote the
 hash-bound `stable-qol` profile:
 
 ```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Users\xtyty\Documents\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
 ```
 
 The command refuses to edit configuration while the approved newserv binary is
