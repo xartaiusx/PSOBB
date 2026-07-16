@@ -17,6 +17,7 @@ $scriptNames = @(
     'Stop-PSOBBSession.ps1',
     'Install-PSOBBDesktopShortcuts.ps1',
     'Set-PSOBBRememberedLogin.ps1',
+    'Set-PSOBBLocalVisualAsset.ps1',
     'Start-PSOBBClient.ps1',
     'Stop-PSOBB.ps1'
 )
@@ -118,13 +119,23 @@ try {
         -Section 'DirectX' `
         -Key 'Resolution' `
         -Value '2560x1600'
+    $fixtureConfiguration = Set-PSOBBIniValue `
+        -Text $fixtureConfiguration `
+        -Section 'DirectX' `
+        -Key 'VRAM' `
+        -Value '256'
+    $fixtureConfiguration = Set-PSOBBIniValue `
+        -Text $fixtureConfiguration `
+        -Section 'DirectX' `
+        -Key 'ForceVerticalSync' `
+        -Value 'false'
     [System.IO.File]::WriteAllText(
         $fixtureConfigurationPath,
         $fixtureConfiguration,
         [System.Text.UTF8Encoding]::new($false))
     $fixtureProfilePath = Join-Path $fixtureLocalLabRoot 'client-profile.json'
     $fixtureProfile = [ordered]@{
-        schemaVersion = 6
+        schemaVersion = 7
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
         channel = 'local-lab'
         profileId = 'lab-widescreen-16x10'
@@ -147,6 +158,17 @@ try {
         presentationOwner = 'client-patch'
         resizableClientWidth = 1600
         resizableClientHeight = 1000
+        virtualVramMb = 256
+        vsyncOwner = 'none'
+        nativeGraphics = [ordered]@{
+            presetId = 'high-end'
+            graphicCtrlDwords = @(0, 0, 0, 0, 1, 1, 1, 0, 0)
+            graphicCtrlSha256 = '302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4'
+            advancedEffectsPolicy = 'enabled'
+            pixelFogPolicy = 'pixel'
+            lowResolutionTexturesPolicy = 'disabled'
+            frameSkipPolicy = 'disabled'
+        }
         hudScale = 1.25
         watermarkEnabled = $false
         redistributionClass = 'local-only'
@@ -674,24 +696,32 @@ try {
         $firstInstall.Changed -and
         $secondInstall.Installed -and
         (-not $secondInstall.Changed) -and
-        ($shortcutFiles.Count -eq 2)) "$($shortcutFiles.Count) shortcut(s)"
+        ($shortcutFiles.Count -eq 3)) "$($shortcutFiles.Count) shortcut(s)"
 
     $shell = New-Object -ComObject WScript.Shell
     try {
-        $control = $shell.CreateShortcut((Join-Path $shortcutRoot 'PSOBB Control Center.lnk'))
+        $startServer = $shell.CreateShortcut((Join-Path $shortcutRoot 'PSOBB Start Server.lnk'))
+        $stopServer = $shell.CreateShortcut((Join-Path $shortcutRoot 'PSOBB Stop Server.lnk'))
         $play = $shell.CreateShortcut((Join-Path $shortcutRoot 'PSOBB Play.lnk'))
         $launcherPath = Join-Path $layout.Stable 'launcher\PSOBB.Launcher.exe'
+        $expectedStartArguments = '--start-server --runtime-root "{0}"' -f $layout.Root
+        $expectedStopArguments = '--stop-all --runtime-root "{0}"' -f $layout.Root
         $expectedPlayArguments = '--play --channel canary --profile clarity-dgvoodoo-4x3 --window-mode borderless --runtime-root "{0}"' -f $layout.Root
         $definitionsValid =
-            ([string]$control.Arguments -eq '') -and
+            ([string]$startServer.Arguments -ceq $expectedStartArguments) -and
+            ([string]$stopServer.Arguments -ceq $expectedStopArguments) -and
             ([string]$play.Arguments -ceq $expectedPlayArguments) -and
-            ([System.IO.Path]::GetFullPath([string]$control.TargetPath)).Equals(
+            ([System.IO.Path]::GetFullPath([string]$startServer.TargetPath)).Equals(
+                [System.IO.Path]::GetFullPath($launcherPath),
+                [System.StringComparison]::OrdinalIgnoreCase) -and
+            ([System.IO.Path]::GetFullPath([string]$stopServer.TargetPath)).Equals(
                 [System.IO.Path]::GetFullPath($launcherPath),
                 [System.StringComparison]::OrdinalIgnoreCase) -and
             ([System.IO.Path]::GetFullPath([string]$play.TargetPath)).Equals(
                 [System.IO.Path]::GetFullPath($launcherPath),
                 [System.StringComparison]::OrdinalIgnoreCase) -and
-            ([string]$play.Arguments -notmatch '(?i)(password|credential|twills|secret)')
+            -not (([string]$startServer.Arguments, [string]$stopServer.Arguments, [string]$play.Arguments) -match
+                '(?i)(password|credential|username|identity|secret)')
         Add-Result 'shortcuts have exact credential-free launcher definitions' $definitionsValid $expectedPlayArguments
     } finally {
         [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
@@ -794,22 +824,49 @@ $clientProcessSource = if ($clientProcessFunctions.Count -eq 1) {
 }
 $registryInitializationSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Initialize-PSOBBClientRegistry.ps1')
 $rememberedLoginSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Set-PSOBBRememberedLogin.ps1')
+$resetClientSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Reset-PSOBBClientRuntime.ps1')
 Add-Result 'central client process helper validates login persistence before process creation' (
     $credentialParseErrors.Count -eq 0 -and
     $clientProcessFunctions.Count -eq 1 -and
     $clientProcessSource -match
         'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null\s*\r?\n\s*\$processId\s*=\s*\[PSOBBClientProcessLauncher\]::Start\(') `
     'launcher, shortcut, session, and credential-relaunch starts preserve the native login policy without reading secrets'
-Add-Result 'registry initialization selects manual authentication' (
-    $registryInitializationSource -match 'ACCOUNT_CHECK\s*=\s*\[uint32\]0') `
-    'a fresh client registry disables saved credentials and starts with blank fields'
-Add-Result 'registry initialization protects and labels the prior whole-key backup' (
-    $registryInitializationSource -match 'Set-PSOBBProtectedAcl\s+-Path\s+\$safeBackups' -and
-    ([regex]::Matches(
-        $registryInitializationSource,
-        'Set-PSOBBProtectedAcl\s+-Path\s+\$backupPath').Count -ge 2) -and
-    $registryInitializationSource -match 'BackupMayContainPriorCredentials\s*=') `
-    'the recovery export is protected before and after reg.exe and reported as potentially credential-bearing'
+Add-Result 'registry initialization creates manual authentication only when missing' (
+    $registryInitializationSource -match
+        "names -cnotcontains 'ACCOUNT_CHECK'[\s\S]*?-PropertyType DWord -Value 0" -and
+    $registryInitializationSource -match 'ExistingLoginValuesPreserved\s*=') `
+    'existing saved-login values are preserved while a fresh key starts with manual authentication'
+Add-Result 'registry initialization writes a protected GRAPHICCTRL-only backup' (
+    $registryInitializationSource -match 'New-PSOBBClientGraphicCtrlBackup' -and
+    $registryInitializationSource -match 'BackupContainsCredentials\s*=\s*\$false' -and
+    $registryInitializationSource -notmatch 'reg\.exe\s+export' -and
+    $registryInitializationSource -notmatch 'BackupMayContainPriorCredentials') `
+    'no whole-key or credential-bearing registry export remains'
+Add-Result 'client launch applies profile-owned native graphics before process creation' (
+    $startClientSource -match
+        'Set-PSOBBClientNativeGraphics[\s\S]*?Start-PSOBBClientProcess' -and
+    $startClientSource -match 'Restore-PSOBBClientGraphicCtrlBackup' -and
+    $startClientSource -match 'GraphicCtrlSha256') `
+    'GRAPHICCTRL is hash verified and rolls back when client startup fails'
+Add-Result 'client and session report verified startup latency' (
+    $startClientSource -match 'startupStopwatch' -and
+    $startClientSource -match 'StartupElapsedMilliseconds' -and
+    $startClientSource -match 'client-startup' -and
+    $startClientSource -match 'StartupReceiptSha256' -and
+    $startSessionSource -match 'ClientStartupElapsedMilliseconds' -and
+    $startSessionSource -match 'ClientStartupReceiptSha256') `
+    'hash-bound load-time evidence ends only after the verified window and presentation settle'
+Add-Result 'stable and canary rebuilds materialize catalog-owned native graphics' (
+    $resetClientSource -match "'safe-native-4x3'" -and
+    $resetClientSource -match "'clarity-dgvoodoo-4x3'" -and
+    $resetClientSource -match 'Assert-PSOBBNativeGraphicsContract' -and
+    $resetClientSource -match 'nativeGraphics\s*=\s*\$materializedNativeGraphics') `
+    'all ordinary launch channels carry the same exact vector-and-digest contract'
+Add-Result 'admin relaunch returns through the guarded client lifecycle' (
+    $credentialSource -match "Start-PSOBBClient\.ps1'\)" -and
+    $credentialSource -match '-Channel Stable' -and
+    $credentialSource -match '-WindowMode ProfileDefault') `
+    'credential relaunch cannot bypass profile-owned GRAPHICCTRL application'
 Add-Result 'remembered-login changes share the lifecycle lock and reject a live client' (
     $rememberedLoginSource -match 'Enter-PSOBBClientOperationLock\s+-Layout\s+\$layout' -and
     $rememberedLoginSource -match 'Get-PSOBBClientProcessRecords\s+-Layout\s+\$layout\s+-Channel\s+All' -and

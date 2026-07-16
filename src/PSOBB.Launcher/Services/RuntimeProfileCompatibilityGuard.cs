@@ -12,7 +12,7 @@ public sealed class RuntimeProfileCompatibilityGuard
     private const string LargeAssetsComponentId = "project-owned-psobb-large-assets";
     private const string LargeAssetsSha256 = "bede4e0a9117a10c0b07a32712a04594604eea586dc779b1f81c34ae8a0b0bcf";
     private const string LargeAssetsConfigurationSha256 = "48f5777ef123c4ae6251727b762015431de422326832b5217ff71938b7e36e30";
-    private const string LargeAssetsBuildManifestSha256 = "5efd70efd8e8b013b9a115bcc4cdaac882d24ac5e621f9510610b9142947379c";
+    private const string LargeAssetsBuildManifestSha256 = "0bdfabbb3b7f8822016f921e3ee634b9772566e963e8420768fbfbe2d50b335c";
 
     public async Task ValidateAsync(
         string runtimeRoot,

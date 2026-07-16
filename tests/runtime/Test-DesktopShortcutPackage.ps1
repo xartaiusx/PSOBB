@@ -207,6 +207,29 @@ try {
         $installerSource -match "'lab-widescreen-hd-16x10' = 'LocalLab'" -and
         $installerSource -notmatch "'lab-widescreen-cas-16x10' = 'LocalLab'" -and
         $installerSource -match "'LocalLab' \{ 'lab-widescreen-16x10' \}"
+    $lifecycleShortcutsValid =
+        $installerSource -match "-Name 'PSOBB Start Server'" -and
+        $installerSource -match "-Name 'PSOBB Stop Server'" -and
+        $installerSource -match "-Name 'PSOBB Play'" -and
+        $installerSource -match '\$startServerArguments = ''--start-server' -and
+        $installerSource -match '\$stopServerArguments = ''--stop-all' -and
+        $installerSource -match "'PSOBB Control Center\.lnk'"
+    Add-Result 'desktop shortcut set has exact lifecycle roles and removes the obsolete link' (
+        $lifecycleShortcutsValid) 'start server, safe stop-all, and play are the only installed definitions'
+
+    $publisherSource = Get-Content -Raw -LiteralPath (
+        Join-Path $repositoryRoot 'scripts\Publish-PSOBBLauncher.ps1')
+    $relocatablePublishValid =
+        $publisherSource -notmatch 'GetTempPath\(\)' -and
+        $publisherSource -match '"-p:PublishDir=\$buildPublishDirectory"' -and
+        $publisherSource -notmatch '--output\s+\$temporaryRoot' -and
+        $publisherSource -match 'Set-PSOBBProtectedAcl\s+-Path\s+\$temporaryParent' -and
+        $publisherSource -match "\.staging\\launcher-publish-" -and
+        $publisherSource -match '-Root\s+\$layout\.Root' -and
+        $publisherSource -notmatch 'Join-Path\s+\$layout\.Stable\s+\(''\.launcher-new-'
+    Add-Result 'launcher publishing uses a same-volume protected staging path' (
+        $relocatablePublishValid) 'a relative MSBuild output feeds the runtime-owned staging tree for atomic installation on any selected local volume'
+
     Add-Result 'desktop shortcuts allow private HD but exclude evidence-only CAS' (
         $profileMapValid) 'LocalLab defaults to clean widescreen; HD requires an explicit profile ID'
 } finally {

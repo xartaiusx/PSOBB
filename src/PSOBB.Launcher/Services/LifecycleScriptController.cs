@@ -334,13 +334,13 @@ public static class LifecycleScriptLocator
             for (var depth = 0; cursor is not null && depth < 10; depth++, cursor = cursor.Parent)
             {
                 yield return cursor.FullName;
+                if (string.Equals(cursor.Name, "PSOBB-Runtime", StringComparison.OrdinalIgnoreCase)
+                    && cursor.Parent is not null)
+                {
+                    yield return Path.Combine(cursor.Parent.FullName, "PSOBB", "scripts");
+                }
             }
         }
-
-        yield return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "PSOBB",
-            "scripts");
     }
 
     private static string? NormalizeCandidate(string? candidate)

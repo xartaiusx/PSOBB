@@ -22,13 +22,12 @@ public sealed record LauncherOptions(
 {
     public static LauncherOptions Defaults()
     {
-        var runtimeRoot = Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT");
-        if (string.IsNullOrWhiteSpace(runtimeRoot))
-        {
-            runtimeRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "PSOBB-Runtime");
-        }
+        return Defaults(ResolveDefaultRuntimeRoot());
+    }
+
+    internal static LauncherOptions Defaults(string runtimeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
 
         var profile = GraphicsProfileOption.SafeNative;
         return new(
@@ -41,6 +40,41 @@ public sealed record LauncherOptions(
                 MonitorOption.PrimaryPhysical,
                 LauncherWindowMode.ProfileDefault));
     }
+
+    internal static string ResolveDefaultRuntimeRoot(
+        string? configured = null,
+        IEnumerable<string>? origins = null)
+    {
+        configured ??= Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return Path.GetFullPath(configured);
+        }
+
+        origins ??= [AppContext.BaseDirectory, Environment.CurrentDirectory];
+        foreach (var origin in origins)
+        {
+            var cursor = new DirectoryInfo(Path.GetFullPath(origin));
+            for (var depth = 0; cursor is not null && depth < 12; depth++, cursor = cursor.Parent)
+            {
+                if (string.Equals(cursor.Name, "PSOBB-Runtime", StringComparison.OrdinalIgnoreCase))
+                {
+                    return cursor.FullName;
+                }
+
+                if (File.Exists(Path.Combine(cursor.FullName, "scripts", "Start-PSOBB.ps1")))
+                {
+                    return Path.Combine(
+                        cursor.Parent?.FullName ?? cursor.FullName,
+                        "PSOBB-Runtime");
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Could not locate the adjacent PSOBB-Runtime directory. Use --runtime-root " +
+            "or set PSOBB_RUNTIME_ROOT explicitly.");
+    }
 }
 
 public static partial class LauncherCommandLine
@@ -49,7 +83,10 @@ public static partial class LauncherCommandLine
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var defaults = LauncherOptions.Defaults();
+        var explicitRuntimeRoot = FindExplicitRuntimeRoot(arguments);
+        var defaults = explicitRuntimeRoot is null
+            ? LauncherOptions.Defaults()
+            : LauncherOptions.Defaults(explicitRuntimeRoot);
         var operation = LauncherOperation.Gui;
         var operationWasSet = false;
         var runtimeRoot = defaults.RuntimeRoot;
@@ -216,6 +253,32 @@ public static partial class LauncherCommandLine
         return Identifier().IsMatch(value)
             ? value
             : throw new ArgumentException($"{option} must contain only ASCII letters, numbers, periods, underscores, or hyphens.");
+    }
+
+    private static string? FindExplicitRuntimeRoot(IReadOnlyList<string> arguments)
+    {
+        string? value = null;
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (string.Equals(argument, "--runtime-root", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 < arguments.Count)
+                {
+                    value = arguments[index + 1];
+                    index++;
+                }
+                continue;
+            }
+
+            const string prefix = "--runtime-root=";
+            if (argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                value = argument[prefix.Length..];
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static string ReadValue(

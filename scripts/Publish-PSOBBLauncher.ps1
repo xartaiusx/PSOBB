@@ -10,6 +10,15 @@ $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $repositoryRoot 'src\PSOBB.Launcher\PSOBB.Launcher.csproj'
+$projectRoot = Split-Path -Parent $projectPath
+$projectObjectRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'obj'))
+$buildOutputRoot = Assert-PathWithinRoot `
+    -Path (Join-Path $projectObjectRoot (
+        'launcher-publish-' + [Guid]::NewGuid().ToString('N'))) `
+    -Root $projectObjectRoot
+$buildPublishDirectory = [System.IO.Path]::GetRelativePath(
+    $projectRoot,
+    $buildOutputRoot) + [System.IO.Path]::DirectorySeparatorChar
 $trustPath = Join-Path $repositoryRoot 'config\release-trust.json'
 $publicKey = Join-Path $layout.Stable 'release-public-key.pem'
 if (-not (Test-Path -LiteralPath $publicKey -PathType Leaf)) {
@@ -51,7 +60,11 @@ if ([string]::IsNullOrWhiteSpace($targetFramework)) {
 }
 
 $launcherRoot = Join-Path $layout.Stable 'launcher'
-$temporaryRoot = Join-Path $layout.Stable ('.launcher-new-' + [Guid]::NewGuid().ToString('N'))
+$temporaryParent = Assert-PathWithinRoot `
+    -Path (Join-Path $layout.Root (
+        '.staging\launcher-publish-' + [Guid]::NewGuid().ToString('N'))) `
+    -Root $layout.Root
+$temporaryRoot = Join-Path $temporaryParent 'payload'
 $lkgRoot = Join-Path $layout.Root 'last-known-good\launchers'
 $snapshot = Join-Path $lkgRoot ('launcher-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
 New-Item -ItemType Directory -Force -Path $lkgRoot | Out-Null
@@ -59,9 +72,22 @@ $movedExisting = $false
 $installedNew = $false
 
 try {
-    & dotnet publish $projectPath -c $Configuration --nologo --no-restore --output $temporaryRoot
+    New-Item -ItemType Directory -Path $temporaryParent | Out-Null
+    Set-PSOBBProtectedAcl -Path $temporaryParent
+    # MSBuild item transforms treat an apostrophe in an absolute PublishDir as
+    # expression syntax. Publish to a unique project-relative obj path first,
+    # then copy into the protected same-volume installation staging directory.
+    & dotnet publish $projectPath -c $Configuration --nologo --no-restore `
+        "-p:PublishDir=$buildPublishDirectory"
     if ($LASTEXITCODE -ne 0) {
         throw 'dotnet publish failed for PSOBB.Launcher'
+    }
+    if (-not (Test-Path -LiteralPath $buildOutputRoot -PathType Container)) {
+        throw 'dotnet publish did not create the expected launcher output directory'
+    }
+    New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+    Get-ChildItem -LiteralPath $buildOutputRoot -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $temporaryRoot -Recurse -Force
     }
     Copy-Item -LiteralPath $publicKey -Destination (Join-Path $temporaryRoot 'release-public-key.pem')
     $launcherExecutable = Join-Path $temporaryRoot 'PSOBB.Launcher.exe'
@@ -139,8 +165,16 @@ try {
         Authenticode = $buildRecord.authenticode
     }
 } finally {
-    if (-not $installedNew -and (Test-Path -LiteralPath $temporaryRoot)) {
-        $safeTemporary = Assert-PathWithinRoot -Path $temporaryRoot -Root $layout.Root
+    if (Test-Path -LiteralPath $buildOutputRoot) {
+        $safeBuildOutput = Assert-PathWithinRoot `
+            -Path $buildOutputRoot `
+            -Root $projectObjectRoot
+        Remove-Item -LiteralPath $safeBuildOutput -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $temporaryParent) {
+        $safeTemporary = Assert-PathWithinRoot `
+            -Path $temporaryParent `
+            -Root $layout.Root
         Remove-Item -LiteralPath $safeTemporary -Recurse -Force
     }
 }

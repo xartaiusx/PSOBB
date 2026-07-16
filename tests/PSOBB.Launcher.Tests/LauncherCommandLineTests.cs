@@ -37,6 +37,28 @@ public sealed class LauncherCommandLineTests
     }
 
     [TestMethod]
+    public void ResolveDefaultRuntimeRoot_FailsClosedWithoutCanonicalDiscovery()
+    {
+        using var origin = new TestRuntime();
+
+        var exception = Assert.ThrowsExactly<InvalidOperationException>(
+            () => LauncherOptions.ResolveDefaultRuntimeRoot(null, [origin.Root]));
+
+        StringAssert.Contains(exception.Message, "--runtime-root");
+        StringAssert.Contains(exception.Message, "PSOBB_RUNTIME_ROOT");
+    }
+
+    [TestMethod]
+    public void ResolveDefaultRuntimeRoot_AcceptsExplicitConfiguration()
+    {
+        using var runtime = new TestRuntime();
+
+        var resolved = LauncherOptions.ResolveDefaultRuntimeRoot(runtime.Root, []);
+
+        Assert.AreEqual(Path.GetFullPath(runtime.Root), resolved);
+    }
+
+    [TestMethod]
     public void Parse_AcceptsPreserveForegroundFlag()
     {
         var options = LauncherCommandLine.Parse(

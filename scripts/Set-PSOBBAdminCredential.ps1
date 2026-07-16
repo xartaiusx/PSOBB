@@ -916,17 +916,17 @@ try {
         throw $rotationError
     }
 
-    $clientProcess = $null
+    $clientLaunch = $null
     if ($Relaunch) {
         $serverStarted = $false
         try {
             & (Join-Path $PSScriptRoot 'Start-PSOBB.ps1') -RuntimeRoot $layout.Root | Out-Host
             $serverStarted = $true
             & (Join-Path $PSScriptRoot 'Test-PSOBB.ps1') -Suite Baseline -RuntimeRoot $layout.Root | Out-Host
-            $clientExecutable = Assert-PathWithinRoot -Path (Join-Path $layout.Client 'Psobb.exe') -Root $layout.Root
-            $clientProcess = Start-PSOBBClientProcess `
-                -ClientExecutable $clientExecutable `
-                -WorkingDirectory $layout.Client
+            $clientLaunch = & (Join-Path $PSScriptRoot 'Start-PSOBBClient.ps1') `
+                -Channel Stable `
+                -WindowMode ProfileDefault `
+                -RuntimeRoot $layout.Root
         } catch {
             if ($serverStarted) {
                 try {
@@ -946,7 +946,7 @@ try {
         StateBackup = $stateBackup.BackupPath
         CredentialBackup = $rotationBackup.Path
         ServerRelaunched = [bool]$Relaunch
-        ClientPid = if ($clientProcess) { $clientProcess.Id } else { $null }
+        ClientPid = if ($clientLaunch) { $clientLaunch.Pid } else { $null }
         LoginCacheCleared = [bool]$loginCacheCleared
         RememberLoginEnabled = [bool]$loginPolicy.RememberLoginEnabled
         NextStep = if ($Relaunch) {

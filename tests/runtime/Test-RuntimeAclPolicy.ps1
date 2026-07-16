@@ -94,7 +94,12 @@ try {
         (Join-Path $layout.Server 'system\teams'),
         $layout.Secrets,
         $layout.Backups,
-        $layout.Logs)) {
+        $layout.Logs,
+        (Join-Path $layout.Root 'graphics-evidence'),
+        (Join-Path $layout.Archives 'graphics-lab\local-assets'),
+        (Join-Path $layout.LocalLab 'asset-overlays'),
+        (Join-Path $layout.LocalLab 'asset-activations'),
+        (Join-Path $layout.LocalLab 'visual-asset-activations'))) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
     Initialize-PSOBBRuntimeMarker -Layout $layout | Out-Null
@@ -115,6 +120,16 @@ try {
     [System.IO.File]::WriteAllText($secretFixture, 'not-a-real-secret')
     $backupFixture = Join-Path $layout.Backups 'state-fixture'
     New-Item -ItemType Directory -Path $backupFixture | Out-Null
+    $graphicsFixture = Join-Path $layout.Root 'graphics-evidence\private-frame.png'
+    [System.IO.File]::WriteAllText($graphicsFixture, 'private fixture')
+    $assetArchiveFixture = Join-Path $layout.Archives 'graphics-lab\local-assets\private-pack.zip'
+    [System.IO.File]::WriteAllText($assetArchiveFixture, 'private fixture')
+    $overlayFixture = Join-Path $layout.LocalLab 'asset-overlays\foundation.json'
+    [System.IO.File]::WriteAllText($overlayFixture, 'private fixture')
+    $activationFixture = Join-Path $layout.LocalLab 'asset-activations\activation.json'
+    [System.IO.File]::WriteAllText($activationFixture, 'private fixture')
+    $supplementalFixture = Join-Path $layout.LocalLab 'visual-asset-activations\activation.json'
+    [System.IO.File]::WriteAllText($supplementalFixture, 'private fixture')
 
     $logAclBefore = Get-Acl -LiteralPath $layout.Logs
     $logOwnerBefore = $logAclBefore.GetOwner(
@@ -164,16 +179,27 @@ try {
     $verification = Invoke-RuntimeAclVerifier -RuntimeRoot $layout.Root
     $summary = @($verification.Records | Where-Object RecordType -eq 'Summary')
     $targetSummaries = @($verification.Records | Where-Object RecordType -eq 'TargetSummary')
-    $expectedTargets = @('backups', 'licenses', 'logs', 'players', 'secrets', 'teams')
+    $expectedTargets = @(
+        'backups',
+        'graphics-evidence',
+        'licenses',
+        'local-asset-activations',
+        'local-asset-archives',
+        'local-asset-overlays',
+        'logs',
+        'players',
+        'secrets',
+        'supplemental-asset-activations',
+        'teams')
     $actualTargets = @($targetSummaries.Target | Sort-Object -Unique)
     Add-Result 'runtime ACL verifier covers the exact setter target inventory' `
         (-not $verification.ErrorRecord -and
          $summary.Count -eq 1 -and
          $summary[0].Passed -and
-         $targetSummaries.Count -eq 6 -and
+         $targetSummaries.Count -eq 11 -and
          @(Compare-Object $expectedTargets $actualTargets).Count -eq 0 -and
          @($targetSummaries | Where-Object { -not $_.Passed }).Count -eq 0) `
-        'licenses, players, teams, secrets, backups, and logs are recursively verified'
+        'account state, logs, private evidence, and local-only asset trees are recursively verified'
     $afterHash = (Get-FileHash -LiteralPath $nestedLogFile -Algorithm SHA256).Hash
     $afterDacl = (Get-Acl -LiteralPath $nestedLogFile).GetSecurityDescriptorSddlForm(
         [System.Security.AccessControl.AccessControlSections]::Access)

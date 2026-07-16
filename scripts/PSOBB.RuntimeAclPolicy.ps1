@@ -39,6 +39,26 @@ function Get-PSOBBRuntimeAclTargets {
         [pscustomobject]@{
             Name = 'logs'
             Path = $Layout.Logs
+        },
+        [pscustomobject]@{
+            Name = 'graphics-evidence'
+            Path = Join-Path $Layout.Root 'graphics-evidence'
+        },
+        [pscustomobject]@{
+            Name = 'local-asset-archives'
+            Path = Join-Path $Layout.Archives 'graphics-lab\local-assets'
+        },
+        [pscustomobject]@{
+            Name = 'local-asset-overlays'
+            Path = Join-Path $Layout.LocalLab 'asset-overlays'
+        },
+        [pscustomobject]@{
+            Name = 'local-asset-activations'
+            Path = Join-Path $Layout.LocalLab 'asset-activations'
+        },
+        [pscustomobject]@{
+            Name = 'supplemental-asset-activations'
+            Path = Join-Path $Layout.LocalLab 'visual-asset-activations'
         }
     )
 }

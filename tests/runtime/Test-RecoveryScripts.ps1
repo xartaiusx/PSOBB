@@ -110,7 +110,12 @@ try {
         (Join-Path $testLayout.Server 'system\teams'),
         $testLayout.Backups,
         $testLayout.Secrets,
-        $testLayout.Logs
+        $testLayout.Logs,
+        (Join-Path $testLayout.Root 'graphics-evidence'),
+        (Join-Path $testLayout.Archives 'graphics-lab\local-assets'),
+        (Join-Path $testLayout.LocalLab 'asset-overlays'),
+        (Join-Path $testLayout.LocalLab 'asset-activations'),
+        (Join-Path $testLayout.LocalLab 'visual-asset-activations')
     )) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }

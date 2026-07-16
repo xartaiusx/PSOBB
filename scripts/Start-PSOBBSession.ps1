@@ -82,6 +82,9 @@ try {
         PreserveForeground = [bool]$clientResult.PreserveForeground
         ForegroundPreserved = [bool]$clientResult.ForegroundPreserved
         ForegroundStatus = [string]$clientResult.ForegroundStatus
+        ClientStartupElapsedMilliseconds = $clientResult.StartupElapsedMilliseconds
+        ClientStartupReceiptPath = $clientResult.StartupReceiptPath
+        ClientStartupReceiptSha256 = $clientResult.StartupReceiptSha256
         WindowMode = $clientResult.WindowMode
         Borderless = $clientResult.Borderless
         WindowWidth = $clientResult.WindowWidth

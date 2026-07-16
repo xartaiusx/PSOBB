@@ -46,6 +46,12 @@ function Test-PathCoveredByDefenderExclusion {
     $target.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Import-PSOBBDefenderModule {
+    # Native loading avoids the Windows PowerShell compatibility proxy, which
+    # serializes the current directory into a generated single-quoted command.
+    Import-Module ConfigDefender -SkipEditionCheck -ErrorAction Stop
+}
+
 $artifacts = @(
     @{ Id = 'newserv-stable-release'; Path = Join-Path $layout.Archives 'newserv-v2026-02-27-release.zip' },
     @{ Id = 'newserv-stable-source'; Path = Join-Path $layout.Archives 'newserv-v2026-02-27-source.zip' },
@@ -117,6 +123,7 @@ if ((Test-Path -LiteralPath $layout.BaseClientManifest -PathType Leaf) -and
 }
 Add-Check 'immutable client complete inventory' $baseManifestValid $layout.BaseClientManifest
 
+Import-PSOBBDefenderModule
 $defender = Get-MpComputerStatus
 Add-Check 'Microsoft Defender enabled' ($defender.AntivirusEnabled -and $defender.RealTimeProtectionEnabled) 'antivirus and real-time protection'
 $exclusions = @(Get-MpPreference | Select-Object -ExpandProperty ExclusionPath -ErrorAction SilentlyContinue)

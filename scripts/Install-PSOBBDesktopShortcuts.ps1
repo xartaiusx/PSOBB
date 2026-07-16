@@ -399,6 +399,9 @@ if (-not $profileChannels.Contains($PlayProfile) -or
 }
 
 $playChannelArgument = if ($PlayChannel -eq 'LocalLab') { 'local-lab' } else { $PlayChannel.ToLowerInvariant() }
+$runtimeArgument = '--runtime-root "{0}"' -f $layout.Root.Replace('"', '\"')
+$startServerArguments = '--start-server {0}' -f $runtimeArgument
+$stopServerArguments = '--stop-all {0}' -f $runtimeArgument
 $playArguments = '--play --channel {0} --profile {1} --window-mode {2} --runtime-root "{3}"' -f `
     $playChannelArgument,
     $PlayProfile,
@@ -407,15 +410,22 @@ $playArguments = '--play --channel {0} --profile {1} --window-mode {2} --runtime
 if ($PlayPreserveForeground) {
     $playArguments += ' --preserve-foreground'
 }
-if ($playArguments -match '(?i)(password|credential|twills|secret)') {
+if (($startServerArguments, $stopServerArguments, $playArguments) -match
+    '(?i)(password|credential|username|identity|secret)') {
     throw 'A desktop shortcut must never contain an account name or credential'
 }
-$controlCenterDefinition = Get-PSOBBShortcutDefinition `
-    -Name 'PSOBB Control Center' `
+$startServerDefinition = Get-PSOBBShortcutDefinition `
+    -Name 'PSOBB Start Server' `
     -TargetPath $launcher.Path `
-    -Arguments '' `
+    -Arguments $startServerArguments `
     -WorkingDirectory $launcher.Root `
-    -Description 'Open the local PSOBB control center'
+    -Description 'Start the local PSOBB server'
+$stopServerDefinition = Get-PSOBBShortcutDefinition `
+    -Name 'PSOBB Stop Server' `
+    -TargetPath $launcher.Path `
+    -Arguments $stopServerArguments `
+    -WorkingDirectory $launcher.Root `
+    -Description 'Close the PSOBB client if needed, then stop the local server safely'
 $playDefinition = Get-PSOBBShortcutDefinition `
     -Name 'PSOBB Play' `
     -TargetPath $launcher.Path `
@@ -424,9 +434,12 @@ $playDefinition = Get-PSOBBShortcutDefinition `
     -Description $(if ($PlayPreserveForeground) {
         'Start PSOBB and try to keep the current application focused'
     } else {
-        'Start the local server and PSOBB client in borderless mode'
+        'Start the local server if needed and launch the PSOBB client in borderless mode'
     })
-$definitions = @($controlCenterDefinition, $playDefinition)
+$definitions = @($startServerDefinition, $stopServerDefinition, $playDefinition)
+$obsoleteShortcutPaths = @(
+    (Join-Path $shortcutRoot 'PSOBB Control Center.lnk')
+)
 
 $shell = New-Object -ComObject WScript.Shell
 $temporaryPaths = [System.Collections.Generic.List[string]]::new()
@@ -441,12 +454,18 @@ try {
             $alreadyCurrent = $false
         }
     }
+    foreach ($obsoletePath in $obsoleteShortcutPaths) {
+        if (Test-Path -LiteralPath $obsoletePath -PathType Leaf) {
+            $alreadyCurrent = $false
+        }
+    }
     if ($alreadyCurrent) {
         return [pscustomobject]@{
             Installed = $true
             Changed = $false
             Directory = $shortcutRoot
-            ControlCenter = Join-Path $shortcutRoot 'PSOBB Control Center.lnk'
+            StartServer = Join-Path $shortcutRoot 'PSOBB Start Server.lnk'
+            StopServer = Join-Path $shortcutRoot 'PSOBB Stop Server.lnk'
             Play = Join-Path $shortcutRoot 'PSOBB Play.lnk'
             LauncherSha256 = $launcher.Sha256
         }
@@ -454,7 +473,7 @@ try {
 
     if (-not $PSCmdlet.ShouldProcess(
         $shortcutRoot,
-        'install or repair the PSOBB Control Center and PSOBB Play shortcuts')) {
+        'install or repair the PSOBB Start Server, Stop Server, and Play shortcuts')) {
         return
     }
 
@@ -487,11 +506,21 @@ try {
         }
     }
 
+    foreach ($obsoletePath in $obsoleteShortcutPaths) {
+        if (Test-Path -LiteralPath $obsoletePath -PathType Leaf) {
+            $backup = $obsoletePath + '.' + [Guid]::NewGuid().ToString('N') + '.backup'
+            [System.IO.File]::Copy($obsoletePath, $backup, $false)
+            $backupPaths[$obsoletePath] = $backup
+            Remove-Item -LiteralPath $obsoletePath -Force
+        }
+    }
+
     [pscustomobject]@{
         Installed = $true
         Changed = $true
         Directory = $shortcutRoot
-        ControlCenter = Join-Path $shortcutRoot 'PSOBB Control Center.lnk'
+        StartServer = Join-Path $shortcutRoot 'PSOBB Start Server.lnk'
+        StopServer = Join-Path $shortcutRoot 'PSOBB Stop Server.lnk'
         Play = Join-Path $shortcutRoot 'PSOBB Play.lnk'
         LauncherSha256 = $launcher.Sha256
     }
@@ -503,6 +532,11 @@ try {
         } elseif ($modifiedFinals.Contains($final) -and
             (Test-Path -LiteralPath $final -PathType Leaf)) {
             Remove-Item -LiteralPath $final -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($obsoletePath in $obsoleteShortcutPaths) {
+        if ($backupPaths.ContainsKey($obsoletePath)) {
+            [System.IO.File]::Copy([string]$backupPaths[$obsoletePath], $obsoletePath, $true)
         }
     }
     throw

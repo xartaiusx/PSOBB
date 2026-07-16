@@ -51,7 +51,7 @@ $clientOperationMutex = if ($ClientOperationLockHeld) {
 try {
 $clientExecutable = Get-PSOBBClientExecutablePath -Layout $layout -Channel $Channel
 $clientRoot = Split-Path -Parent $clientExecutable
-Assert-PSOBBApprovedClientExecutable -Path $clientExecutable | Out-Null
+$clientIdentity = Assert-PSOBBApprovedClientExecutable -Path $clientExecutable
 
 $running = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
 if ($running.Count -gt 0) {
@@ -105,12 +105,19 @@ if ((-not $useManagedPresentation) -and ($WindowMode -ne 'ProfileDefault')) {
 }
 
 $process = $null
+$graphicsRegistryTransaction = $null
+$startupStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $previousForegroundWindow = if ($PreserveForeground) {
     Get-PSOBBForegroundWindowHandle
 } else {
     [IntPtr]::Zero
 }
 try {
+    # Apply only the profile-owned GRAPHICCTRL value. Remembered ACCOUNT and
+    # PASSWORD values are outside this transaction and remain untouched.
+    $graphicsRegistryTransaction = Set-PSOBBClientNativeGraphics `
+        -Layout $layout `
+        -Profile $clientProfile
     $process = Start-PSOBBClientProcess `
         -ClientExecutable $clientExecutable `
         -WorkingDirectory $clientRoot `
@@ -246,8 +253,9 @@ try {
     if ($PreserveForeground -and -not $foreground.Preserved) {
         Write-Warning "PSOBB started successfully, but Windows did not restore the previous foreground window ($($foreground.Status)). Use Alt+Tab once to continue multitasking."
     }
+    $startupStopwatch.Stop()
 
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         Started = $true
         Channel = $Channel
         Pid = $process.Id
@@ -257,8 +265,13 @@ try {
         PreserveForeground = [bool]$PreserveForeground
         ForegroundPreserved = [bool]$foreground.Preserved
         ForegroundStatus = [string]$foreground.Status
+        StartupElapsedMilliseconds = [Math]::Round(
+            $startupStopwatch.Elapsed.TotalMilliseconds, 3)
         WindowMode = if ($presentation) { $selectedWindowMode } else { 'ApplicationControlled' }
         PresentationOwner = $presentationOwner
+        NativeGraphicsPresetId = [string]$graphicsRegistryTransaction.PresetId
+        GraphicCtrlSha256 = [string]$graphicsRegistryTransaction.GraphicCtrlSha256
+        GraphicCtrlBackupPath = $graphicsRegistryTransaction.BackupPath
         Borderless = ($null -ne $presentation) -and ($selectedWindowMode -eq 'Borderless')
         WindowX = if ($presentation) { $presentation.X } else { $null }
         WindowY = if ($presentation) { $presentation.Y } else { $null }
@@ -267,7 +280,65 @@ try {
         ClientWidth = if ($presentation) { $presentation.ClientWidth } else { $null }
         ClientHeight = if ($presentation) { $presentation.ClientHeight } else { $null }
     }
+    $profilePath = Join-Path $clientRoot 'client-profile.json'
+    $receiptRoot = Join-Path $layout.Logs 'client-startup'
+    [void][IO.Directory]::CreateDirectory($receiptRoot)
+    $receiptPath = Join-Path $receiptRoot (
+        $process.StartTime.ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ') +
+        "-$($process.Id).json")
+    if (Test-Path -LiteralPath $receiptPath) {
+        throw "The unique client-startup receipt already exists: $receiptPath"
+    }
+    $receipt = [ordered]@{
+        schemaVersion = 1
+        completedAtUtc = [DateTime]::UtcNow.ToString('o')
+        channel = $Channel
+        profileId = if ($clientProfile.PSObject.Properties.Name -contains 'profileId') {
+            [string]$clientProfile.profileId
+        } else { $null }
+        materializedProfileSha256 = Get-LowerSha256 -Path $profilePath
+        configurationSha256 = if (
+            $clientProfile.PSObject.Properties.Name -contains 'configurationSha256') {
+            [string]$clientProfile.configurationSha256
+        } else { $null }
+        processId = $process.Id
+        processStartTimeUtc = $process.StartTime.ToUniversalTime().ToString('o')
+        executableSize = $clientIdentity.Size
+        executableSha256 = $clientIdentity.Sha256
+        startupElapsedMilliseconds = $result.StartupElapsedMilliseconds
+        foregroundPreserved = $result.ForegroundPreserved
+        windowMode = $result.WindowMode
+        window = [ordered]@{
+            x = $result.WindowX
+            y = $result.WindowY
+            width = $result.WindowWidth
+            height = $result.WindowHeight
+            clientWidth = $result.ClientWidth
+            clientHeight = $result.ClientHeight
+        }
+        nativeGraphicsPresetId = $result.NativeGraphicsPresetId
+        graphicCtrlSha256 = $result.GraphicCtrlSha256
+    }
+    $temporaryReceipt = $receiptPath + '.tmp-' + [Guid]::NewGuid().ToString('N')
+    try {
+        [IO.File]::WriteAllText(
+            $temporaryReceipt,
+            ($receipt | ConvertTo-Json -Depth 8),
+            [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath
+    } finally {
+        if (Test-Path -LiteralPath $temporaryReceipt) {
+            Remove-Item -LiteralPath $temporaryReceipt -Force
+        }
+    }
+    $result | Add-Member -NotePropertyName StartupReceiptPath `
+        -NotePropertyValue $receiptPath
+    $result | Add-Member -NotePropertyName StartupReceiptSha256 `
+        -NotePropertyValue (Get-LowerSha256 -Path $receiptPath)
+    $result
 } catch {
+    $startupStopwatch.Stop()
+    $startupError = $_
     if ($process -and -not $process.HasExited) {
         try {
             if (Test-PSOBBProcessAtExactPath `
@@ -279,7 +350,18 @@ try {
             }
         } catch { }
     }
-    throw
+    if ($graphicsRegistryTransaction -and $graphicsRegistryTransaction.Applied) {
+        try {
+            Restore-PSOBBClientGraphicCtrlBackup `
+                -Layout $layout `
+                -BackupPath $graphicsRegistryTransaction.BackupPath | Out-Null
+        } catch {
+            throw ('PSOBB client startup failed and the native graphics registry ' +
+                "transaction also failed to roll back. Startup: $($startupError.Exception.Message) " +
+                "Rollback: $($_.Exception.Message)")
+        }
+    }
+    throw $startupError
 }
 } finally {
     if ($clientOperationMutex) {
