@@ -46,3 +46,28 @@ folder after a verified relocation. Desktop shortcuts are the only expected
 filesystem integration outside the two project directories. Native PSOBB
 registry settings remain necessary for graphics configuration and remembered
 login; only obsolete path-bearing values are removed during relocation.
+
+After a relocation, audit and remove only verified legacy PSOBB remnants:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Remove-PSOBBLegacyRemnants.ps1 `
+  -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" `
+  -WhatIf
+```
+
+Review the exact candidate list, then repeat with `-Confirm:$false`. The command
+removes only empty retired project/test/crash-report directories. Optional
+renderer caches require an explicit cache path or switch. A temporary dgVoodoo
+extraction is eligible only when its bundled archive and complete extracted
+inventory match the exact `sources.lock.json` runtime archive byte for byte. It
+refuses nonempty directories, reparse points or ancestors, paths outside fixed
+Windows parents, and any path overlapping either canonical project root. The
+ReShade cache is removed only when every file is a generated PSOBB NeutralCAS
+cache entry and the directory contains no shared content.
+
+Use `-VerifiedDgVoodooCacheDirectory <absolute-temp-cache-path>` and
+`-RemoveVerifiedReShadeCache` only when those optional caches should also be
+audited. Windows Error Reporting archives can require a one-off elevated
+PowerShell. In that case, rerun only this command with
+`-SkipDocumentsDirectories -SkipTemporaryDirectories`; do not take ownership,
+change WER ACLs, stop WER, or delete the parent archive or queue.
