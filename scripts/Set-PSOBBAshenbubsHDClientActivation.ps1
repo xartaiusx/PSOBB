@@ -79,14 +79,10 @@ function Get-StagedAshenbubsComposition {
     $manifestPath = Join-Path $overlayRoot 'asset-overlay.json'
     $manifest = Get-StrictJsonFile -Path $manifestPath -Label 'staged AshenbubsHD manifest'
     $selectionMap = @{
-        Characters = @('character')
-        Objects = @('object-npc')
-        Monsters = @('monster')
-        Maps = @('map')
         All = @('monster', 'object-npc', 'character', 'map')
     }
     $selection = [string]$manifest.selection
-    if (-not $selectionMap.ContainsKey($selection) -or
+    if ($selection -cne 'All' -or -not $selectionMap.ContainsKey($selection) -or
         [int]$manifest.schemaVersion -ne 1 -or
         [string]$manifest.componentId -cne $script:AssetComponentId -or
         [string]$manifest.version -cne '1.02' -or
@@ -496,8 +492,34 @@ try {
     }
 
     if ($Action -eq 'Rollback') {
-        $rawProfile = Get-StrictJsonFile -Path $clientProfilePath `
-            -Label 'LocalLab client profile'
+        $legacySchemaRollback = $false
+        try {
+            $rawProfile = Assert-PSOBBLocalLabClientRuntimeContract -Layout $layout
+        } catch {
+            $runtimeContractError = $_
+            $rawProfile = Get-StrictJsonFile -Path $clientProfilePath `
+                -Label 'LocalLab client profile'
+            $clientIdentity = Assert-PSOBBApprovedClientExecutable `
+                -Path (Join-Path $clientRoot 'Psobb.exe')
+            if ([int]$rawProfile.schemaVersion -ne 6 -or
+                [string]$rawProfile.channel -cne 'local-lab' -or
+                [string]$rawProfile.profileId -cne 'lab-widescreen-hd-16x10' -or
+                [string]$rawProfile.baseExecutableSha256 -cne
+                    [string]$clientIdentity.Sha256 -or
+                $null -eq $rawProfile.PSObject.Properties['localAssetOverlay'] -or
+                $null -ne $rawProfile.PSObject.Properties['localVisualAssets']) {
+                throw $runtimeContractError
+            }
+            # Schema 6 is the exact immediately preceding materialization. It
+            # cannot launch under the current contract, but its hash-bound
+            # Ashenbubs activation snapshot remains the only safe bridge to a
+            # clean profile that the schema-7 materializer can replace.
+            $legacySchemaRollback = $true
+        }
+        if ($null -ne $rawProfile.PSObject.Properties['localVisualAssets']) {
+            throw ('Roll back local visual assets in reverse activation order ' +
+                'before rolling back AshenbubsHD')
+        }
         $profileOverlay = $rawProfile.PSObject.Properties['localAssetOverlay']
         $selectedSnapshotId = $SnapshotId
         if ([string]::IsNullOrWhiteSpace($selectedSnapshotId) -and
@@ -530,10 +552,26 @@ try {
             Assert-PathWithinRoot -Path $rolledBackPath -Root $rejectedRoot | Out-Null
             Move-Item -LiteralPath $currentActivationRoot -Destination $rolledBackPath
         }
-        Assert-PSOBBLocalLabClientRuntimeContract -Layout $layout | Out-Null
+        if ($legacySchemaRollback) {
+            $restoredProfile = Get-StrictJsonFile -Path $clientProfilePath `
+                -Label 'Restored LocalLab client profile'
+            if ([int]$restoredProfile.schemaVersion -ne 6 -or
+                [string]$restoredProfile.channel -cne 'local-lab' -or
+                [string]$restoredProfile.profileId -cne 'lab-widescreen-16x10' -or
+                [string]$restoredProfile.baseExecutableSha256 -cne
+                    [string]$clientIdentity.Sha256 -or
+                $null -ne $restoredProfile.PSObject.Properties['localAssetOverlay'] -or
+                $null -ne $restoredProfile.PSObject.Properties['localModules'] -or
+                $null -ne $restoredProfile.PSObject.Properties['localVisualAssets']) {
+                throw 'The legacy AshenbubsHD rollback did not restore the exact clean schema-6 profile'
+            }
+        } else {
+            Assert-PSOBBLocalLabClientRuntimeContract -Layout $layout | Out-Null
+        }
         [pscustomobject]@{
             Action = 'Rollback'
             Changed = $true
+            LegacySchemaRollback = $legacySchemaRollback
             SnapshotId = $selectedSnapshotId
             ProfileId = [string]$snapshot.profileId
             RestoredAssetTargets = @($snapshot.targets).Count - 2
@@ -542,6 +580,10 @@ try {
     }
 
     $profile = Assert-PSOBBLocalLabClientRuntimeContract -Layout $layout
+    if ($null -ne $profile.PSObject.Properties['localVisualAssets']) {
+        throw ('Activate AshenbubsHD before local visual assets; roll the ' +
+            'visual-asset stack back before changing the base asset overlay')
+    }
     if ($null -ne $profile.PSObject.Properties['localAssetOverlay'] -or
         $null -ne $profile.PSObject.Properties['localModules']) {
         throw 'An AshenbubsHD overlay is already active; verify it or roll it back before activating another selection'

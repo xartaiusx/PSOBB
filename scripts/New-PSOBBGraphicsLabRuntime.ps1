@@ -18,6 +18,12 @@ param(
     [ValidateSet(0, 4, 8)]
     [int]$Msaa = 0,
 
+    [ValidateSet(256, 1024, 2048, 4096)]
+    [int]$VirtualVramMb = 256,
+
+    [ValidateSet('None', 'DgVoodoo')]
+    [string]$VSyncOwner = 'None',
+
     [int]$RenderWidth,
     [int]$RenderHeight,
 
@@ -145,11 +151,14 @@ function Assert-NoActiveLocalAssetComposition {
     }
     $assetOverlay = $currentProfile.PSObject.Properties['localAssetOverlay']
     $localModules = $currentProfile.PSObject.Properties['localModules']
+    $localVisualAssets = $currentProfile.PSObject.Properties['localVisualAssets']
     if (($null -ne $assetOverlay -and $null -ne $assetOverlay.Value) -or
-        ($null -ne $localModules -and $null -ne $localModules.Value)) {
+        ($null -ne $localModules -and $null -ne $localModules.Value) -or
+        ($null -ne $localVisualAssets -and $null -ne $localVisualAssets.Value)) {
         throw ('The clean graphics materializer refuses to replace an active ' +
-            'local asset overlay or local module composition. Run ' +
-            'Set-PSOBBAshenbubsHDClientActivation.ps1 -Action Rollback first.')
+            'local asset, module, or visual-asset composition. Roll back ' +
+            'local visual assets in reverse order, then run ' +
+            'Set-PSOBBAshenbubsHDClientActivation.ps1 -Action Rollback if needed.')
     }
 }
 
@@ -162,8 +171,10 @@ Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $catalogPath = Join-Path $repositoryRoot 'config\graphics-profiles.json'
 $sourcesPath = Join-Path $repositoryRoot 'config\sources.lock.json'
+$evidencePath = Join-Path $repositoryRoot 'config\graphics-evidence.json'
 $catalog = Get-Content -Raw -LiteralPath $catalogPath | ConvertFrom-Json -Depth 50
 $sources = Get-Content -Raw -LiteralPath $sourcesPath | ConvertFrom-Json -Depth 50
+$evidence = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json -Depth 50
 $profiles = @($catalog.profiles | Where-Object {
     [string]$_.id -ceq $ProfileId -and [string]$_.channel -ceq 'local-lab'
 })
@@ -171,6 +182,92 @@ if ($catalog.schemaVersion -ne 1 -or $profiles.Count -ne 1) {
     throw "The requested LocalLab profile '$ProfileId' is not declared exactly once"
 }
 $profileDeclaration = $profiles[0]
+$evidenceCandidates = @($evidence.candidates | Where-Object {
+    [string]$_.profileId -ceq $ProfileId
+})
+if ($evidenceCandidates.Count -ne 1) {
+    throw "Graphics evidence must declare '$ProfileId' exactly once"
+}
+$profileAccepted = [string]$evidenceCandidates[0].disposition -ceq 'accepted'
+$usesDgVoodoo = [string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq
+    'dgvoodoo2-x86-d3d8'
+if ($profileAccepted) {
+    $selectedRender = $profileDeclaration.display.selectedInternalRender
+    $selectedFilter = [string]$profileDeclaration.display.selectedScalingFilter
+    $selectedWindow = [string]$profileDeclaration.display.selectedWindowMode
+    $selectedMsaa = $profileDeclaration.quality.selectedMsaa
+    if ($null -eq $selectedRender -or
+        [string]::IsNullOrWhiteSpace($selectedFilter) -or
+        [string]::IsNullOrWhiteSpace($selectedWindow) -or
+        $null -eq $selectedMsaa) {
+        throw "Accepted profile '$ProfileId' has unresolved catalog selections"
+    }
+    if (-not $PSBoundParameters.ContainsKey('RenderWidth') -and
+        -not $PSBoundParameters.ContainsKey('RenderHeight')) {
+        $RenderWidth = [int]$selectedRender.width
+        $RenderHeight = [int]$selectedRender.height
+    } elseif ($RenderWidth -ne [int]$selectedRender.width -or
+        $RenderHeight -ne [int]$selectedRender.height) {
+        throw "Accepted profile '$ProfileId' cannot materialize a nonselected resolution"
+    }
+    if ($usesDgVoodoo) {
+        if (-not $PSBoundParameters.ContainsKey('ScalingFilter')) {
+            $ScalingFilter = $selectedFilter
+        } elseif ($ScalingFilter -cne $selectedFilter) {
+            throw "Accepted profile '$ProfileId' cannot materialize a nonselected scaling filter"
+        }
+    } elseif ($selectedFilter -cne 'renderer-controlled') {
+        throw "Accepted profile '$ProfileId' has an invalid renderer-owned scaling selection"
+    }
+    if (-not $PSBoundParameters.ContainsKey('WindowMode')) {
+        $WindowMode = if ($selectedWindow -ceq 'resizable') {
+            'Resizable'
+        } else {
+            'Borderless'
+        }
+    } elseif ($WindowMode.ToLowerInvariant() -cne $selectedWindow) {
+        throw "Accepted profile '$ProfileId' cannot materialize a nonselected window mode"
+    }
+    if (-not $PSBoundParameters.ContainsKey('Msaa')) {
+        $Msaa = [int]$selectedMsaa
+    } elseif ($Msaa -ne [int]$selectedMsaa) {
+        throw "Accepted profile '$ProfileId' cannot materialize nonselected MSAA"
+    }
+    if ($usesDgVoodoo) {
+        if ($null -eq $profileDeclaration.quality.selectedVirtualVramMb -or
+            [string]::IsNullOrWhiteSpace(
+                [string]$profileDeclaration.quality.selectedVsyncOwner)) {
+            throw "Accepted profile '$ProfileId' has unresolved renderer selections"
+        }
+        if (-not $PSBoundParameters.ContainsKey('VirtualVramMb')) {
+            $VirtualVramMb = [int]$profileDeclaration.quality.selectedVirtualVramMb
+        } elseif ($VirtualVramMb -ne
+            [int]$profileDeclaration.quality.selectedVirtualVramMb) {
+            throw "Accepted profile '$ProfileId' cannot materialize nonselected virtual VRAM"
+        }
+        $catalogVsync = [string]$profileDeclaration.quality.selectedVsyncOwner
+        if (-not $PSBoundParameters.ContainsKey('VSyncOwner')) {
+            $VSyncOwner = if ($catalogVsync -ceq 'dgvoodoo') {
+                'DgVoodoo'
+            } else {
+                'None'
+            }
+        } elseif ($VSyncOwner.ToLowerInvariant() -cne $catalogVsync) {
+            throw "Accepted profile '$ProfileId' cannot materialize a nonselected VSync owner"
+        }
+    }
+    if (@($profileDeclaration.postProcessing.strengthCandidates).Count -gt 0) {
+        $selectedStrength = $profileDeclaration.postProcessing.selectedStrength
+        if ($null -eq $selectedStrength) {
+            throw "Accepted profile '$ProfileId' has no selected post-process strength"
+        }
+        if (-not $PSBoundParameters.ContainsKey('CasStrength')) {
+            $CasStrength = [string]$selectedStrength
+        } elseif ([double]$CasStrength -ne [double]$selectedStrength) {
+            throw "Accepted profile '$ProfileId' cannot materialize a nonselected post-process strength"
+        }
+    }
+}
 
 $candidate = if ($RenderWidth -gt 0 -or $RenderHeight -gt 0) {
     if ($RenderWidth -le 0 -or $RenderHeight -le 0) {
@@ -194,8 +291,17 @@ if ([string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x
     if (@($profileDeclaration.quality.msaaCandidates) -notcontains $Msaa) {
         throw "The MSAA setting is not an approved candidate for '$ProfileId'"
     }
+    if (@($profileDeclaration.quality.virtualVramMbCandidates) -notcontains $VirtualVramMb) {
+        throw "The virtual VRAM setting is not an approved candidate for '$ProfileId'"
+    }
+    $declaredVsyncOwner = if ($VSyncOwner -ceq 'DgVoodoo') { 'dgvoodoo' } else { 'none' }
+    if (@($profileDeclaration.quality.vsyncOwnerCandidates) -cnotcontains $declaredVsyncOwner) {
+        throw "The VSync owner is not an approved candidate for '$ProfileId'"
+    }
 } elseif ($ScalingFilter -ne 'lanczos-3' -or $Msaa -ne 0) {
     throw 'Scaling-filter and MSAA experiments require a declared dgVoodoo profile'
+} elseif ($VirtualVramMb -ne 256 -or $VSyncOwner -cne 'None') {
+    throw 'Virtual VRAM and VSync-owner experiments require a declared dgVoodoo profile'
 }
 if ($Msaa -gt 0 -and ($renderWidth -ne 2560 -or $renderHeight -ne 1600)) {
     throw 'MSAA experiments are intentionally limited to native 2560x1600 rendering'
@@ -370,11 +476,12 @@ try {
             @('GeneralExt', 'Resampling', $ScalingFilter),
             @('DirectX', 'Resolution', ("${renderWidth}x${renderHeight}")),
             @('DirectX', 'Antialiasing', $(if ($Msaa -eq 0) { 'off' } else { "${Msaa}x" })),
+            @('DirectX', 'VRAM', ([string]$VirtualVramMb)),
             @('DirectX', 'Filtering', '16'),
             @('DirectX', 'Mipmapping', 'appdriven'),
             @('DirectX', 'KeepFilterIfPointSampled', 'true'),
             @('DirectX', 'Bilinear2DOperations', 'false'),
-            @('DirectX', 'ForceVerticalSync', 'false'),
+            @('DirectX', 'ForceVerticalSync', $(if ($VSyncOwner -ceq 'DgVoodoo') { 'true' } else { 'false' })),
             @('DirectX', 'dgVoodooWatermark', 'false')
         )) {
             $configuration = Set-PSOBBIniValue `
@@ -559,7 +666,7 @@ try {
     }
 
     $materializedProfile = [ordered]@{
-        schemaVersion = 6
+        schemaVersion = 7
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
         channel = 'local-lab'
         profileId = $ProfileId
@@ -607,6 +714,17 @@ try {
             'renderer-controlled'
         }
         msaa = $Msaa
+        virtualVramMb = if ([string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x86-d3d8') {
+            $VirtualVramMb
+        } else {
+            $null
+        }
+        vsyncOwner = if ([string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x86-d3d8') {
+            if ($VSyncOwner -ceq 'DgVoodoo') { 'dgvoodoo' } else { 'none' }
+        } else {
+            [string]$profileDeclaration.quality.vsyncOwner
+        }
+        nativeGraphics = $profileDeclaration.nativeGraphics
         hudScale = if ($ProfileId -in @('lab-widescreen-16x10', 'lab-widescreen-cas-16x10')) {
             $HudScale
         } else {
@@ -651,6 +769,16 @@ try {
             $null
         }
         Msaa = $Msaa
+        VirtualVramMb = if ([string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x86-d3d8') {
+            $VirtualVramMb
+        } else {
+            $null
+        }
+        VSyncOwner = if ([string]$profileDeclaration.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x86-d3d8') {
+            if ($VSyncOwner -ceq 'DgVoodoo') { 'dgvoodoo' } else { 'none' }
+        } else {
+            $null
+        }
         CasStrength = if ($ProfileId -in $casProfileIds) { [double]$CasStrength } else { $null }
         BaseExecutableSha256 = $identity.Sha256
         ConfigurationSha256 = $configurationHash

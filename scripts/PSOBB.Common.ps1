@@ -10,7 +10,11 @@ function Get-PSOBBRuntimeRoot {
         $RuntimeRoot = $env:PSOBB_RUNTIME_ROOT
     }
     if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-        $RuntimeRoot = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PSOBB-Runtime'
+        $repositoryParent = [System.IO.Directory]::GetParent($script:PSOBBRepositoryRoot)
+        if (-not $repositoryParent) {
+            throw 'Could not resolve the parent directory for the PSOBB repository'
+        }
+        $RuntimeRoot = Join-Path $repositoryParent.FullName 'PSOBB-Runtime'
     }
     $fullRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
     if ($fullRoot.StartsWith('\\', [System.StringComparison]::Ordinal)) {
@@ -1270,7 +1274,7 @@ function Test-PSOBBLocalReferenceWidescreenProfile {
     )
     $enhancementPathProperty =
         $Profile.PSObject.Properties['enhancementConfigurationPath']
-    if ([int]$Profile.schemaVersion -lt 6 -or
+    if ([int]$Profile.schemaVersion -lt 7 -or
         [string]$Profile.channel -cne 'local-lab' -or
         [string]$Profile.profileId -cnotin $referenceProfileIds -or
         [string]$Profile.presentationOwner -cne 'client-patch' -or
@@ -1887,7 +1891,7 @@ function Get-PSOBBLargeAssetsBuildContract {
             'src/PSOBB.LargeAssets/bin/build-x86/Release/PSOBB.LargeAssets.Verify.exe' -or
         [long]$verifier.size -ne 259584 -or
         [string]$verifier.sha256 -cne
-            '187aed3b8701783cc6142fce64c50bd47dbb512fd9cfd418eaf5073e88fc4391' -or
+            'e0c0c3dc756e733b3399bbefe1e76114c56bed25818b145d77db123c0a0f266a' -or
         [string]::Join("`n", @($verifier.expectedOutputContract)) -cne
             [string]::Join("`n", $expectedVerifierOutput)) {
         throw 'The PSOBB.LargeAssets artifact or exact-client verifier declaration has changed'
@@ -2080,6 +2084,398 @@ function Assert-PSOBBActivationManifestTimestamp {
     $activationCreated
 }
 
+function Assert-PSOBBLocalVisualAssetSnapshotContract {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)][string]$ComponentId,
+        [Parameter(Mandatory)][string]$SnapshotId,
+        [AllowEmptyCollection()][Parameter(Mandatory)][object[]]$ActivationFiles,
+        [AllowEmptyCollection()][object[]]$PriorEntries = @()
+    )
+
+    $componentRoot = Assert-PathWithinRoot `
+        -Path (Join-Path $Layout.LocalLab (
+            "visual-asset-activations\$ComponentId")) `
+        -Root $Layout.LocalLab
+    $snapshotRoot = Assert-PathWithinRoot `
+        -Path (Join-Path $componentRoot "snapshots\$SnapshotId") `
+        -Root $componentRoot
+    if (-not (Test-Path -LiteralPath $snapshotRoot -PathType Container)) {
+        throw "The LocalLab visual-asset rollback snapshot is missing: $ComponentId"
+    }
+    $snapshotRootItem = Get-Item -LiteralPath $snapshotRoot -Force
+    $reparsePoint = Get-ChildItem -LiteralPath $snapshotRoot -Force -Recurse `
+        -Attributes ReparsePoint -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (($snapshotRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $reparsePoint) {
+        throw "The LocalLab visual-asset rollback snapshot contains a reparse point: $ComponentId"
+    }
+
+    $snapshotPath = Join-Path $snapshotRoot 'snapshot.json'
+    if (-not (Test-Path -LiteralPath $snapshotPath -PathType Leaf)) {
+        throw "The LocalLab visual-asset rollback manifest is missing: $ComponentId"
+    }
+    $snapshotItem = Get-Item -LiteralPath $snapshotPath -Force
+    if ($snapshotItem.Length -le 0 -or $snapshotItem.Length -gt 2MB) {
+        throw "The LocalLab visual-asset rollback manifest has an invalid size: $ComponentId"
+    }
+    try {
+        $snapshot = Get-Content -Raw -LiteralPath $snapshotPath |
+            ConvertFrom-Json -Depth 50 -DateKind String -ErrorAction Stop
+    } catch {
+        throw "The LocalLab visual-asset rollback manifest is invalid JSON: $ComponentId"
+    }
+    Assert-PSOBBExactJsonProperties -Object $snapshot `
+        -Label 'LocalLab visual-asset rollback manifest' -Names @(
+            'schemaVersion', 'componentId', 'snapshotId', 'createdAtUtc',
+            'profileBeforeSize', 'profileBeforeSha256', 'files') | Out-Null
+    Assert-PSOBBActivationManifestTimestamp -Activation $snapshot | Out-Null
+
+    $expectedFiles = @($ActivationFiles)
+    $snapshotFiles = @($snapshot.files)
+    if ([int]$snapshot.schemaVersion -ne 1 -or
+        [string]$snapshot.componentId -cne $ComponentId -or
+        [string]$snapshot.snapshotId -cne $SnapshotId -or
+        $snapshotFiles.Count -ne $expectedFiles.Count -or
+        [long]$snapshot.profileBeforeSize -le 0 -or
+        [string]$snapshot.profileBeforeSha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw "The LocalLab visual-asset rollback manifest disagrees with its activation: $ComponentId"
+    }
+
+    $expectedInventoryPaths = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal)
+    [void]$expectedInventoryPaths.Add('snapshot.json')
+    [void]$expectedInventoryPaths.Add('client-profile.before.json')
+    for ($index = 0; $index -lt $snapshotFiles.Count; $index++) {
+        $file = $snapshotFiles[$index]
+        Assert-PSOBBExactJsonProperties -Object $file `
+            -Label 'LocalLab visual-asset rollback file' -Names @(
+                'destinationPath', 'previousExisted', 'previousSize',
+                'previousSha256', 'snapshotPath') | Out-Null
+        $destinationPath = [string]$file.destinationPath
+        if ($destinationPath -cne [string]$expectedFiles[$index].destinationPath -or
+            $destinationPath -cnotmatch
+                '^data/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:bml|prs|xvm)$' -or
+            $file.previousExisted -isnot [bool]) {
+            throw "The LocalLab visual-asset rollback file is unsafe or reordered: $destinationPath"
+        }
+        if ([bool]$file.previousExisted) {
+            $expectedSnapshotPath = "previous/$index.bin"
+            if ([string]$file.snapshotPath -cne $expectedSnapshotPath -or
+                [long]$file.previousSize -le 0 -or
+                [string]$file.previousSha256 -cnotmatch '^[a-f0-9]{64}$') {
+                throw "The LocalLab visual-asset previous-file declaration is invalid: $destinationPath"
+            }
+            $previousPath = Assert-PathWithinRoot `
+                -Path (Join-Path $snapshotRoot `
+                    $expectedSnapshotPath.Replace('/', '\')) `
+                -Root $snapshotRoot
+            if (-not (Test-Path -LiteralPath $previousPath -PathType Leaf) -or
+                (Get-Item -LiteralPath $previousPath -Force).Length -ne
+                    [long]$file.previousSize -or
+                (Get-LowerSha256 -Path $previousPath) -cne
+                    [string]$file.previousSha256) {
+                throw "The LocalLab visual-asset previous file has drifted: $destinationPath"
+            }
+            [void]$expectedInventoryPaths.Add($expectedSnapshotPath)
+        } elseif ([long]$file.previousSize -ne 0 -or
+            $null -ne $file.previousSha256 -or $null -ne $file.snapshotPath) {
+            throw "The LocalLab visual-asset rollback unexpectedly declares a previous file: $destinationPath"
+        }
+    }
+
+    $profileBeforePath = Join-Path $snapshotRoot 'client-profile.before.json'
+    if (-not (Test-Path -LiteralPath $profileBeforePath -PathType Leaf) -or
+        (Get-Item -LiteralPath $profileBeforePath -Force).Length -ne
+            [long]$snapshot.profileBeforeSize -or
+        (Get-LowerSha256 -Path $profileBeforePath) -cne
+            [string]$snapshot.profileBeforeSha256) {
+        throw "The LocalLab visual-asset rollback profile has drifted: $ComponentId"
+    }
+    try {
+        $profileBefore = Get-Content -Raw -LiteralPath $profileBeforePath |
+            ConvertFrom-Json -Depth 50 -DateKind String -ErrorAction Stop
+    } catch {
+        throw "The LocalLab visual-asset rollback profile is invalid JSON: $ComponentId"
+    }
+    $priorProperty = $profileBefore.PSObject.Properties['localVisualAssets']
+    $expectedPriorEntries = @($PriorEntries)
+    if ($expectedPriorEntries.Count -eq 0) {
+        if ($null -ne $priorProperty) {
+            throw "The LocalLab visual-asset rollback profile contains an unexpected prior stack: $ComponentId"
+        }
+    } elseif ($null -eq $priorProperty -or $null -eq $priorProperty.Value -or
+        @($priorProperty.Value).Count -ne $expectedPriorEntries.Count) {
+        throw "The LocalLab visual-asset rollback profile is missing its prior stack: $ComponentId"
+    } else {
+        $actualPriorEntries = @($priorProperty.Value)
+        for ($index = 0; $index -lt $expectedPriorEntries.Count; $index++) {
+            $actualJson = $actualPriorEntries[$index] |
+                ConvertTo-Json -Depth 20 -Compress
+            $expectedJson = $expectedPriorEntries[$index] |
+                ConvertTo-Json -Depth 20 -Compress
+            if ($actualJson -cne $expectedJson) {
+                throw "The LocalLab visual-asset rollback profile has a reordered or changed prior stack: $ComponentId"
+            }
+        }
+    }
+
+    $actualInventory = @(Get-PSOBBDirectoryManifest -Root $snapshotRoot)
+    if ($actualInventory.Count -ne $expectedInventoryPaths.Count -or
+        @($actualInventory | Where-Object {
+            -not $expectedInventoryPaths.Contains([string]$_.path)
+        }).Count -gt 0) {
+        throw "The LocalLab visual-asset rollback snapshot contains an undeclared file: $ComponentId"
+    }
+
+    [pscustomobject]@{
+        Snapshot = $snapshot
+        SnapshotRoot = $snapshotRoot
+        ProfileBefore = $profileBefore
+        ProfileBeforePath = $profileBeforePath
+    }
+}
+
+function Assert-PSOBBLocalVisualAssetCandidateDisposition {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ComponentId,
+        [Parameter(Mandatory)]$SourceComponent,
+        [Parameter(Mandatory)]$Evidence
+    )
+
+    $candidateMatches = @($Evidence.assetCandidates | Where-Object {
+        [string]$_.componentId -ceq $ComponentId
+    })
+    if ($candidateMatches.Count -ne 1) {
+        throw "Graphics evidence must declare exactly one candidate named '$ComponentId'"
+    }
+
+    $disposition = [string]$candidateMatches[0].disposition
+    $compatibilityState = [string]$SourceComponent.compatibilityState
+    if ($disposition -ceq 'rejected' -or
+        $compatibilityState.StartsWith(
+            'rejected-', [StringComparison]::Ordinal)) {
+        if ($disposition -cne 'rejected' -or
+            -not $compatibilityState.StartsWith(
+                'rejected-', [StringComparison]::Ordinal)) {
+            throw "The source lock and graphics evidence disagree about the rejected local visual asset: $ComponentId"
+        }
+        throw "The local visual-asset candidate is rejected for this exact client stack: $ComponentId"
+    }
+    if ($disposition -cnotin @('pending', 'accepted')) {
+        throw "The local visual-asset candidate has an unsupported disposition: $ComponentId"
+    }
+
+    $candidateMatches[0]
+}
+
+function Add-PSOBBLocalVisualAssetContract {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)][string]$ClientRoot,
+        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)]$ExpectedData,
+        [Parameter(Mandatory)][bool]$HasAshenbubs
+    )
+
+    $property = $Profile.PSObject.Properties['localVisualAssets']
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return @()
+    }
+    $entries = @($property.Value)
+    if ($entries.Count -lt 1 -or $entries.Count -gt 4 -or
+        [string]$Profile.profileId -cnotin @(
+            'lab-widescreen-16x10', 'lab-widescreen-hd-16x10')) {
+        throw 'The LocalLab visual-asset declaration has an invalid count or profile scope'
+    }
+    if (-not $HasAshenbubs) {
+        throw 'Supplemental visual assets require the full AshenbubsHD All foundation'
+    }
+
+    $sources = Get-Content -Raw -LiteralPath (
+        Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json') |
+        ConvertFrom-Json -Depth 100
+    $evidence = Get-Content -Raw -LiteralPath (
+        Join-Path $script:PSOBBRepositoryRoot 'config\graphics-evidence.json') |
+        ConvertFrom-Json -Depth 100
+    $identity = Get-PSOBBApprovedClientIdentity
+    $componentIds = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $approvedComponentIds = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($approvedComponentId in @(
+        'luthee-hd-ui-v1.1.6-local-import',
+        'higher-resolution-item-box-textures-2025-12-30-local-import',
+        'echelon-hd-effects-technics-2019-05-27-local-import',
+        'echelon-hd-blood-2018-06-16-local-import')) {
+        [void]$approvedComponentIds.Add($approvedComponentId)
+    }
+    $destinationPaths = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $priorEntries = [Collections.Generic.List[object]]::new()
+    $previousSnapshotId = $null
+
+    foreach ($entry in $entries) {
+        Assert-PSOBBExactJsonProperties -Object $entry `
+            -Label 'LocalLab visual-asset declaration' -Names @(
+                'schemaVersion', 'componentId', 'version', 'distributionClass',
+                'replacementPolicy', 'activationManifestPath',
+                'activationManifestSha256', 'sourceArchiveSha256', 'snapshotId',
+                'fileCount', 'totalBytes') | Out-Null
+
+        $componentId = [string]$entry.componentId
+        if ([int]$entry.schemaVersion -ne 1 -or
+            -not $approvedComponentIds.Contains($componentId) -or
+            -not $componentIds.Add($componentId) -or
+            [string]$entry.distributionClass -cne 'local-only' -or
+            [string]$entry.activationManifestPath -cne
+                "visual-asset-activations/$componentId/current/activation.json" -or
+            [string]$entry.activationManifestSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+            [string]$entry.sourceArchiveSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+            [string]$entry.snapshotId -cnotmatch
+                '^activation-[0-9]{8}T[0-9]{9}Z-[a-f0-9]{8}$' -or
+            [int]$entry.fileCount -le 0 -or [long]$entry.totalBytes -le 0) {
+            throw "The LocalLab visual-asset declaration is invalid: $componentId"
+        }
+        if ($null -ne $previousSnapshotId -and
+            [StringComparer]::Ordinal.Compare(
+                [string]$previousSnapshotId,
+                [string]$entry.snapshotId) -ge 0) {
+            throw 'The LocalLab visual-asset stack is not in activation order'
+        }
+
+        $components = @($sources.components | Where-Object {
+            [string]$_.id -ceq $componentId
+        })
+        if ($components.Count -ne 1 -or
+            [string]$components[0].distributionClass -cne 'local-only' -or
+            [string]$components[0].version -cne [string]$entry.version -or
+            [string]$components[0].sha256 -cne
+                [string]$entry.sourceArchiveSha256 -or
+            @($components[0].members).Count -ne [int]$entry.fileCount) {
+            throw "The LocalLab visual asset is not bound to its exact source lock: $componentId"
+        }
+        $component = $components[0]
+        Assert-PSOBBLocalVisualAssetCandidateDisposition `
+            -ComponentId $componentId -SourceComponent $component `
+            -Evidence $evidence | Out-Null
+        $expectedReplacementPolicy = switch ($componentId) {
+            'echelon-hd-effects-technics-2019-05-27-local-import' {
+                'reject-ashenbubs-collision'
+            }
+            'echelon-hd-blood-2018-06-16-local-import' {
+                'reject-ashenbubs-collision'
+            }
+            default { 'none' }
+        }
+        if ([string]$entry.replacementPolicy -cne $expectedReplacementPolicy) {
+            throw "The LocalLab visual asset violates its collision policy: $componentId"
+        }
+
+        $activationPath = Assert-PathWithinRoot `
+            -Path (Join-Path $Layout.LocalLab `
+                ([string]$entry.activationManifestPath).Replace('/', '\')) `
+            -Root $Layout.LocalLab
+        if (-not (Test-Path -LiteralPath $activationPath -PathType Leaf) -or
+            (Get-LowerSha256 -Path $activationPath) -cne
+                [string]$entry.activationManifestSha256) {
+            throw "The LocalLab visual-asset activation record is missing or stale: $componentId"
+        }
+        $activationRoot = Split-Path -Parent $activationPath
+        $activationInventory = @(Get-PSOBBDirectoryManifest -Root $activationRoot)
+        if ($activationInventory.Count -ne 1 -or
+            [string]$activationInventory[0].path -cne 'activation.json') {
+            throw "The LocalLab visual-asset activation directory contains an extra file: $componentId"
+        }
+        $activation = ConvertFrom-PSOBBActivationManifestJson `
+            -Json (Get-Content -Raw -LiteralPath $activationPath)
+        Assert-PSOBBExactJsonProperties -Object $activation `
+            -Label 'LocalLab visual-asset activation manifest' -Names @(
+                'schemaVersion', 'componentId', 'version', 'distributionClass',
+                'replacementPolicy', 'profileId', 'baseExecutableSha256',
+                'sourceArchiveSha256', 'snapshotId', 'createdAtUtc', 'files') |
+            Out-Null
+        Assert-PSOBBActivationManifestTimestamp -Activation $activation | Out-Null
+        foreach ($field in @(
+            'componentId', 'version', 'distributionClass', 'replacementPolicy',
+            'sourceArchiveSha256', 'snapshotId')) {
+            if ([string]$activation.$field -cne [string]$entry.$field) {
+                throw "The visual-asset activation disagrees with profile field '$field'"
+            }
+        }
+        if ([int]$activation.schemaVersion -ne 1 -or
+            [string]$activation.profileId -cne [string]$Profile.profileId -or
+            [string]$activation.baseExecutableSha256 -cne $identity.Sha256 -or
+            @($activation.files).Count -ne [int]$entry.fileCount) {
+            throw "The visual-asset activation is not bound to the exact client/profile: $componentId"
+        }
+
+        [long]$totalBytes = 0
+        foreach ($file in @($activation.files)) {
+            Assert-PSOBBExactJsonProperties -Object $file `
+                -Label 'LocalLab visual-asset file' -Names @(
+                    'archivePath', 'destinationPath', 'size', 'sha256') | Out-Null
+            $destinationPath = [string]$file.destinationPath
+            $lockedMembers = @($component.members | Where-Object {
+                [string]$_.path -ceq [string]$file.archivePath -and
+                [string]$_.destinationPath -ceq $destinationPath -and
+                [long]$_.size -eq [long]$file.size -and
+                [string]$_.sha256 -ceq [string]$file.sha256
+            })
+            if ($lockedMembers.Count -ne 1 -or
+                $destinationPath -cnotmatch
+                    '^data/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:bml|prs|xvm)$' -or
+                -not $destinationPaths.Add($destinationPath) -or
+                [long]$file.size -le 0 -or
+                [string]$file.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+                throw "The LocalLab visual-asset file is unsafe, duplicate, or unlocked: $destinationPath"
+            }
+
+            $prior = if ($ExpectedData.ContainsKey($destinationPath)) {
+                $ExpectedData[$destinationPath]
+            } else { $null }
+            $replacesAshenbubs = $HasAshenbubs -and $null -ne $prior -and
+                $prior.PSObject.Properties['overlay'] -and [bool]$prior.overlay
+            if ($replacesAshenbubs) {
+                throw "AshenbubsHD All is the immutable visual foundation; another asset cannot replace $destinationPath"
+            }
+
+            $actualPath = Assert-PathWithinRoot `
+                -Path (Join-Path $ClientRoot $destinationPath.Replace('/', '\')) `
+                -Root $ClientRoot
+            if (-not (Test-Path -LiteralPath $actualPath -PathType Leaf) -or
+                (Get-Item -LiteralPath $actualPath -Force).Length -ne
+                    [long]$file.size -or
+                (Get-LowerSha256 -Path $actualPath) -cne [string]$file.sha256) {
+                throw "A LocalLab visual asset has drifted: $destinationPath"
+            }
+            $ExpectedData[$destinationPath] = [pscustomobject]@{
+                path = $destinationPath
+                size = [long]$file.size
+                sha256 = [string]$file.sha256
+                overlay = $true
+                visualAssetComponentId = $componentId
+            }
+            $totalBytes += [long]$file.size
+        }
+        if ($totalBytes -ne [long]$entry.totalBytes) {
+            throw "The LocalLab visual-asset byte total has changed: $componentId"
+        }
+        Assert-PSOBBLocalVisualAssetSnapshotContract `
+            -Layout $Layout `
+            -ComponentId $componentId `
+            -SnapshotId ([string]$entry.snapshotId) `
+            -ActivationFiles @($activation.files) `
+            -PriorEntries @($priorEntries) | Out-Null
+        $priorEntries.Add($entry)
+        $previousSnapshotId = [string]$entry.snapshotId
+    }
+    $entries
+}
+
 function Assert-PSOBBLocalAssetOverlayContract {
     [CmdletBinding()]
     param(
@@ -2102,18 +2498,32 @@ function Assert-PSOBBLocalAssetOverlayContract {
         }
         $baseManifest = Get-Content -Raw -LiteralPath $Layout.BaseClientManifest |
             ConvertFrom-Json -Depth 30
-        $expectedData = @($baseManifest.files | Where-Object {
+        if ([int]$baseManifest.schemaVersion -ne 1) {
+            throw 'The immutable base-client manifest is invalid during visual-asset verification'
+        }
+        $expectedData = [Collections.Generic.Dictionary[string, object]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        foreach ($baseFile in @($baseManifest.files | Where-Object {
             ([string]$_.path).StartsWith(
                 'data/',
-                [System.StringComparison]::OrdinalIgnoreCase)
-        })
+                [StringComparison]::OrdinalIgnoreCase)
+        })) {
+            $expectedData.Add([string]$baseFile.path, [pscustomobject]@{
+                path = [string]$baseFile.path
+                size = [long]$baseFile.size
+                sha256 = [string]$baseFile.sha256
+                overlay = $false
+            })
+        }
+        Add-PSOBBLocalVisualAssetContract `
+            -Layout $Layout -ClientRoot $ClientRoot -Profile $Profile `
+            -ExpectedData $expectedData -HasAshenbubs:$false | Out-Null
         $actualData = @(Get-PSOBBClientDataManifest -ClientRoot $ClientRoot)
-        if ([int]$baseManifest.schemaVersion -ne 1 -or
-            $actualData.Count -ne $expectedData.Count -or
+        if ($actualData.Count -ne $expectedData.Count -or
             ($expectedData.Count -gt 0 -and
                 -not (Test-PSOBBManifestEntriesEqual `
-                    -Left $actualData -Right $expectedData))) {
-            throw 'The LocalLab client without an asset declaration does not match the exact base data manifest'
+                    -Left $actualData -Right @($expectedData.Values)))) {
+            throw 'The LocalLab client without Ashenbubs does not match its exact base-plus-visual-assets manifest'
         }
         return $null
     }
@@ -2144,7 +2554,7 @@ function Assert-PSOBBLocalAssetOverlayContract {
         [string]$overlay.componentId -cne 'ashenbubs-hd-psobb-v1.02-local-import' -or
         [string]$overlay.version -cne '1.02' -or
         [string]$overlay.distributionClass -cne 'local-only' -or
-        [string]$overlay.selection -cnotmatch '^(Characters|Objects|Monsters|Maps|All)$' -or
+        [string]$overlay.selection -cne 'All' -or
         [string]$overlay.baseProfileId -cne 'lab-widescreen-16x10' -or
         [string]$overlay.activationManifestPath -cne $constantActivationPath -or
         [string]$overlay.activationManifestSha256 -cnotmatch '^[a-f0-9]{64}$' -or
@@ -2330,6 +2740,10 @@ function Assert-PSOBBLocalAssetOverlayContract {
         throw 'The LocalLab activated asset count or composed byte total has changed'
     }
 
+    Add-PSOBBLocalVisualAssetContract `
+        -Layout $Layout -ClientRoot $ClientRoot -Profile $Profile `
+        -ExpectedData $expectedData -HasAshenbubs:$true | Out-Null
+
     if (-not (Test-PSOBBManifestEntriesEqual `
         -Left (Get-PSOBBClientDataManifest -ClientRoot $ClientRoot) `
         -Right @($expectedData.Values))) {
@@ -2369,7 +2783,7 @@ function Assert-PSOBBLocalLabClientRuntimeContract {
 
     $profileId = [string]$profile.profileId
     $identity = Get-PSOBBApprovedClientIdentity
-    if ([int]$profile.schemaVersion -lt 6 -or
+    if ([int]$profile.schemaVersion -lt 7 -or
         [string]$profile.channel -cne 'local-lab' -or
         $profileId -cnotmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$' -or
         -not ([string]$profile.baseExecutableSha256).Equals(
@@ -2389,6 +2803,26 @@ function Assert-PSOBBLocalLabClientRuntimeContract {
         throw "The LocalLab profile '$profileId' is not declared exactly once in the approved graphics profile catalog"
     }
     $declared = $declaredProfiles[0]
+    $materializedNativeGraphics = Assert-PSOBBNativeGraphicsContract `
+        -NativeGraphics $profile.nativeGraphics `
+        -Label 'Materialized LocalLab nativeGraphics'
+    $declaredNativeGraphics = Assert-PSOBBNativeGraphicsContract `
+        -NativeGraphics $declared.nativeGraphics `
+        -Label 'Declared LocalLab nativeGraphics'
+    if ($materializedNativeGraphics.PresetId -cne
+            $declaredNativeGraphics.PresetId -or
+        $materializedNativeGraphics.GraphicCtrlSha256 -cne
+            $declaredNativeGraphics.GraphicCtrlSha256 -or
+        $materializedNativeGraphics.AdvancedEffectsPolicy -cne
+            $declaredNativeGraphics.AdvancedEffectsPolicy -or
+        $materializedNativeGraphics.PixelFogPolicy -cne
+            $declaredNativeGraphics.PixelFogPolicy -or
+        $materializedNativeGraphics.LowResolutionTexturesPolicy -cne
+            $declaredNativeGraphics.LowResolutionTexturesPolicy -or
+        $materializedNativeGraphics.FrameSkipPolicy -cne
+            $declaredNativeGraphics.FrameSkipPolicy) {
+        throw "The LocalLab materialized profile '$profileId' does not match its declared native graphics contract"
+    }
 
     $renderCandidate = @($declared.display.internalRenderCandidates | Where-Object {
         [int]$_.width -eq [int]$profile.renderWidth -and
@@ -2501,6 +2935,16 @@ function Assert-PSOBBLocalLabClientRuntimeContract {
     }
 
     if ([string]$declared.renderer.d3d8Owner.componentId -ceq 'dgvoodoo2-x86-d3d8') {
+        $declaredVirtualVram = @(
+            $declared.quality.virtualVramMbCandidates | ForEach-Object { [int]$_ })
+        $declaredVsyncOwners = @(
+            $declared.quality.vsyncOwnerCandidates | ForEach-Object { [string]$_ })
+        if ($null -eq $profile.PSObject.Properties['virtualVramMb'] -or
+            $null -eq $profile.PSObject.Properties['vsyncOwner'] -or
+            [int]$profile.virtualVramMb -notin $declaredVirtualVram -or
+            [string]$profile.vsyncOwner -cnotin $declaredVsyncOwners) {
+            throw 'The LocalLab materialized profile selects undeclared virtual VRAM or VSync-owner settings'
+        }
         $configurationPath = Join-Path $clientRoot 'dgVoodoo.conf'
         if (-not (Test-Path -LiteralPath $configurationPath -PathType Leaf) -or
             [string]$profile.configurationSha256 -cnotmatch '^[a-f0-9]{64}$' -or
@@ -2527,12 +2971,23 @@ function Assert-PSOBBLocalLabClientRuntimeContract {
         }
         $expectedRender = '{0}x{1}' -f [int]$profile.renderWidth, [int]$profile.renderHeight
         $expectedDesktop = '{0}x{1}' -f [int]$profile.desktopWidth, [int]$profile.desktopHeight
+        $expectedVsync = if ([string]$profile.vsyncOwner -ceq 'dgvoodoo') {
+            'true'
+        } else {
+            'false'
+        }
         if ((& $getIniValue 'General' 'OutputAPI') -cne [string]$profile.outputApi -or
             (& $getIniValue 'GeneralExt' 'DesktopResolution') -cne $expectedDesktop -or
             (& $getIniValue 'DirectX' 'Resolution') -cne $expectedRender -or
+            (& $getIniValue 'DirectX' 'VRAM') -cne
+                [string][int]$profile.virtualVramMb -or
+            (& $getIniValue 'DirectX' 'ForceVerticalSync') -cne $expectedVsync -or
             (& $getIniValue 'DirectX' 'dgVoodooWatermark') -cne 'false') {
-            throw 'The LocalLab dgVoodoo configuration does not match its materialized API, render, desktop, or watermark values'
+            throw 'The LocalLab dgVoodoo configuration does not match its materialized API, render, desktop, VRAM, VSync, or watermark values'
         }
+    } elseif ($null -ne $profile.virtualVramMb -or
+        [string]$profile.vsyncOwner -cne [string]$declared.quality.vsyncOwner) {
+        throw 'The LocalLab non-dgVoodoo profile declares unexpected virtual VRAM or VSync ownership'
     }
 
     if ($profileId -in @(
@@ -3257,6 +3712,378 @@ function Assert-PSOBBNoRunningClients {
         throw "Refusing to stop newserv while an approved PSOBB client is running ($($identities -join ', ')). Stop the client first or use Stop-PSOBBSession.ps1 -Target All."
     }
     $true
+}
+
+function Assert-PSOBBNoNamedClientProcesses {
+    [CmdletBinding()]
+    param()
+
+    $named = @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue)
+    if ($named.Count -gt 0) {
+        throw ('Refusing to change PSOBB GRAPHICCTRL while a Psobb process is ' +
+            "running (PID(s): $($named.Id -join ', '))")
+    }
+    $true
+}
+
+function ConvertTo-PSOBBGraphicCtrlBytes {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][Parameter(Mandatory)][object[]]$Dwords)
+
+    if ($Dwords.Count -ne 9) {
+        throw 'PSOBB GRAPHICCTRL must contain exactly nine DWORD values'
+    }
+    $bytes = [byte[]]::new(36)
+    for ($index = 0; $index -lt $Dwords.Count; $index++) {
+        $text = [string]$Dwords[$index]
+        if ($text -cnotmatch '^(?:0|[1-9][0-9]{0,9})$') {
+            throw "PSOBB GRAPHICCTRL DWORD $index is not an unsigned 32-bit integer"
+        }
+        try {
+            $value = [uint32]::Parse(
+                $text,
+                [System.Globalization.NumberStyles]::None,
+                [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch {
+            throw "PSOBB GRAPHICCTRL DWORD $index is outside the unsigned 32-bit range"
+        }
+        $word = [BitConverter]::GetBytes($value)
+        if (-not [BitConverter]::IsLittleEndian) {
+            [array]::Reverse($word)
+        }
+        [Array]::Copy($word, 0, $bytes, $index * 4, 4)
+    }
+    $bytes
+}
+
+function ConvertFrom-PSOBBGraphicCtrlBytes {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][Parameter(Mandatory)][byte[]]$Bytes)
+
+    if ($Bytes.Count -ne 36) {
+        throw 'PSOBB GRAPHICCTRL must be exactly 36 bytes'
+    }
+    $values = [System.Collections.Generic.List[uint32]]::new()
+    for ($index = 0; $index -lt 9; $index++) {
+        $word = [byte[]]::new(4)
+        [Array]::Copy($Bytes, $index * 4, $word, 0, 4)
+        if (-not [BitConverter]::IsLittleEndian) {
+            [array]::Reverse($word)
+        }
+        $values.Add([BitConverter]::ToUInt32($word, 0))
+    }
+    @($values)
+}
+
+function Get-PSOBBGraphicCtrlSha256 {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][Parameter(Mandatory)][byte[]]$Bytes)
+
+    if ($Bytes.Count -ne 36) {
+        throw 'PSOBB GRAPHICCTRL hashing requires exactly 36 bytes'
+    }
+    [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
+function Assert-PSOBBNativeGraphicsContract {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$NativeGraphics,
+        [string]$Label = 'PSOBB native graphics profile'
+    )
+
+    if ($null -eq $NativeGraphics) {
+        throw "$Label is missing"
+    }
+    Assert-PSOBBExactJsonProperties -Object $NativeGraphics -Label $Label -Names @(
+        'presetId',
+        'graphicCtrlDwords',
+        'graphicCtrlSha256',
+        'advancedEffectsPolicy',
+        'pixelFogPolicy',
+        'lowResolutionTexturesPolicy',
+        'frameSkipPolicy') | Out-Null
+
+    $presetId = [string]$NativeGraphics.presetId
+    $expected = if ($presetId -ceq 'high-end') {
+        [pscustomobject]@{
+            Dwords = [object[]]@(0, 0, 0, 0, 1, 1, 1, 0, 0)
+            Sha256 = '302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4'
+            AdvancedEffectsPolicy = 'enabled'
+        }
+    } elseif ($presetId -ceq 'mid-compatibility') {
+        [pscustomobject]@{
+            Dwords = [object[]]@(1, 0, 0, 0, 1, 1, 1, 0, 0)
+            Sha256 = 'a27bceac8141950aa389c1d96c70ebdb3db8a3c8dc88ef070cafffc245fc1917'
+            AdvancedEffectsPolicy = 'compatibility'
+        }
+    } else {
+        throw "$Label selects an unsupported preset"
+    }
+
+    $declaredDwords = @($NativeGraphics.graphicCtrlDwords)
+    $bytes = ConvertTo-PSOBBGraphicCtrlBytes -Dwords $declaredDwords
+    $actualHash = Get-PSOBBGraphicCtrlSha256 -Bytes $bytes
+    if ([string]$NativeGraphics.graphicCtrlSha256 -cne $expected.Sha256 -or
+        $actualHash -cne $expected.Sha256 -or
+        [string]::Join(',', $declaredDwords) -cne
+            [string]::Join(',', $expected.Dwords) -or
+        [string]$NativeGraphics.advancedEffectsPolicy -cne
+            $expected.AdvancedEffectsPolicy -or
+        [string]$NativeGraphics.pixelFogPolicy -cne 'pixel' -or
+        [string]$NativeGraphics.lowResolutionTexturesPolicy -cne 'disabled' -or
+        [string]$NativeGraphics.frameSkipPolicy -cne 'disabled') {
+        throw "$Label does not match its exact vector, digest, or native-detail policy"
+    }
+
+    [pscustomobject]@{
+        PresetId = $presetId
+        GraphicCtrlDwords = [uint32[]]$declaredDwords
+        GraphicCtrlBytes = $bytes
+        GraphicCtrlSha256 = $actualHash
+        AdvancedEffectsPolicy = [string]$NativeGraphics.advancedEffectsPolicy
+        PixelFogPolicy = [string]$NativeGraphics.pixelFogPolicy
+        LowResolutionTexturesPolicy =
+            [string]$NativeGraphics.lowResolutionTexturesPolicy
+        FrameSkipPolicy = [string]$NativeGraphics.frameSkipPolicy
+    }
+}
+
+function Get-PSOBBClientGraphicCtrlState {
+    [CmdletBinding()]
+    param([string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB')
+
+    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Container)) {
+        throw "PSOBB client registry key is missing: $RegistryPath"
+    }
+    $registry = Get-Item -LiteralPath $RegistryPath
+    if (@($registry.GetValueNames()) -cnotcontains 'GRAPHICCTRL') {
+        throw 'PSOBB client GRAPHICCTRL registry value is missing'
+    }
+    if ($registry.GetValueKind('GRAPHICCTRL') -ne
+            [Microsoft.Win32.RegistryValueKind]::Binary) {
+        throw 'PSOBB client GRAPHICCTRL registry value is not binary'
+    }
+    $bytes = $registry.GetValue(
+        'GRAPHICCTRL',
+        $null,
+        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($bytes -isnot [byte[]] -or $bytes.Count -ne 36) {
+        throw 'PSOBB client GRAPHICCTRL registry value is not exactly 36 bytes'
+    }
+    $copy = [byte[]]::new(36)
+    [Array]::Copy($bytes, $copy, 36)
+    [pscustomobject]@{
+        Dwords = [uint32[]](ConvertFrom-PSOBBGraphicCtrlBytes -Bytes $copy)
+        Bytes = $copy
+        Sha256 = Get-PSOBBGraphicCtrlSha256 -Bytes $copy
+    }
+}
+
+function New-PSOBBClientGraphicCtrlBackup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$State
+    )
+
+    $marker = Assert-PSOBBRuntimeMarker -Layout $Layout
+    if ($State.Bytes -isnot [byte[]] -or @($State.Dwords).Count -ne 9 -or
+        [string]$State.Sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        (Get-PSOBBGraphicCtrlSha256 -Bytes $State.Bytes) -cne
+            [string]$State.Sha256) {
+        throw 'Cannot back up an invalid PSOBB GRAPHICCTRL state'
+    }
+
+    $backupRoot = Assert-PathWithinRoot `
+        -Path (Join-Path $Layout.Backups 'client-graphics-registry') `
+        -Root $Layout.Root
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    Set-PSOBBProtectedAcl -Path $backupRoot
+    $backupPath = Assert-PathWithinRoot -Path (Join-Path $backupRoot (
+        'graphicctrl-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ') +
+        '-' + [Guid]::NewGuid().ToString('N') + '.json')) -Root $Layout.Root
+    $backup = [ordered]@{
+        schemaVersion = 1
+        installationId = [string]$marker.installationId
+        createdAtUtc = [DateTime]::UtcNow.ToString('o')
+        registryValueName = 'GRAPHICCTRL'
+        registryValueKind = 'Binary'
+        graphicCtrlDwords = [uint32[]]$State.Dwords
+        graphicCtrlSha256 = [string]$State.Sha256
+    }
+    $text = $backup | ConvertTo-Json -Depth 4
+    $expectedHash = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData(
+            [System.Text.UTF8Encoding]::new($false).GetBytes($text))).ToLowerInvariant()
+    Write-PSOBBAtomicUtf8Text `
+        -Path $backupPath `
+        -Text $text `
+        -Root $Layout.Root `
+        -ExpectedSha256 $expectedHash
+    Set-PSOBBProtectedAcl -Path $backupPath
+    $backupPath
+}
+
+function Set-PSOBBGraphicCtrlRegistryBytes {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][Parameter(Mandatory)][byte[]]$Bytes,
+        [string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB'
+    )
+
+    if ($Bytes.Count -ne 36) {
+        throw 'Refusing to write GRAPHICCTRL data that is not exactly 36 bytes'
+    }
+    New-ItemProperty -LiteralPath $RegistryPath -Name 'GRAPHICCTRL' `
+        -PropertyType Binary -Value $Bytes -Force | Out-Null
+    $verified = Get-PSOBBClientGraphicCtrlState -RegistryPath $RegistryPath
+    $expectedHash = Get-PSOBBGraphicCtrlSha256 -Bytes $Bytes
+    if ([string]$verified.Sha256 -cne $expectedHash) {
+        throw 'PSOBB GRAPHICCTRL registry read-back verification failed'
+    }
+    $verified
+}
+
+function Set-PSOBBClientNativeGraphics {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$Profile,
+        [string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB'
+    )
+
+    Assert-PSOBBRuntimeMarker -Layout $Layout | Out-Null
+    Assert-PSOBBNoRunningClients -Layout $Layout | Out-Null
+    Assert-PSOBBNoNamedClientProcesses | Out-Null
+    $contract = Assert-PSOBBNativeGraphicsContract `
+        -NativeGraphics $Profile.nativeGraphics `
+        -Label 'Materialized client nativeGraphics'
+    $prior = Get-PSOBBClientGraphicCtrlState -RegistryPath $RegistryPath
+    if ([string]$prior.Sha256 -ceq $contract.GraphicCtrlSha256) {
+        return [pscustomobject]@{
+            Applied = $false
+            PresetId = $contract.PresetId
+            GraphicCtrlSha256 = $contract.GraphicCtrlSha256
+            BackupPath = $null
+        }
+    }
+
+    $backupPath = New-PSOBBClientGraphicCtrlBackup -Layout $Layout -State $prior
+    try {
+        $verified = Set-PSOBBGraphicCtrlRegistryBytes `
+            -Bytes $contract.GraphicCtrlBytes `
+            -RegistryPath $RegistryPath
+        if ([string]$verified.Sha256 -cne $contract.GraphicCtrlSha256) {
+            throw 'PSOBB GRAPHICCTRL does not match the selected profile after application'
+        }
+    } catch {
+        $applyError = $_
+        try {
+            $restored = Set-PSOBBGraphicCtrlRegistryBytes `
+                -Bytes $prior.Bytes `
+                -RegistryPath $RegistryPath
+            if ([string]$restored.Sha256 -cne [string]$prior.Sha256) {
+                throw 'Restored GRAPHICCTRL digest does not match the pre-transaction state'
+            }
+        } catch {
+            throw ('PSOBB native graphics application failed and GRAPHICCTRL ' +
+                'rollback also failed; close the client and use the protected ' +
+                "value-only backup. Apply: $($applyError.Exception.Message) " +
+                "Rollback: $($_.Exception.Message)")
+        }
+        throw $applyError
+    }
+
+    [pscustomobject]@{
+        Applied = $true
+        PresetId = $contract.PresetId
+        GraphicCtrlSha256 = $contract.GraphicCtrlSha256
+        BackupPath = $backupPath
+    }
+}
+
+function Restore-PSOBBClientGraphicCtrlBackup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)][string]$BackupPath,
+        [string]$RegistryPath = 'HKCU:\Software\SonicTeam\PSOBB'
+    )
+
+    $marker = Assert-PSOBBRuntimeMarker -Layout $Layout
+    Assert-PSOBBNoRunningClients -Layout $Layout | Out-Null
+    Assert-PSOBBNoNamedClientProcesses | Out-Null
+    $backupRoot = Assert-PathWithinRoot `
+        -Path (Join-Path $Layout.Backups 'client-graphics-registry') `
+        -Root $Layout.Root
+    $safeBackup = Assert-PathWithinRoot -Path $BackupPath -Root $backupRoot
+    if (-not (Test-Path -LiteralPath $safeBackup -PathType Leaf)) {
+        throw 'The protected GRAPHICCTRL backup is missing'
+    }
+    $item = Get-Item -LiteralPath $safeBackup -Force
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt 8KB) {
+        throw 'The protected GRAPHICCTRL backup has an invalid filesystem type or size'
+    }
+    if (-not (Get-Acl -LiteralPath $safeBackup).AreAccessRulesProtected) {
+        throw 'The GRAPHICCTRL backup no longer has a protected DACL'
+    }
+    try {
+        $backup = Get-Content -Raw -LiteralPath $safeBackup |
+            ConvertFrom-Json -Depth 5 -DateKind String
+    } catch {
+        throw 'The protected GRAPHICCTRL backup is not valid JSON'
+    }
+    Assert-PSOBBExactJsonProperties -Object $backup `
+        -Label 'Protected GRAPHICCTRL backup' -Names @(
+            'schemaVersion', 'installationId', 'createdAtUtc',
+            'registryValueName', 'registryValueKind', 'graphicCtrlDwords',
+            'graphicCtrlSha256') | Out-Null
+    $bytes = ConvertTo-PSOBBGraphicCtrlBytes -Dwords @($backup.graphicCtrlDwords)
+    $expectedHash = Get-PSOBBGraphicCtrlSha256 -Bytes $bytes
+    if ([int]$backup.schemaVersion -ne 1 -or
+        [string]$backup.installationId -cne [string]$marker.installationId -or
+        [string]$backup.registryValueName -cne 'GRAPHICCTRL' -or
+        [string]$backup.registryValueKind -cne 'Binary' -or
+        [string]$backup.graphicCtrlSha256 -cne $expectedHash) {
+        throw 'The protected GRAPHICCTRL backup does not match this runtime or its digest'
+    }
+
+    $prior = Get-PSOBBClientGraphicCtrlState -RegistryPath $RegistryPath
+    if ([string]$prior.Sha256 -ceq $expectedHash) {
+        return [pscustomobject]@{
+            Restored = $false
+            GraphicCtrlSha256 = $expectedHash
+            BackupPath = $safeBackup
+        }
+    }
+    try {
+        $verified = Set-PSOBBGraphicCtrlRegistryBytes `
+            -Bytes $bytes `
+            -RegistryPath $RegistryPath
+        if ([string]$verified.Sha256 -cne $expectedHash) {
+            throw 'Backup restoration read-back did not match its digest'
+        }
+    } catch {
+        $restoreError = $_
+        try {
+            Set-PSOBBGraphicCtrlRegistryBytes `
+                -Bytes $prior.Bytes `
+                -RegistryPath $RegistryPath | Out-Null
+        } catch {
+            throw ('Protected GRAPHICCTRL restoration failed and its transaction ' +
+                "also failed to preserve the current value. Restore: $($restoreError.Exception.Message) " +
+                "Preserve: $($_.Exception.Message)")
+        }
+        throw $restoreError
+    }
+    [pscustomobject]@{
+        Restored = $true
+        GraphicCtrlSha256 = $expectedHash
+        BackupPath = $safeBackup
+    }
 }
 
 function Assert-PSOBBClientLoginRegistry {

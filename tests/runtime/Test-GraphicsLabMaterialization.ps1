@@ -23,6 +23,12 @@ Add-Result 'materializer validates locked graphics artifacts' (
     $source -match 'Assert-LockedArtifact' -and
     $source -match 'Get-LowerSha256') `
     'every selected binary is size and SHA-256 checked'
+Add-Result 'accepted profiles materialize only catalog selections' (
+    $source -match 'profileAccepted = \[string\]\$evidenceCandidates\[0\]\.disposition -ceq ''accepted''' -and
+    $source -match 'PSBoundParameters\.ContainsKey\(''RenderWidth''\)' -and
+    $source -match 'cannot materialize a nonselected resolution' -and
+    $source -match 'cannot materialize a nonselected VSync owner') `
+    'accepted profiles consume selected resolution, presentation, filtering, MSAA, VRAM, VSync, and post-process values'
 Add-Result 'materializer stages before atomic swap' (
     $source -match "\.staging-" -and
     $source -match 'Assert-PSOBBLocalLabClientRuntimeContract -Layout \$validationLayout' -and
@@ -38,11 +44,15 @@ Add-Result 'materializer serializes client changes' (
     'concurrent or active-client mutation fails closed'
 Add-Result 'materializer refuses active local asset and module compositions' (
     $source -match 'Assert-NoActiveLocalAssetComposition' -and
-    $source -match "PSObject\.Properties\['localAssetOverlay'\]" -and
-    $source -match "PSObject\.Properties\['localModules'\]" -and
-    $source -match 'Set-PSOBBAshenbubsHDClientActivation\.ps1 -Action Rollback first' -and
+    $source -match "currentProfile\.PSObject\.Properties\['localAssetOverlay'\]" -and
+    $source -match "currentProfile\.PSObject\.Properties\['localModules'\]" -and
+    $source -match 'Set-PSOBBAshenbubsHDClientActivation\.ps1 -Action Rollback' -and
     $source -notmatch "ValidateSet\([\s\S]*?'lab-widescreen-hd-16x10'") `
     'private HD activation must be explicitly rolled back and is never a clean-materializer target'
+Add-Result 'materializer refuses an active local visual-asset stack' (
+    $source -match "currentProfile\.PSObject\.Properties\['localVisualAssets'\]" -and
+    $source -match 'local visual assets in reverse order') `
+    'rematerialization cannot silently discard profile-bound private visual assets'
 
 $temporaryClient = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-GraphicsMaterializer-' + [Guid]::NewGuid().ToString('N'))
@@ -71,7 +81,8 @@ try {
     try {
         Assert-NoActiveLocalAssetComposition -ClientRoot $temporaryClient
     } catch {
-        $overlayRejected = $_.Exception.Message -match 'Action Rollback first'
+        $overlayRejected = $_.Exception.Message -match
+            'Set-PSOBBAshenbubsHDClientActivation\.ps1 -Action Rollback'
     }
     Add-Result 'active localAssetOverlay fails preflight' $overlayRejected `
         'explicit transactional rollback is required before replacement'
@@ -84,10 +95,25 @@ try {
     try {
         Assert-NoActiveLocalAssetComposition -ClientRoot $temporaryClient
     } catch {
-        $moduleRejected = $_.Exception.Message -match 'Action Rollback first'
+        $moduleRejected = $_.Exception.Message -match
+            'Set-PSOBBAshenbubsHDClientActivation\.ps1 -Action Rollback'
     }
     Add-Result 'active localModules fails preflight' $moduleRejected `
         'clean materialization cannot discard a module-backed private composition'
+
+    [System.IO.File]::WriteAllText(
+        $profilePath,
+        '{"profileId":"lab-widescreen-16x10","localVisualAssets":[{"componentId":"fixture"}]}',
+        [System.Text.UTF8Encoding]::new($false))
+    $visualAssetRejected = $false
+    try {
+        Assert-NoActiveLocalAssetComposition -ClientRoot $temporaryClient
+    } catch {
+        $visualAssetRejected = $_.Exception.Message -match
+            'Roll back local visual assets in reverse order'
+    }
+    Add-Result 'active localVisualAssets fails preflight' $visualAssetRejected `
+        'clean materialization cannot replace a private visual-asset composition'
 } finally {
     if (Test-Path -LiteralPath $temporaryClient) {
         Remove-Item -LiteralPath $temporaryClient -Recurse -Force
@@ -114,6 +140,20 @@ Add-Result 'watermark is always disabled' (
     $source -match "@\('DirectX', 'dgVoodooWatermark', 'false'\)" -and
     $source -match 'watermarkEnabled = \$false') `
     'configuration and profile agree'
+Add-Result 'virtual VRAM is an explicit bounded profile experiment' (
+    $source -match "ValidateSet\(256, 1024, 2048, 4096\)" -and
+    $source -match '@\(''DirectX'', ''VRAM'', \(\[string\]\$VirtualVramMb\)\)' -and
+    $source -match 'virtualVramMb =') `
+    '256, 1024, 2048, and 4096 MB candidates are materialized and recorded'
+Add-Result 'VSync has exactly one declared per-profile owner' (
+    $source -match "ValidateSet\('None', 'DgVoodoo'\)" -and
+    $source -match 'if \(\$VSyncOwner -ceq ''DgVoodoo''\) \{ ''true'' \} else \{ ''false'' \}' -and
+    $source -match 'vsyncOwner =') `
+    'the materializer owns the no-VSync versus dgVoodoo-VSync comparison'
+Add-Result 'materialized profiles carry native GRAPHICCTRL policy' (
+    $source -match 'schemaVersion = 7' -and
+    $source -match 'nativeGraphics = \$profileDeclaration.nativeGraphics') `
+    'client launch can apply the exact profile-owned native graphics vector'
 Add-Result 'MSAA is isolated from supersampling' (
     $source -match 'MSAA experiments are intentionally limited to native 2560x1600 rendering') `
     '3840x2400 cannot be combined with MSAA'

@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $scriptPath = Join-Path $repositoryRoot 'scripts\Set-PSOBBAshenbubsHDOverlay.ps1'
+$scriptSource = Get-Content -Raw -LiteralPath $scriptPath
 $commonPath = Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1'
 . $commonPath
 
@@ -36,6 +37,12 @@ function Assert-Throws {
     }
     Assert-True -Condition $threw -Label $Label
 }
+
+Assert-True -Condition (
+    $scriptSource -match 'Join-Path \$layout\.Archives' -and
+    $scriptSource -match 'graphics-lab\\local-assets\\AshenbubsHD-PSOBB-v1\.02-cfe0fd18\.zip' -and
+    $scriptSource -notmatch "GetFolderPath\('UserProfile'\).*Downloads") `
+    -Label 'default archive is consolidated under the canonical runtime'
 
 function New-TestZip {
     param(

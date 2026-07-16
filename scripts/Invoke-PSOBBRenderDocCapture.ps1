@@ -231,6 +231,8 @@ function Write-PSOBBJsonAtomically {
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
+try {
 
 $approvedProcesses = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
 $anyNamedProcesses = @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue)
@@ -293,10 +295,14 @@ $stdoutTask = $null
 $stderrTask = $null
 $stdout = ''
 $stderr = ''
+$graphicsRegistryTransaction = $null
 try {
     # renderdoccmd creates the game process itself. Validate the registry
     # contract without reading or altering locally remembered credentials.
     Assert-PSOBBClientLoginRegistry | Out-Null
+    $graphicsRegistryTransaction = Set-PSOBBClientNativeGraphics `
+        -Layout $layout `
+        -Profile $profile.Materialized
     $runner = [System.Diagnostics.Process]::Start($startInfo)
     if (-not $runner) {
         throw 'Windows did not start the locked RenderDoc command-line executable'
@@ -325,6 +331,22 @@ try {
     if ($captureIdentity -eq 0 -or $unsignedExitCode -ne $captureIdentity) {
         throw "renderdoccmd exit identity $unsignedExitCode did not match reported capture identity $captureIdentity"
     }
+} catch {
+    $launchError = $_
+    if ($graphicsRegistryTransaction -and
+        $graphicsRegistryTransaction.Applied -and
+        @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue).Count -eq 0) {
+        try {
+            Restore-PSOBBClientGraphicCtrlBackup `
+                -Layout $layout `
+                -BackupPath $graphicsRegistryTransaction.BackupPath | Out-Null
+        } catch {
+            throw ('RenderDoc launch failed and its native graphics registry ' +
+                "transaction also failed to roll back. Launch: $($launchError.Exception.Message) " +
+                "Rollback: $($_.Exception.Message)")
+        }
+    }
+    throw $launchError
 } finally {
     $runnerExited = $false
     if ($runner) {
@@ -428,6 +450,8 @@ $manifest = [ordered]@{
         id = $ProfileId
         materializedFile = 'client-profile.json'
         materializedSha256 = $profile.ProfileSha256
+        nativeGraphicsPresetId = [string]$graphicsRegistryTransaction.PresetId
+        graphicCtrlSha256 = [string]$graphicsRegistryTransaction.GraphicCtrlSha256
         requestedExpectations = [ordered]@{
             internalRender = [ordered]@{
                 width = $profile.RequestedInternalWidth
@@ -517,4 +541,7 @@ Write-PSOBBJsonAtomically -Value $manifest -Path $manifestPath
         $profile.RequestedOutputWidth, $profile.RequestedOutputHeight
     RenderTargetEvidence = 'pending-replay-inspection'
     NextAction = 'Bring PSOBB to the required scene and press F12 manually once. Do not enter credentials while recording evidence.'
+}
+} finally {
+    Exit-PSOBBClientOperationLock -Mutex $clientOperationMutex
 }

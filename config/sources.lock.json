@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-14T19:00:00Z",
+  "generatedAtUtc": "2026-07-15T23:30:00Z",
   "components": [
     {
       "id": "newserv-stable-release",
@@ -477,6 +477,181 @@
       ]
     },
     {
+      "id": "luthee-hd-ui-v1.1.6-local-import",
+      "role": "user-imported-local-hd-ui-assets",
+      "sourceUrl": "https://www.pioneer2.net/community/threads/hd-ui-project-by-luthee-a-k-a-eleria.23410/",
+      "releaseUrl": "https://drive.google.com/file/d/1bO5PUIE5z7vOKigWzfR-qKMMMLRzvKpQ/view",
+      "version": "1.1.6-standard",
+      "checkedAtUtc": "2026-07-15T18:51:34Z",
+      "retrievedAtUtc": "2026-07-15T18:51:34Z",
+      "size": 1035297,
+      "sha256": "3e9fb323680c8293038c993e02e6d6310156ffa440fe46936047223b9f52a4c7",
+      "signatureState": "Author-origin Google Drive archive is not publisher-signed; the complete ZIP and every extracted member are SHA-256 locked",
+      "scanState": "7-Zip integrity and path-safety checks passed; Microsoft Defender engine 4.18.26060.3008-0 with signatures 1.455.153.0 reported no threats on 2026-07-15",
+      "license": "Proprietary mod assets; the author prohibits editing, repacking, bundling, rereleasing, and alternate hosting",
+      "redistribution": "Private unchanged local installation only; never commit, bundle, rehost, repack, or add to a public release manifest",
+      "distributionClass": "local-only",
+      "compatibilityState": "rejected-stock-59nl-runtime-access-violation",
+      "compatibility": "Rejected for this exact 59NL and Ashenbubs All composition after the isolated unchanged UI layer caused Psobb.exe access violation 0xc0000005 at offset 0x00388270; the archive remains preserved for provenance only",
+      "rollbackTarget": "local-lab/visual-asset-activations/luthee-hd-ui-v1.1.6-local-import/snapshots",
+      "members": [
+        {
+          "path": "data/ephinea/custom/f256_player_tex.prs",
+          "destinationPath": "data/f256_player_tex.prs",
+          "size": 154030,
+          "sha256": "1492affd0ec678a88a02ad833fed0271baeae97787ababe160f794f31421189b",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/ephinea/custom/texturejapanese.xvm",
+          "destinationPath": "data/texturejapanese.xvm",
+          "size": 3473792,
+          "sha256": "e4ef80531db69c888bcac730b8f20e18ab65382094d46592081248fca1aee17e",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/f256_hyouji.prs",
+          "destinationPath": "data/f256_hyouji.prs",
+          "size": 793388,
+          "sha256": "13ee5a4b1389c280839ee455f03bbfdef05e8a24f25443c6495f9f2252eb9808",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/radermapframe.xvm",
+          "destinationPath": "data/radermapframe.xvm",
+          "size": 24768,
+          "sha256": "1dea34da4e180aeb1207fba2eec1ac51c3dcc3d281716163d99c2e30d2c7eafb",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/patch.xvm",
+          "destinationPath": "data/patch.xvm",
+          "size": 1052864,
+          "sha256": "aa99aa40adcb07bf8d9fb0e32796a087e3908ea92f5c6382b76ccf75df247e80",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "higher-resolution-item-box-textures-2025-12-30-local-import",
+      "role": "user-imported-local-item-box-texture",
+      "sourceUrl": "https://www.pioneer2.net/community/threads/higher-resolution-item-box-textures.32333/",
+      "releaseUrl": "https://drive.google.com/file/d/1ZbKSgo1FmtBen1tIxyoTaLnpo1cZ2u2u/view",
+      "version": "2025-12-30",
+      "checkedAtUtc": "2026-07-15T18:51:34Z",
+      "retrievedAtUtc": "2026-07-15T18:51:34Z",
+      "size": 33577,
+      "sha256": "ad3eca963f8d556ef4e0910c06725eff89da76018a9c4aa7e4852a9e2515aef7",
+      "signatureState": "Author-origin Google Drive RAR is not publisher-signed; archive and extracted member are SHA-256 locked",
+      "scanState": "7-Zip integrity and path-safety checks passed; Microsoft Defender engine 4.18.26060.3008-0 with signatures 1.455.153.0 reported no threats on 2026-07-15",
+      "license": "No explicit redistribution or modification grant found",
+      "redistribution": "Private unchanged local installation only; never commit, bundle, rehost, repack, or add to a public release manifest",
+      "distributionClass": "local-only",
+      "compatibilityState": "rejected-stock-59nl-runtime-access-violation",
+      "compatibility": "Rejected for this exact 59NL and Ashenbubs All composition after the unchanged data/item.bml layer caused Psobb.exe access violation 0xc0000005 at offset 0x0046cf08 on the live lobby/game path; the archive remains preserved for provenance only",
+      "rollbackTarget": "local-lab/visual-asset-activations/higher-resolution-item-box-textures-2025-12-30-local-import/snapshots",
+      "members": [
+        {
+          "path": "data/item.bml",
+          "destinationPath": "data/item.bml",
+          "size": 44864,
+          "sha256": "8e313477b1e4eb8975da2f4e49d3c1a942763cf8d76c497cb1577e70dafbd5ab",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "echelon-hd-effects-technics-2019-05-27-local-import",
+      "role": "user-imported-local-effects-assets",
+      "sourceUrl": "https://www.pioneer2.net/community/threads/echelons-skins-modifications.4357/",
+      "releaseUrl": "https://www.mediafire.com/file/n3788s0lr6y8fal/PARTICLES_-_HD_Custom_Effects_%26_Technics.rar/file",
+      "version": "2019-05-27",
+      "checkedAtUtc": "2026-07-15T18:51:34Z",
+      "retrievedAtUtc": "2026-07-15T18:51:34Z",
+      "size": 1181272,
+      "sha256": "2884f143c739caecd90c578d09b15f6a19d075d7feb4d826c406a3d507c5e58d",
+      "signatureState": "Author-linked MediaFire RAR is not publisher-signed; archive and extracted members are SHA-256 locked",
+      "scanState": "7-Zip integrity and path-safety checks passed; Microsoft Defender engine 4.18.26060.3008-0 with signatures 1.455.153.0 reported no threats on 2026-07-15",
+      "license": "No explicit redistribution or modification grant found",
+      "redistribution": "Provenance record only; never activate over AshenbubsHD, commit, bundle, rehost, repack, or add to a public release manifest",
+      "distributionClass": "local-only",
+      "compatibilityState": "rejected-foundation-collision",
+      "compatibility": "Rejected from the accepted stack because data/bm_eff_ice.bml is owned by the immutable AshenbubsHD All foundation",
+      "rollbackTarget": "local-lab/visual-asset-activations/echelon-hd-effects-technics-2019-05-27-local-import/snapshots",
+      "conflicts": [
+        {
+          "componentId": "ashenbubs-hd-psobb-v1.02-local-import",
+          "destinationPath": "data/bm_eff_ice.bml",
+          "policy": "reject-ashenbubs-collision"
+        }
+      ],
+      "members": [
+        {
+          "path": "data/bm_eff_ice.bml",
+          "destinationPath": "data/bm_eff_ice.bml",
+          "size": 175104,
+          "sha256": "68872c6d66c8794e2c41c4f1f193fccbcd8a77dedc657884d83ef4fd1f16bdcc",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/effect_nt.xvm",
+          "destinationPath": "data/effect_nt.xvm",
+          "size": 3009818,
+          "sha256": "c59a0341423161d3e24f0d499fc37122a3a76c9075fb660884a18370e74438f3",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/technic.xvm",
+          "destinationPath": "data/technic.xvm",
+          "size": 356756,
+          "sha256": "a319b4adccd849b51e5162491a43761122bfbe31b3144699a3115a070916f643",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "data/technic_pt.xvm",
+          "destinationPath": "data/technic_pt.xvm",
+          "size": 27946,
+          "sha256": "d40b9a02136e9b26b9b55cc629c953454c1a47f4c8850cc9c3f374d2bcca2420",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "echelon-hd-blood-2018-06-16-local-import",
+      "role": "user-imported-local-blood-effect-asset",
+      "sourceUrl": "https://www.pioneer2.net/community/threads/echelons-skins-modifications.4357/",
+      "releaseUrl": "https://www.mediafire.com/file/m69e2f6597b1aek/MISC_-_HD_Blood_Splatters.rar/file",
+      "version": "2018-06-16",
+      "checkedAtUtc": "2026-07-15T18:51:34Z",
+      "retrievedAtUtc": "2026-07-15T18:51:34Z",
+      "size": 493321,
+      "sha256": "d3f70741c183c2da1bd77fba7b306da08c50194267a915be446fa71e9e6c633f",
+      "signatureState": "Author-linked MediaFire RAR is not publisher-signed; archive and extracted member are SHA-256 locked",
+      "scanState": "7-Zip integrity and path-safety checks passed; Microsoft Defender engine 4.18.26060.3008-0 with signatures 1.455.153.0 reported no threats on 2026-07-15",
+      "license": "No explicit redistribution or modification grant found",
+      "redistribution": "Provenance record only; never activate over AshenbubsHD, commit, bundle, rehost, repack, or add to a public release manifest",
+      "distributionClass": "local-only",
+      "compatibilityState": "rejected-foundation-collision",
+      "compatibility": "Rejected from the accepted stack because data/bm_ene_common_all.bml is owned by the immutable AshenbubsHD All foundation",
+      "rollbackTarget": "local-lab/visual-asset-activations/echelon-hd-blood-2018-06-16-local-import/snapshots",
+      "conflicts": [
+        {
+          "componentId": "ashenbubs-hd-psobb-v1.02-local-import",
+          "destinationPath": "data/bm_ene_common_all.bml",
+          "policy": "reject-ashenbubs-collision"
+        }
+      ],
+      "members": [
+        {
+          "path": "data/bm_ene_common_all.bml",
+          "destinationPath": "data/bm_ene_common_all.bml",
+          "size": 536544,
+          "sha256": "acffc884c3d0778724c79c1570f2466e629c956c40eef8ce6a16df89b98d76ea",
+          "authenticode": "NotApplicable"
+        }
+      ]
+    },
+    {
       "id": "fidelityfx-cas-source",
       "role": "licensed-shader-source",
       "sourceUrl": "https://github.com/GPUOpen-Effects/FidelityFX-CAS.git",
@@ -523,12 +698,12 @@
       "sourceUrl": "repo:src/PSOBB.Enhancement/build-manifest.json",
       "releaseUrl": null,
       "version": "0.1.0-dev",
-      "checkedAtUtc": "2026-07-14T23:03:24Z",
-      "retrievedAtUtc": "2026-07-14T23:03:24Z",
-      "size": 5414,
-      "sha256": "739801810c882e79f75b467c5d5bdf721eef6fc8e6ea635fbcccc831a7f24a0d",
+      "checkedAtUtc": "2026-07-15T20:54:58Z",
+      "retrievedAtUtc": "2026-07-15T20:54:58Z",
+      "size": 5772,
+      "sha256": "9671dcd66a311e199899c199a5e6ba0d9ca4b14d4d4cbb3c33597a52abf20b52",
       "signatureState": "Source-controlled build manifest is hash-locked; the exact x86 canary artifact is unsigned",
-      "scanState": "Project-built source and artifact; exact build, unit, ABI, and client-byte verification passed; live runtime acceptance remains pending",
+      "scanState": "Project-built source and artifact; two clean build directories and a separate source root produced exact hashes; unit, ABI, and client-byte verification passed; live runtime acceptance remains pending",
       "license": "MIT at repo:src/PSOBB.Enhancement/LICENSE.md",
       "redistribution": "Project source and project-built artifact may be redistributed with the MIT license; proprietary client files remain excluded",
       "compatibility": "Exact 59NL only; guarded 16:10 presentation and horizontal FOV exist, but HUD/minimap transformation and automatic resize-triggered device recreation are not implemented",
@@ -552,7 +727,7 @@
           "path": "PSOBB.Enhancement.asi",
           "buildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.asi",
           "size": 216576,
-          "sha256": "c810c44682593a79d702a6bb01c845af1bc01d52db979f90b433437c5581675a",
+          "sha256": "b67a6f64ad35ad8535a7ba7fa5be18f186757fa8af2e31b1d6e1c0dea26a716e",
           "authenticode": "NotSigned"
         }
       ]
@@ -563,12 +738,12 @@
       "sourceUrl": "repo:src/PSOBB.LargeAssets/build-manifest.json",
       "releaseUrl": null,
       "version": "0.1.0-pinned-59nl",
-      "checkedAtUtc": "2026-07-14T19:05:18Z",
-      "retrievedAtUtc": "2026-07-14T19:05:18Z",
-      "size": 6264,
-      "sha256": "5efd70efd8e8b013b9a115bcc4cdaac882d24ac5e621f9510610b9142947379c",
+      "checkedAtUtc": "2026-07-15T20:54:58Z",
+      "retrievedAtUtc": "2026-07-15T20:54:58Z",
+      "size": 6293,
+      "sha256": "0bdfabbb3b7f8822016f921e3ee634b9772566e963e8420768fbfbe2d50b335c",
       "signatureState": "Source-controlled reproducible build manifest is hash-locked; the exact x86 ASI is unsigned",
-      "scanState": "Project-built source and artifact; clean rebuild, CTest, ABI, exact-client byte preflight, and inert-without-enabled-INI checks passed",
+      "scanState": "Project-built source and artifact; two clean build directories and a separate source root produced exact hashes; CTest, ABI, exact-client byte preflight, and inert-without-enabled-INI checks passed",
       "license": "MIT at repo:src/PSOBB.LargeAssets/LICENSE.md with the Blue Burst Patch Project MIT notice preserved",
       "redistribution": "Project source and project-built artifact may be redistributed with LICENSE.md and THIRD-PARTY-NOTICES.md; proprietary client and AshenbubsHD assets remain excluded",
       "compatibility": "Exact 59NL only; raises the 17 deduplicated client image-allocation sites to 100000000 bytes and remains inert unless its exact adjacent INI enables it",

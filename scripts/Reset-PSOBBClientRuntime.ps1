@@ -15,6 +15,9 @@ param(
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 $marker = Assert-PSOBBRuntimeMarker -Layout $layout
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$graphicsCatalogPath = Join-Path $repositoryRoot 'config\graphics-profiles.json'
+$graphicsCatalog = Get-Content -Raw -LiteralPath $graphicsCatalogPath |
+    ConvertFrom-Json -Depth 50
 $lockPath = Join-Path $repositoryRoot 'config\sources.lock.json'
 $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json -Depth 20
 $clientLocks = @($lock.components | Where-Object id -eq 'tethealla-59nl-english')
@@ -49,6 +52,30 @@ $targetClient = if ($Channel -eq 'Stable') {
 
 if (($Channel -eq 'Stable') -and ($Renderer -eq 'DgVoodooD3D12')) {
     throw 'The D3D12 renderer is canary-only; use -Channel Canary'
+}
+
+$catalogProfileId = if ($Renderer -eq 'Native') {
+    'safe-native-4x3'
+} else {
+    'clarity-dgvoodoo-4x3'
+}
+$catalogProfiles = @($graphicsCatalog.profiles | Where-Object {
+    [string]$_.id -ceq $catalogProfileId
+})
+if ([int]$graphicsCatalog.schemaVersion -ne 1 -or $catalogProfiles.Count -ne 1) {
+    throw "The graphics catalog does not declare profile '$catalogProfileId' exactly once"
+}
+$nativeGraphicsContract = Assert-PSOBBNativeGraphicsContract `
+    -NativeGraphics $catalogProfiles[0].nativeGraphics `
+    -Label "Graphics catalog profile '$catalogProfileId' nativeGraphics"
+$materializedNativeGraphics = [ordered]@{
+    presetId = $nativeGraphicsContract.PresetId
+    graphicCtrlDwords = [uint32[]]$nativeGraphicsContract.GraphicCtrlDwords
+    graphicCtrlSha256 = $nativeGraphicsContract.GraphicCtrlSha256
+    advancedEffectsPolicy = $nativeGraphicsContract.AdvancedEffectsPolicy
+    pixelFogPolicy = $nativeGraphicsContract.PixelFogPolicy
+    lowResolutionTexturesPolicy = $nativeGraphicsContract.LowResolutionTexturesPolicy
+    frameSkipPolicy = $nativeGraphicsContract.FrameSkipPolicy
 }
 
 foreach ($runtimePath in @(
@@ -230,6 +257,8 @@ try {
         schemaVersion = 5
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
         channel = $Channel.ToLowerInvariant()
+        profileId = $catalogProfileId
+        nativeGraphics = $materializedNativeGraphics
         renderer = $Renderer
         baseExecutableSha256 = $expectedBaseHash
         wrapperSha256 = $wrapperHash

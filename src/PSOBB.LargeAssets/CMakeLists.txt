@@ -83,12 +83,14 @@ if(MSVC)
       /Zc:inline)
   endforeach()
 
-  target_link_options(PSOBB.LargeAssets PRIVATE
-    /Brepro
-    /DYNAMICBASE
-    /INCREMENTAL:NO
-    /NXCOMPAT
-    /GUARD:CF)
+  foreach(target PSOBB.LargeAssets PSOBB.LargeAssets.Verify)
+    target_link_options(${target} PRIVATE
+      /Brepro
+      /DYNAMICBASE
+      /INCREMENTAL:NO
+      /NXCOMPAT
+      /GUARD:CF)
+  endforeach()
 endif()
 
 if(BUILD_TESTING)

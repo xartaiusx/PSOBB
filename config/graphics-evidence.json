@@ -1,7 +1,9 @@
 {
   "$schema": "./schemas/graphics-evidence.schema.json",
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-14T22:36:59Z",
+  "generatedAtUtc": "2026-07-15T23:30:00Z",
+  "LocalPrivateGraphicallyAccepted": false,
+  "PublicDistributableGraphicallyAccepted": false,
   "acceptancePolicy": {
     "requiredPassGates": [
       "provenance",
@@ -35,10 +37,134 @@
     "casMaximumHaloOvershootPercent": 3,
     "aspectErrorMaximumPercent": 0.1
   },
+  "assetCandidates": [
+    {
+      "componentId": "ashenbubs-hd-psobb-v1.02-local-import",
+      "distributionClass": "local-only",
+      "activationOrder": 10,
+      "disposition": "pending",
+      "collisionPolicy": "immutable-foundation",
+      "destinationOwnership": {
+        "ownerComponentId": "ashenbubs-hd-psobb-v1.02-local-import",
+        "source": "composed-activation-manifest",
+        "destinationPaths": [],
+        "artifactRefs": [
+          "repo:config/sources.lock.json",
+          "repo:scripts/Set-PSOBBAshenbubsHDClientActivation.ps1"
+        ]
+      },
+      "note": "The unchanged All composition is the immutable foundation. In the 2026-07-15 exact High-profile run it reached Forest, produced a lossless 2560x1600 full-width frame, remained responsive through a ten-minute gameplay trace, and loaded the declared module chain. Full scene, soak, resize, RenderDoc, rollback, and manual-selection acceptance remain pending.",
+      "rejectionReason": null,
+      "artifactRefs": [
+        "repo:config/sources.lock.json",
+        "repo:docs/ASHENBUBS-HD-LOCAL-LAB.md"
+      ]
+    },
+    {
+      "componentId": "luthee-hd-ui-v1.1.6-local-import",
+      "distributionClass": "local-only",
+      "activationOrder": 20,
+      "disposition": "rejected",
+      "collisionPolicy": "additive-no-foundation-collision",
+      "destinationOwnership": {
+        "ownerComponentId": "luthee-hd-ui-v1.1.6-local-import",
+        "source": "source-lock-member-map",
+        "destinationPaths": [
+          "data/f256_player_tex.prs",
+          "data/texturejapanese.xvm",
+          "data/f256_hyouji.prs",
+          "data/radermapframe.xvm",
+          "data/patch.xvm"
+        ],
+        "artifactRefs": [
+          "repo:config/sources.lock.json",
+          "repo:scripts/Set-PSOBBLocalVisualAsset.ps1"
+        ]
+      },
+      "note": "The unchanged standard UI files remain preserved as a local-only, unmodified candidate. In the 2026-07-15 controlled isolation run, Luthee alone above exact Ashenbubs All caused Psobb.exe to fail approximately 9-10 seconds after process appearance with access violation 0xc0000005 at offset 0x00388270. The machine-specific Windows Error Reporting record remains private outside Git.",
+      "rejectionReason": "Rejected for this exact 59NL composition because Luthee HD UI v1.1.6 alone above exact Ashenbubs All reached a Psobb.exe access violation (0xc0000005 at 0x00388270) approximately 9-10 seconds after process appearance. The unchanged local archive is retained but must not enter the playable stack or be redistributed.",
+      "artifactRefs": [
+        "repo:config/sources.lock.json",
+        "repo:docs/LOCAL-VISUAL-ASSETS.md"
+      ]
+    },
+    {
+      "componentId": "higher-resolution-item-box-textures-2025-12-30-local-import",
+      "distributionClass": "local-only",
+      "activationOrder": 30,
+      "disposition": "rejected",
+      "collisionPolicy": "additive-no-foundation-collision",
+      "destinationOwnership": {
+        "ownerComponentId": "higher-resolution-item-box-textures-2025-12-30-local-import",
+        "source": "source-lock-member-map",
+        "destinationPaths": [
+          "data/item.bml"
+        ],
+        "artifactRefs": [
+          "repo:config/sources.lock.json",
+          "repo:scripts/Set-PSOBBLocalVisualAsset.ps1"
+        ]
+      },
+      "note": "The unchanged item-box archive fills one destination without replacing an Ashenbubs-owned file. Its short isolated launch window passed, but the later principal-account lobby/game path crashed after approximately 74 seconds with access violation 0xc0000005 at offset 0x0046cf08. The machine-specific Windows Error Reporting record remains private outside Git. The same live path with exact Ashenbubs All alone reached Forest and remained responsive past 388 seconds.",
+      "rejectionReason": "Rejected for this exact 59NL composition because the Ashenbubs All plus item-box stack crashed on the live lobby/game path with 0xc0000005 at 0x0046cf08, while the repeated Ashenbubs-only path reached Forest and remained responsive past 388 seconds. The unchanged local archive is retained but must not enter the playable stack or be redistributed.",
+      "artifactRefs": [
+        "repo:config/sources.lock.json",
+        "repo:docs/LOCAL-VISUAL-ASSETS.md"
+      ]
+    },
+    {
+      "componentId": "echelon-hd-effects-technics-2019-05-27-local-import",
+      "distributionClass": "local-only",
+      "activationOrder": 40,
+      "disposition": "rejected",
+      "collisionPolicy": "reject-immutable-foundation-collision",
+      "destinationOwnership": {
+        "ownerComponentId": "ashenbubs-hd-psobb-v1.02-local-import",
+        "source": "source-lock-conflict-map",
+        "destinationPaths": [
+          "data/bm_eff_ice.bml"
+        ],
+        "artifactRefs": [
+          "repo:config/sources.lock.json",
+          "repo:docs/LOCAL-VISUAL-ASSETS.md"
+        ]
+      },
+      "note": "The candidate cannot enter the combined profile because its ice-effects container would replace an immutable Ashenbubs-owned destination.",
+      "rejectionReason": "Rejected because data/bm_eff_ice.bml collides with the immutable Ashenbubs All foundation.",
+      "artifactRefs": [
+        "repo:config/sources.lock.json",
+        "repo:docs/LOCAL-VISUAL-ASSETS.md"
+      ]
+    },
+    {
+      "componentId": "echelon-hd-blood-2018-06-16-local-import",
+      "distributionClass": "local-only",
+      "activationOrder": 50,
+      "disposition": "rejected",
+      "collisionPolicy": "reject-immutable-foundation-collision",
+      "destinationOwnership": {
+        "ownerComponentId": "ashenbubs-hd-psobb-v1.02-local-import",
+        "source": "source-lock-conflict-map",
+        "destinationPaths": [
+          "data/bm_ene_common_all.bml"
+        ],
+        "artifactRefs": [
+          "repo:config/sources.lock.json",
+          "repo:docs/LOCAL-VISUAL-ASSETS.md"
+        ]
+      },
+      "note": "The candidate cannot enter the combined profile because its enemy-effects container would replace an immutable Ashenbubs-owned destination.",
+      "rejectionReason": "Rejected because data/bm_ene_common_all.bml collides with the immutable Ashenbubs All foundation.",
+      "artifactRefs": [
+        "repo:config/sources.lock.json",
+        "repo:docs/LOCAL-VISUAL-ASSETS.md"
+      ]
+    }
+  ],
   "candidates": [
     {
       "profileId": "safe-native-4x3",
-      "stage": "configuration-verified",
+      "stage": "runtime-verified",
       "disposition": "pending",
       "blockers": [],
       "rejectionReason": null,
@@ -148,7 +274,7 @@
           "state": "pass",
           "note": "The live client loaded the approved local x86 d3d8.dll, D3D11, and DXGI without a competing proxy.",
           "artifactRefs": [
-            "runtime:canary/runtime/client/client-profile.json#sha256=416da9c6ece726f74bd052e2637f23dfa0dfc95b4e22eddff0c7d84e3c4fbc33",
+            "runtime:canary/runtime/client/client-profile.json#sha256=86a51bda10f5f2fddf9628a97d68ea365aa02860af5a426375377477b4610a4a",
             "runtime:canary/runtime/client/d3d8.dll#sha256=2fe0314195d0caf2c72c5496352c4235858b0f104a3a2b0d88832f15f76faf57"
           ]
         },
@@ -156,7 +282,7 @@
           "state": "pass",
           "note": "A responsive exact 2560x1600 borderless window was observed with the watermark disabled.",
           "artifactRefs": [
-            "runtime:canary/runtime/client/client-profile.json#sha256=416da9c6ece726f74bd052e2637f23dfa0dfc95b4e22eddff0c7d84e3c4fbc33"
+            "runtime:canary/runtime/client/client-profile.json#sha256=86a51bda10f5f2fddf9628a97d68ea365aa02860af5a426375377477b4610a4a"
           ]
         },
         "backbufferCapture": {
@@ -236,8 +362,8 @@
           "state": "pass",
           "note": "The exact local-lab profile loaded dgVoodoo as the sole D3D8 owner plus the pinned dinput8 loader and widescreen ASI; the widescreen log records successful 2560x1600 initialization.",
           "artifactRefs": [
-            "runtime:last-known-good/clients/client-20260714T165753511Z-local-lab-lab-widescreen-16x10/client-profile.json#sha256=1e1c8def613f4abeb0f7910962c6d4d5f4f87d13ad936a4114ad68c15384c19b",
-            "runtime:last-known-good/clients/client-20260714T165753511Z-local-lab-lab-widescreen-16x10/pso_widescreen.log#sha256=05a1f96164bc1182f6c5d94f2133f2a7ae7d0426327bd68ec2ed42d9fe07fd7d"
+            "runtime:last-known-good/clients/client-20260715T232247880Z-local-lab-lab-widescreen-16x10/client-profile.json#sha256=f970ac62ecfaa925fe80967eddfefa29278801bdc43959a8b5c281040f2bfe45",
+            "runtime:last-known-good/clients/client-20260715T232247880Z-local-lab-lab-widescreen-16x10/pso_widescreen.log#sha256=88aa765ecad1c2e516ff8118e5042ec2ef774e0ac3b02d10eeb4689b027a77f1"
           ]
         },
         "liveWindow": {
@@ -320,9 +446,9 @@
             "repo:docs/ASHENBUBS-HD-LOCAL-LAB.md"
           ]
         },
-        "staticConfiguration": {
-          "state": "pass",
-          "note": "The HD profile clones the no-CAS widescreen layout, keeps dgVoodoo as the sole D3D8 owner, and declares the exact private overlay plus one project-owned large-assets ASI and enabled companion INI.",
+      "staticConfiguration": {
+        "state": "pass",
+        "note": "The HD profile clones the no-CAS widescreen layout, keeps dgVoodoo as the sole D3D8 owner, declares the exact private overlay plus one project-owned large-assets ASI and enabled companion INI, and binds the exact High GRAPHICCTRL vector and raw-byte SHA-256.",
           "artifactRefs": [
             "repo:config/graphics-profiles.json",
             "repo:scripts/Set-PSOBBAshenbubsHDClientActivation.ps1"
@@ -330,41 +456,42 @@
         },
         "runtimeModuleAllowlist": {
           "state": "pass",
-          "note": "Characters, Objects, Monsters, and Maps passed isolated activation and load runs; live inspection of the historical exact All process found the approved local dgVoodoo D3D8 owner, DInput loader, widescreen ASI, and PSOBB.LargeAssets.asi loaded from the LocalLab client tree. Its rolled-back activation remains hash-pinned, and the stopped current-ready All installation binds a new exact activation and materialized profile for the same 484-source-entry to 481-composed-file layout.",
+          "note": "Live inspection of the exact High-profile Forest process found the locked 59NL executable, dgVoodoo as the sole runtime D3D8 owner, the declared DInput ASI loader, local widescreen reference, reproducible PSOBB.LargeAssets.asi, and Windows D3D11/DXGI output chain. Each project/runtime module is path-, size-, and SHA-256-bound.",
           "artifactRefs": [
-            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/rejected/rolled-back-20260714T223224198Z/activation.json#sha256=b68f5c3fe98cb06314f046d08964070f028e46443990ea169bcfcd2db96d7e99",
-            "runtime:local-lab/runtime/client/client-profile.json#sha256=76835d8deaee0eeb35794fad7a7bbcae8c0ed41e2cfeae6ae9ba8a52681b51c5",
-            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=2d476fa24a6df40dd33ace8d618bab27400e22f1e19b14ed27d75b26ac907cfe"
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/module-allowlist.json#sha256=db03d9d20afe7c13892c349e537ec26b364c16a124e40bc8ba95f940e5065365",
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=e968ac6c2207225dec0340419cce9f4e2276e1e18c0c89a3d9574ff6da300390",
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=206f5e5404671513334925886c052972f5303112ea59b238f1ad2a13279140d0"
           ]
         },
-        "liveWindow": {
-          "state": "pass",
-          "note": "The exact All profile passed both presentation policies. Initial Resizable opened as a responsive 1600x1000 client at aspect ratio 1.6 with a caption and thick frame; a reversible 1280x800 window-size test returned to responsive 1600x1000. Borderless then returned to a watermark-free 2560x1600 client at (0,0). Dynamic resize-triggered D3D device recreation remains pending.",
+      "liveWindow": {
+        "state": "pending",
+          "note": "The exact High-profile process and lossless Forest capture prove a responsive, watermark-free 2560x1600 borderless client at (0,0). The separate resizable policy and dynamic resize-triggered D3D device recreation still require exact High-profile revalidation.",
           "artifactRefs": [
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195",
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T211202742Z-renderdoc-ff1a51e90744/renderdoc-launch-manifest.json#sha256=6e2484ea83fa5619c61b615b1e74b37f9291aabf81022500fe3ed45940b3899f"
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214004669Z-foundation-only/forest-telemetry.json#sha256=8b30f442538f842f38c200a079e8413798bf88f6627fb0a4e8f406e0c309e2e6",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214004669Z-foundation-only/forest-index.json#sha256=98f81e230f11a1629131f5b1157b2934777b209cc19387d71fe487ef41e102dc",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195"
           ]
         },
-        "backbufferCapture": {
-          "state": "pending",
-          "note": "RenderDoc v1.45 launched and armed the exact All profile at an exact 2560x1600 client window, but no .rdc artifact was produced. Configured internal and output dimensions remain expectations until replay inspection.",
-          "artifactRefs": [
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T211202742Z-renderdoc-ff1a51e90744/renderdoc-launch-manifest.json#sha256=6e2484ea83fa5619c61b615b1e74b37f9291aabf81022500fe3ed45940b3899f"
-          ]
+      "backbufferCapture": {
+        "state": "pending",
+        "note": "RenderDoc v1.45 launched and armed the superseded Mid-profile All runtime at an exact 2560x1600 client window, but no .rdc artifact was produced. A new capture under the exact High GRAPHICCTRL profile must prove the backbuffer and internal target by replay inspection.",
+          "artifactRefs": []
         },
-        "screenshotCorpus": {
-          "state": "pending",
-          "note": "Lossless exact-2560x1600 Forest frames are indexed for the Objects, Monsters, and exact All runs. Character screens, Pioneer 2, Episodes 2 and 4, menus, chat, inventory, shop, bank, effects, fog, Photon Blasts, and bosses remain incomplete.",
+      "screenshotCorpus": {
+        "state": "pending",
+          "note": "An exact High-profile lossless 2560x1600 Forest frame is hash-indexed with Ashenbubs All as the sole active asset layer. The complete corpus still requires character screens, Pioneer 2, Episodes 2 and 4, menus, chat, inventory, shop, bank, effects, fog, Photon Blasts, and bosses.",
           "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214004669Z-foundation-only/forest-index.json#sha256=98f81e230f11a1629131f5b1157b2934777b209cc19387d71fe487ef41e102dc",
             "runtime:graphics-evidence/lab-widescreen-hd-16x10/objects-20260714/objects-forest-index.json#sha256=badc34221537280599cbaf95acc931e07a5a2d3600d347f10fbe1a622a86b4f9",
             "runtime:graphics-evidence/lab-widescreen-hd-16x10/monsters-20260714/monsters-forest-index.json#sha256=4e156e2b629809e3667ad91586c9cd34e924a32224ffe2bb46870b3e1a73a9a5",
             "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195"
           ]
         },
-        "aspectAndHud": {
-          "state": "pending",
-          "note": "The exact All Forest index decodes at 2560x1600, detects 2560 pixels of active content at aspect ratio 1.6, and detects zero pillars. Initial Resizable and its reversible window-size test preserved 16:10 window geometry, and Borderless returned to exact 2560x1600. Visual inspection found no obvious stretching, watermark, or HUD or minimap clipping, but circle, FOV, anchor, multi-scene, and dynamic resize-triggered device-recreation measurements remain incomplete.",
+      "aspectAndHud": {
+        "state": "pending",
+          "note": "The exact High-profile Forest index decodes at 2560x1600, detects 2560 pixels of active content at aspect ratio 1.6, and detects zero pillars. Visual inspection shows the HUD and minimap anchored without clipping or watermark; measured circle, FOV, multi-scene, and dynamic-resize geometry remain required.",
           "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214004669Z-foundation-only/forest-index.json#sha256=98f81e230f11a1629131f5b1157b2934777b209cc19387d71fe487ef41e102dc",
             "runtime:graphics-evidence/lab-widescreen-hd-16x10/all-20260714/all-forest-index.json#sha256=4cceeea863cab8769f58ea7b7ebed6f9ab34e3a5b0004a1f0044fc00d35a4195"
           ]
         },
@@ -375,27 +502,31 @@
         },
         "framePacing": {
           "state": "pass",
-          "note": "The exact All profile completed 600.165 seconds of representative gameplay with 17,995 valid frames: p50 33.3314 ms, p95 33.7042 ms, and p99 33.9950 ms. The trace recorded zero cadence misses, zero over-100-ms stalls, and 100% Hardware: Independent Flip presentation.",
+          "note": "The exact High-profile Ashenbubs-only run completed the required ten-minute gameplay trace with 17,996 valid frames: p50 33.3283 ms, p95 33.6549 ms, and p99 33.8522 ms. Hardware Independent Flip covered 99.9% of rows; six cadence misses and five over-100-ms stalls were isolated rather than persistent, while before/after telemetry showed no thermal, power-brake, or software-thermal throttling.",
           "artifactRefs": [
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T212234517Z-gameplay-a97d14e3246e/capture-manifest.json#sha256=69e008f19e664c194ac0ed5c7f8c8c22d5bbe8dc566e3260fe9335c23f8c8baa",
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T212234517Z-gameplay-a97d14e3246e/presentmon-metrics.json#sha256=2fbed23df1431192f663f0897eaed82233f70270bae8f6874d3dacbe4e276856"
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/capture-manifest.json#sha256=ef9330c4a0a9d2c0e2f7eac8b54aa6b73ee92fa2cce25af405272942decf5315",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/presentmon-metrics.json#sha256=c3c4b3e35ac9b06b7cc0934e4173a63ec8c95ebadefe6bf51ada5a0cc268b394",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/telemetry-before.json#sha256=d46016c1a81968f95eac276262b19b14ff5124edd3ccedc24a5be573ed913237",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/telemetry-after.json#sha256=5e719ade3da5eda0cd3a0ffe2e1b0fa4ab029e26165516f9d35543170c98feb3"
           ]
         },
-        "stabilitySoak": {
-          "state": "pass",
-          "note": "The exact All profile completed a 1800.104-second soak with 53,991 valid frames: p50 33.3340 ms, p95 33.8003 ms, and p99 34.1893 ms. The trace recorded zero cadence misses, zero over-100-ms stalls, and 100% Hardware: Independent Flip presentation.",
+      "stabilitySoak": {
+        "state": "pending",
+        "note": "The exact High, Ashenbubs-only, no-VSync baseline completed 1800 seconds with 53,977 valid frames: p50 33.3308 ms, p95 33.6345 ms, and p99 33.9705 ms. Hardware Independent Flip covered 99.5443% of rows; 88 cadence misses and 77 over-100-ms stalls were isolated over the 30-minute run while the client remained responsive at 2560x1600 and finished at 57 C with no thermal or power-brake throttle reason. This baseline is retained for the VSync comparison, but the final winner must receive a new exact-profile soak after rollback/reactivation and presentation selection.",
           "artifactRefs": [
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T213416004Z-soak-9f28efe3452c/capture-manifest.json#sha256=caf1a2e04eb48435bf2889f8b8f56b2870f8ebf7bcdde9f701a15349a639a237",
-            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260714T213416004Z-soak-9f28efe3452c/presentmon-metrics.json#sha256=b329adae6a818e5acabac7a2bfc3e21100bdf51508930e6ae804e579517e19c9"
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T215713413Z-soak-0f0110008454/capture-manifest.json#sha256=0839562530cb550708be77dd17197895593f3374cd48b7257fb5d24ca59ac423",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T215713413Z-soak-0f0110008454/presentmon-metrics.json#sha256=f35308e043be26b68ec06ef31c731dc92dca854c2dccab1957c733260919dbe3",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T215713413Z-soak-0f0110008454/telemetry-before.json#sha256=941f7be214a0653966c9aabfc4c8214c191e4ab91d0a35f41c04c6b71d127b76",
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T215713413Z-soak-0f0110008454/telemetry-after.json#sha256=cf11aa9f62d33075b78e11b8406ac1e6ba2ac8cddb2f0235ff50cb28f5c082d5"
           ]
         },
-        "rollback": {
-          "state": "pass",
-          "note": "Rollback from snapshot activation-20260714T210908201Z-4c9eeba7 restored all 481 targets and the strict clean lab-widescreen-16x10 profile with no overlay, local modules, activation manifest, client, server, or listener remaining. Exact All was then reactivated while stopped from snapshot activation-20260714T223411472Z-2079fe37 as 481 files totaling 3,447,006,836 bytes, with new current activation and profile hashes.",
+      "rollback": {
+        "state": "pending",
+        "note": "Superseded Mid-profile evidence is retained: rollback restored all 481 targets and the clean widescreen profile, then exact All reactivation restored 481 files totaling 3,447,006,836 bytes. The schema-7 profile plus profile-owned High GRAPHICCTRL transaction and protected registry rollback must be proven together before this gate can pass.",
           "artifactRefs": [
             "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/rejected/rolled-back-20260714T223224198Z/activation.json#sha256=b68f5c3fe98cb06314f046d08964070f028e46443990ea169bcfcd2db96d7e99",
-            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=2d476fa24a6df40dd33ace8d618bab27400e22f1e19b14ed27d75b26ac907cfe",
-            "runtime:local-lab/runtime/client/client-profile.json#sha256=76835d8deaee0eeb35794fad7a7bbcae8c0ed41e2cfeae6ae9ba8a52681b51c5"
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=206f5e5404671513334925886c052972f5303112ea59b238f1ad2a13279140d0",
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=e968ac6c2207225dec0340419cce9f4e2276e1e18c0c89a3d9574ff6da300390"
           ]
         },
         "manualVisualSelection": {
@@ -439,13 +570,9 @@
           ]
         },
         "runtimeModuleAllowlist": {
-          "state": "pass",
-          "note": "The exact combined profile loaded the approved dgVoodoo, dinput8/widescreen ASI, and standard ReShade dxgi chain with the normalized project-only CAS configuration.",
-          "artifactRefs": [
-            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/client-profile.json#sha256=67be5a730590bef84d4efd208d1733df4f41807e7b84816d982525a528c526a0",
-            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/ReShade.log#sha256=6cc5e09e2260255637e56b4a4f4b0f9fb50d1f9057be0f60c50629abff2af554",
-            "runtime:last-known-good/clients/client-20260714T183858298Z-local-lab-lab-widescreen-cas-16x10/pso_widescreen.log#sha256=ab7f300f1c50039a572b2916b86992328060c8f91180756d9002971d4402604f"
-          ]
+          "state": "pending",
+          "note": "The path-bound historical loader logs were retired during canonical relocation. A fresh exact combined-profile module allowlist is required before acceptance.",
+          "artifactRefs": []
         },
         "liveWindow": {
           "state": "pass",
@@ -536,12 +663,9 @@
           ]
         },
         "runtimeModuleAllowlist": {
-          "state": "pass",
-          "note": "The exact project enhancement ASI loaded and passed its guarded 59NL preflight in the isolated evaluation chain.",
-          "artifactRefs": [
-            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/client-profile.json#sha256=a33815bd4751fe2027edff8bae8d7c6a49263ba3fa6482266bd10d230c005bec",
-            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/plugins/PSOBB.Enhancement.asi#sha256=63b565f940698d13d9d70b9eee24551a7cd456a8b268f70663fc8638bea92674"
-          ]
+          "state": "pending",
+          "note": "The path-bound historical loader records were retired during canonical relocation. The visible viewport failure remains sufficient for rejection, while a fresh module allowlist would be required for reuse.",
+          "artifactRefs": []
         },
         "liveWindow": {
           "state": "fail",
@@ -630,12 +754,9 @@
           ]
         },
         "runtimeModuleAllowlist": {
-          "state": "pass",
-          "note": "The exact dgVoodoo, loader, project enhancement, and standard ReShade chain loaded; the ReShade log records the project CAS effect without an add-on bundle.",
-          "artifactRefs": [
-            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/client-profile.json#sha256=a33815bd4751fe2027edff8bae8d7c6a49263ba3fa6482266bd10d230c005bec",
-            "runtime:last-known-good/clients/client-20260714T175152471Z-local-lab-dxvk-canary/ReShade.log#sha256=2de01fbacaaf5d98a14c69a76273566db02299219c50b2136acc7085d03da8f1"
-          ]
+          "state": "pending",
+          "note": "The path-bound historical loader records were retired during canonical relocation. The visible viewport failure remains sufficient for rejection, while a fresh module allowlist would be required for reuse.",
+          "artifactRefs": []
         },
         "liveWindow": {
           "state": "fail",

@@ -50,7 +50,7 @@ $geometryGuards =
 Add-Result 'capture requires the exact declared 2560x1600 client area' `
     $geometryGuards 'window client bounds and profile output must agree before capture'
 
-$credentialFree = $source -notmatch '(?i)password|credential|license\.json|twills'
+$credentialFree = $source -notmatch '(?i)password|credential|license\.json|username|accountname'
 Add-Result 'capture interface and implementation are credential-free' `
     $credentialFree 'no authentication material is read or accepted'
 

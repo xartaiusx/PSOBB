@@ -294,6 +294,8 @@ $csvPath = Join-Path $runRoot 'presentmon-v2.csv'
 $stdoutPath = Join-Path $runRoot 'presentmon.stdout.log'
 $stderrPath = Join-Path $runRoot 'presentmon.stderr.log'
 $metricsPath = Join-Path $runRoot 'presentmon-metrics.json'
+$telemetryBeforePath = Join-Path $runRoot 'telemetry-before.json'
+$telemetryAfterPath = Join-Path $runRoot 'telemetry-after.json'
 $manifestPath = Join-Path $runRoot 'capture-manifest.json'
 $sessionName = 'PSOBB-{0}' -f [Guid]::NewGuid().ToString('N')
 $arguments = @(
@@ -319,6 +321,9 @@ foreach ($argument in $arguments) {
     $startInfo.ArgumentList.Add([string]$argument)
 }
 
+$telemetryBefore = & (Join-Path $PSScriptRoot 'Capture-PSOBBGraphicsTelemetry.ps1') `
+    -Channel $Channel -ProfileId $ProfileId -Phase Before -Scenario $Scenario `
+    -OutputPath $telemetryBeforePath -RuntimeRoot $layout.Root
 $captureStartedAtUtc = [DateTime]::UtcNow
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $captureProcess = $null
@@ -373,6 +378,9 @@ Assert-PSOBBCaptureIdentityUnchanged `
     -Profile $profile `
     -InitialProcess $target `
     -SelectedChannel $Channel | Out-Null
+$telemetryAfter = & (Join-Path $PSScriptRoot 'Capture-PSOBBGraphicsTelemetry.ps1') `
+    -Channel $Channel -ProfileId $ProfileId -Phase After -Scenario $Scenario `
+    -OutputPath $telemetryAfterPath -RuntimeRoot $layout.Root
 $presentMonAfter = Get-PSOBBLockedPresentMon -Layout $layout
 if ([string]$presentMonAfter.Sha256 -cne [string]$presentMon.Sha256) {
     throw 'The PresentMon executable changed during capture'
@@ -462,6 +470,16 @@ $manifest = [ordered]@{
             file = 'presentmon.stderr.log'
             byteSize = (Get-Item -LiteralPath $stderrPath -Force).Length
             sha256 = Get-LowerSha256 -Path $stderrPath
+        },
+        [ordered]@{
+            file = 'telemetry-before.json'
+            byteSize = (Get-Item -LiteralPath $telemetryBeforePath -Force).Length
+            sha256 = [string]$telemetryBefore.Sha256
+        },
+        [ordered]@{
+            file = 'telemetry-after.json'
+            byteSize = (Get-Item -LiteralPath $telemetryAfterPath -Force).Length
+            sha256 = [string]$telemetryAfter.Sha256
         }
     )
 }
@@ -489,6 +507,8 @@ try {
     EvidenceRoot = $runRoot
     CsvPath = $csvPath
     MetricsPath = $metricsPath
+    TelemetryBeforePath = $telemetryBeforePath
+    TelemetryAfterPath = $telemetryAfterPath
     ManifestPath = $manifestPath
     DominantSwapChain = $metrics.selection.dominantSwapChainAddress
     FrameTimeP50Ms = $metrics.frameTime.p50

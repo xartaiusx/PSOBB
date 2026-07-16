@@ -163,6 +163,55 @@
         }
       }
     },
+    "nativeGraphics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presetId",
+        "graphicCtrlDwords",
+        "graphicCtrlSha256",
+        "advancedEffectsPolicy",
+        "pixelFogPolicy",
+        "lowResolutionTexturesPolicy",
+        "frameSkipPolicy"
+      ],
+      "properties": {
+        "presetId": {
+          "enum": [
+            "high-end",
+            "mid-compatibility"
+          ]
+        },
+        "graphicCtrlDwords": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "graphicCtrlSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "advancedEffectsPolicy": {
+          "enum": [
+            "enabled",
+            "compatibility"
+          ]
+        },
+        "pixelFogPolicy": {
+          "const": "pixel"
+        },
+        "lowResolutionTexturesPolicy": {
+          "const": "disabled"
+        },
+        "frameSkipPolicy": {
+          "const": "disabled"
+        }
+      }
+    },
     "d3d8Owner": {
       "type": "object",
       "additionalProperties": false,
@@ -237,6 +286,7 @@
         "channel",
         "distributionClass",
         "purpose",
+        "nativeGraphics",
         "renderer",
         "display",
         "quality",
@@ -265,6 +315,9 @@
         "purpose": {
           "type": "string",
           "minLength": 1
+        },
+        "nativeGraphics": {
+          "$ref": "#/$defs/nativeGraphics"
         },
         "renderer": {
           "type": "object",
@@ -312,6 +365,7 @@
             "renderCeiling",
             "windowModes",
             "defaultWindowMode",
+            "selectedWindowMode",
             "monitorPolicy",
             "scalingFilterCandidates",
             "selectedScalingFilter"
@@ -384,6 +438,18 @@
                 "resizable"
               ]
             },
+            "selectedWindowMode": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "application-controlled",
+                "borderless",
+                "resizable",
+                null
+              ]
+            },
             "presentationOwner": {
               "enum": [
                 "application",
@@ -420,6 +486,10 @@
             "bilinear2DOperations",
             "msaaCandidates",
             "selectedMsaa",
+            "virtualVramMbCandidates",
+            "selectedVirtualVramMb",
+            "vsyncOwnerCandidates",
+            "selectedVsyncOwner",
             "vsyncOwner",
             "frameLimitOwner",
             "watermarkEnabled",
@@ -457,6 +527,76 @@
               "type": [
                 "integer",
                 "null"
+              ]
+            },
+            "virtualVramMbCandidates": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      256,
+                      1024,
+                      2048,
+                      4096
+                    ]
+                  },
+                  {
+                    "enum": [
+                      "application-controlled",
+                      "renderer-controlled"
+                    ]
+                  }
+                ]
+              }
+            },
+            "selectedVirtualVramMb": {
+              "oneOf": [
+                {
+                  "enum": [
+                    256,
+                    1024,
+                    2048,
+                    4096
+                  ]
+                },
+                {
+                  "enum": [
+                    "application-controlled",
+                    "renderer-controlled"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "vsyncOwnerCandidates": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "none",
+                  "dgvoodoo",
+                  "application-controlled",
+                  "renderer-controlled"
+                ]
+              }
+            },
+            "selectedVsyncOwner": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "none",
+                "dgvoodoo",
+                "application-controlled",
+                "renderer-controlled",
+                null
               ]
             },
             "vsyncOwner": {
@@ -528,6 +668,17 @@
         },
         "localAssetOverlay": {
           "$ref": "#/$defs/localAssetOverlay"
+        },
+        "selectedAssetComponentIds": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "localModules": {
           "type": "array",

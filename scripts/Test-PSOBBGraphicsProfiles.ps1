@@ -54,6 +54,56 @@ function Test-RelativeModulePath {
     $extension -cin @('.dll', '.asi')
 }
 
+function Test-RelativeAssetPath {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value) -or
+        [System.IO.Path]::IsPathRooted($Value) -or
+        $Value.Contains(':', [System.StringComparison]::Ordinal) -or
+        $Value -match '(^|[\/])\.\.([\/]|$)' -or
+        $Value -notmatch '^data(?:/[A-Za-z0-9_.-]+)+$') {
+        return $false
+    }
+    [System.IO.Path]::GetExtension($Value) -cin @('.bml', '.prs', '.xvm')
+}
+
+function Test-GraphicsEvidenceArtifactReference {
+    param([AllowNull()][string]$Reference)
+
+    if ([string]::IsNullOrWhiteSpace($Reference) -or
+        $Reference -cnotmatch
+            '^(?<scope>repo|runtime):(?<path>[^#]+?)(?:#sha256=(?<sha>[a-f0-9]{64}))?$') {
+        return $false
+    }
+    $scope = $Matches.scope
+    $relativePath = $Matches.path.Replace('/', '\')
+    $expectedSha256 = $Matches.sha
+    if ([System.IO.Path]::IsPathRooted($relativePath) -or
+        $relativePath.Contains(':', [StringComparison]::Ordinal) -or
+        $relativePath -match '(^|\\)\.\.(\\|$)' -or
+        ($scope -ceq 'runtime' -and
+            [string]::IsNullOrWhiteSpace($expectedSha256))) {
+        return $false
+    }
+    $root = if ($scope -ceq 'repo') {
+        $repositoryRoot
+    } else {
+        Join-Path (Split-Path -Parent $repositoryRoot) 'PSOBB-Runtime'
+    }
+    $root = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+    $path = [System.IO.Path]::GetFullPath((Join-Path $root $relativePath))
+    if (-not $path.StartsWith($root + '\',
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
+        return (Get-FileHash -LiteralPath $path -Algorithm SHA256).
+            Hash.ToLowerInvariant() -ceq $expectedSha256
+    }
+    $true
+}
+
 function Test-AspectRatio {
     param(
         [Parameter(Mandatory)][object]$Resolution,
@@ -79,6 +129,35 @@ function Test-ResolutionSelected {
         ([int]$_.width -eq [int]$Selected.width) -and
         ([int]$_.height -eq [int]$Selected.height)
     }).Count -eq 1
+}
+
+function Get-GraphicCtrlVectorSha256 {
+    param([AllowNull()][object[]]$Dwords)
+
+    if (@($Dwords).Count -ne 9) {
+        return $null
+    }
+
+    $bytes = [byte[]]::new(36)
+    for ($index = 0; $index -lt 9; $index++) {
+        try {
+            $encoded = [BitConverter]::GetBytes([uint32]$Dwords[$index])
+        } catch {
+            return $null
+        }
+        if (-not [BitConverter]::IsLittleEndian) {
+            [Array]::Reverse($encoded)
+        }
+        [Array]::Copy($encoded, 0, $bytes, ($index * 4), 4)
+    }
+
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace(
+            '-', '', [System.StringComparison]::Ordinal).ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
 }
 
 function Find-SensitivePropertyNames {
@@ -146,6 +225,12 @@ function Get-ProfileComponentIds {
     if ($null -ne $assetProperty -and $null -ne $assetProperty.Value) {
         [void]$ids.Add([string]$assetProperty.Value.componentId)
     }
+    $selectedAssetsProperty = $Profile.PSObject.Properties['selectedAssetComponentIds']
+    if ($null -ne $selectedAssetsProperty -and $null -ne $selectedAssetsProperty.Value) {
+        foreach ($componentId in @($selectedAssetsProperty.Value)) {
+            [void]$ids.Add([string]$componentId)
+        }
+    }
     $modulesProperty = $Profile.PSObject.Properties['localModules']
     if ($null -ne $modulesProperty -and $null -ne $modulesProperty.Value) {
         foreach ($module in @($modulesProperty.Value)) {
@@ -172,6 +257,42 @@ $sourcesJson = Get-Content -Raw -LiteralPath $SourcesLockPath
 $profilesDocument = $profilesJson | ConvertFrom-Json -Depth 50
 $evidenceDocument = $evidenceJson | ConvertFrom-Json -Depth 50
 $sourcesDocument = $sourcesJson | ConvertFrom-Json -Depth 50
+
+$sourceTimestampFailures = [System.Collections.Generic.List[string]]::new()
+$generatedAt = $null
+try {
+    $generatedAt = [DateTimeOffset]::Parse(
+        [string]$sourcesDocument.generatedAtUtc,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal)
+} catch {
+    $sourceTimestampFailures.Add('generatedAtUtc')
+}
+if ($null -ne $generatedAt) {
+    foreach ($component in @($sourcesDocument.components)) {
+        foreach ($propertyName in @('checkedAtUtc', 'retrievedAtUtc')) {
+            $property = $component.PSObject.Properties[$propertyName]
+            if ($null -eq $property -or
+                [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                continue
+            }
+            try {
+                $componentTimestamp = [DateTimeOffset]::Parse(
+                    [string]$property.Value,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::AssumeUniversal)
+                if ($componentTimestamp -gt $generatedAt) {
+                    $sourceTimestampFailures.Add(
+                        "$($component.id):$propertyName-after-generated")
+                }
+            } catch {
+                $sourceTimestampFailures.Add("$($component.id):$propertyName-invalid")
+            }
+        }
+    }
+}
+Add-GraphicsProfileCheck 'source-lock generation timestamp covers component provenance' (
+    $sourceTimestampFailures.Count -eq 0) ($sourceTimestampFailures -join ', ')
 
 $profileSchemaValid = Test-Json -Json $profilesJson -SchemaFile $profileSchemaPath -ErrorAction Stop
 $evidenceSchemaValid = Test-Json -Json $evidenceJson -SchemaFile $evidenceSchemaPath -ErrorAction Stop
@@ -233,6 +354,10 @@ $acquiredGraphicsIds = @(
     'renderdoc-diagnostic',
     'project-owned-psobb-enhancement',
     'ashenbubs-hd-psobb-v1.02-local-import',
+    'luthee-hd-ui-v1.1.6-local-import',
+    'higher-resolution-item-box-textures-2025-12-30-local-import',
+    'echelon-hd-effects-technics-2019-05-27-local-import',
+    'echelon-hd-blood-2018-06-16-local-import',
     'project-owned-psobb-large-assets'
 )
 $incompleteAcquiredLocks = [System.Collections.Generic.List[string]]::new()
@@ -248,6 +373,202 @@ foreach ($componentId in $acquiredGraphicsIds) {
 }
 Add-GraphicsProfileCheck 'acquired graphics artifacts retain scan-complete locks' (
     $incompleteAcquiredLocks.Count -eq 0) ($incompleteAcquiredLocks -join ', ')
+
+$localAssetCandidateIds = @(
+    'luthee-hd-ui-v1.1.6-local-import',
+    'higher-resolution-item-box-textures-2025-12-30-local-import',
+    'echelon-hd-effects-technics-2019-05-27-local-import',
+    'echelon-hd-blood-2018-06-16-local-import'
+)
+$localAssetCandidateIdSet = [System.Collections.Generic.HashSet[string]]::new(
+    [string[]](@('ashenbubs-hd-psobb-v1.02-local-import') + $localAssetCandidateIds),
+    [System.StringComparer]::OrdinalIgnoreCase)
+$invalidLocalAssetMappings = [System.Collections.Generic.List[string]]::new()
+foreach ($componentId in $localAssetCandidateIds) {
+    $component = @($sourcesDocument.components | Where-Object id -ceq $componentId)
+    if ($component.Count -ne 1 -or [string]$component[0].distributionClass -cne 'local-only') {
+        $invalidLocalAssetMappings.Add("${componentId}:component")
+        continue
+    }
+    $destinations = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($member in @($component[0].members)) {
+        if (-not (Test-RelativeAssetPath ([string]$member.path)) -or
+            -not (Test-RelativeAssetPath ([string]$member.destinationPath)) -or
+            -not $destinations.Add([string]$member.destinationPath)) {
+            $invalidLocalAssetMappings.Add("$componentId/$($member.path)")
+        }
+    }
+}
+Add-GraphicsProfileCheck 'private local asset mappings are safe and collision-unique' (
+    $invalidLocalAssetMappings.Count -eq 0) ($invalidLocalAssetMappings -join ', ')
+
+$luthee = @($sourcesDocument.components | Where-Object {
+    [string]$_.id -ceq 'luthee-hd-ui-v1.1.6-local-import'
+})[0]
+$lutheeRoutes = @($luthee.members | ForEach-Object {
+    '{0}>{1}' -f [string]$_.path, [string]$_.destinationPath
+})
+$lutheeMappingValid =
+    ($lutheeRoutes -ccontains 'data/ephinea/custom/f256_player_tex.prs>data/f256_player_tex.prs') -and
+    ($lutheeRoutes -ccontains 'data/ephinea/custom/texturejapanese.xvm>data/texturejapanese.xvm') -and
+    (@($lutheeRoutes | Where-Object { $_ -cmatch '^data/ephinea/custom/' }).Count -eq 2)
+Add-GraphicsProfileCheck 'Luthee stock-59NL routing changes only destinations' (
+    $lutheeMappingValid) ($lutheeRoutes -join ', ')
+
+$effects = @($sourcesDocument.components | Where-Object {
+    [string]$_.id -ceq 'echelon-hd-effects-technics-2019-05-27-local-import'
+})[0]
+$blood = @($sourcesDocument.components | Where-Object {
+    [string]$_.id -ceq 'echelon-hd-blood-2018-06-16-local-import'
+})[0]
+$effectsConflicts = @($effects.conflicts)
+$bloodConflicts = @($blood.conflicts)
+$collisionPolicyValid =
+    ($effectsConflicts.Count -eq 1) -and
+    ([string]$effectsConflicts[0].destinationPath -ceq 'data/bm_eff_ice.bml') -and
+    ([string]$effectsConflicts[0].policy -ceq 'reject-ashenbubs-collision') -and
+    ([string]$effects.compatibilityState -ceq 'rejected-foundation-collision') -and
+    ($bloodConflicts.Count -eq 1) -and
+    ([string]$bloodConflicts[0].destinationPath -ceq 'data/bm_ene_common_all.bml') -and
+    ([string]$bloodConflicts[0].policy -ceq 'reject-ashenbubs-collision') -and
+    ([string]$blood.compatibilityState -ceq 'rejected-foundation-collision')
+Add-GraphicsProfileCheck 'Echelon collisions cannot replace the Ashenbubs foundation' (
+    $collisionPolicyValid) 'effects and blood are rejected on any Ashenbubs-owned destination'
+
+$expectedAssetCandidates = @(
+    [pscustomobject]@{
+        ComponentId = 'ashenbubs-hd-psobb-v1.02-local-import'
+        ActivationOrder = 10
+        AllowedDispositions = @('pending', 'accepted')
+        CollisionPolicy = 'immutable-foundation'
+        OwnershipSource = 'composed-activation-manifest'
+        OwnerComponentId = 'ashenbubs-hd-psobb-v1.02-local-import'
+    },
+    [pscustomobject]@{
+        ComponentId = 'luthee-hd-ui-v1.1.6-local-import'
+        ActivationOrder = 20
+        AllowedDispositions = @('pending', 'accepted', 'rejected')
+        CollisionPolicy = 'additive-no-foundation-collision'
+        OwnershipSource = 'source-lock-member-map'
+        OwnerComponentId = 'luthee-hd-ui-v1.1.6-local-import'
+    },
+    [pscustomobject]@{
+        ComponentId = 'higher-resolution-item-box-textures-2025-12-30-local-import'
+        ActivationOrder = 30
+        AllowedDispositions = @('pending', 'accepted', 'rejected')
+        CollisionPolicy = 'additive-no-foundation-collision'
+        OwnershipSource = 'source-lock-member-map'
+        OwnerComponentId = 'higher-resolution-item-box-textures-2025-12-30-local-import'
+    },
+    [pscustomobject]@{
+        ComponentId = 'echelon-hd-effects-technics-2019-05-27-local-import'
+        ActivationOrder = 40
+        AllowedDispositions = @('rejected')
+        CollisionPolicy = 'reject-immutable-foundation-collision'
+        OwnershipSource = 'source-lock-conflict-map'
+        OwnerComponentId = 'ashenbubs-hd-psobb-v1.02-local-import'
+    },
+    [pscustomobject]@{
+        ComponentId = 'echelon-hd-blood-2018-06-16-local-import'
+        ActivationOrder = 50
+        AllowedDispositions = @('rejected')
+        CollisionPolicy = 'reject-immutable-foundation-collision'
+        OwnershipSource = 'source-lock-conflict-map'
+        OwnerComponentId = 'ashenbubs-hd-psobb-v1.02-local-import'
+    }
+)
+$assetCandidates = @($evidenceDocument.assetCandidates)
+$assetMatrixFailures = [System.Collections.Generic.List[string]]::new()
+if ($assetCandidates.Count -ne $expectedAssetCandidates.Count) {
+    $assetMatrixFailures.Add("count=$($assetCandidates.Count)")
+}
+$matrixCount = [Math]::Min($assetCandidates.Count, $expectedAssetCandidates.Count)
+for ($index = 0; $index -lt $matrixCount; $index++) {
+    $candidate = $assetCandidates[$index]
+    $expected = $expectedAssetCandidates[$index]
+    $componentId = [string]$candidate.componentId
+    $sourceComponents = @($sourcesDocument.components | Where-Object {
+        [string]$_.id -ceq $componentId
+    })
+    if ($sourceComponents.Count -ne 1) {
+        $assetMatrixFailures.Add("${componentId}:source-lock")
+        continue
+    }
+    $sourceComponent = $sourceComponents[0]
+    $disposition = [string]$candidate.disposition
+    $identityValid = ($componentId -ceq [string]$expected.ComponentId) -and
+        ([int]$candidate.activationOrder -eq [int]$expected.ActivationOrder) -and
+        ([string]$candidate.distributionClass -ceq 'local-only') -and
+        ([string]$sourceComponent.distributionClass -ceq 'local-only') -and
+        (@($expected.AllowedDispositions) -ccontains $disposition) -and
+        ([string]$candidate.collisionPolicy -ceq [string]$expected.CollisionPolicy) -and
+        ([string]$candidate.destinationOwnership.source -ceq [string]$expected.OwnershipSource) -and
+        ([string]$candidate.destinationOwnership.ownerComponentId -ceq
+            [string]$expected.OwnerComponentId) -and
+        (-not [string]::IsNullOrWhiteSpace([string]$candidate.note)) -and
+        (@($candidate.artifactRefs).Count -gt 0) -and
+        (@($candidate.destinationOwnership.artifactRefs).Count -gt 0)
+    $sourceRejected = ([string]$sourceComponent.compatibilityState).StartsWith(
+        'rejected-', [StringComparison]::Ordinal)
+    $rejectionValid = if ($disposition -ceq 'rejected') {
+        $sourceRejected -and
+            -not [string]::IsNullOrWhiteSpace([string]$candidate.rejectionReason)
+    } else {
+        (-not $sourceRejected) -and $null -eq $candidate.rejectionReason
+    }
+    $acceptedArtifactRefsValid = $true
+    if ($disposition -ceq 'accepted') {
+        $candidateRefs = @($candidate.artifactRefs) +
+            @($candidate.destinationOwnership.artifactRefs)
+        $acceptedArtifactRefsValid = ($candidateRefs.Count -gt 0) -and
+            (@($candidateRefs | Where-Object {
+                -not (Test-GraphicsEvidenceArtifactReference `
+                    -Reference ([string]$_))
+            }).Count -eq 0)
+    }
+
+    $expectedDestinations = @(switch ([string]$expected.OwnershipSource) {
+        'source-lock-member-map' {
+            @($sourceComponent.members | ForEach-Object { [string]$_.destinationPath })
+        }
+        'source-lock-conflict-map' {
+            @($sourceComponent.conflicts | ForEach-Object { [string]$_.destinationPath })
+        }
+        default {
+            @()
+        }
+    })
+    $actualDestinations = @(
+        $candidate.destinationOwnership.destinationPaths | ForEach-Object { [string]$_ })
+    $destinationsValid = $actualDestinations.Count -eq $expectedDestinations.Count
+    for ($destinationIndex = 0;
+        $destinationsValid -and $destinationIndex -lt $expectedDestinations.Count;
+        $destinationIndex++) {
+        $destinationsValid = [string]($expectedDestinations[$destinationIndex]) -ceq
+            [string]($actualDestinations[$destinationIndex])
+    }
+    if ([string]$expected.OwnershipSource -ceq 'composed-activation-manifest') {
+        $destinationsValid = $destinationsValid -and
+            (@($sourceComponent.packArchives).Count -eq 4)
+    }
+    if (-not ($identityValid -and $rejectionValid -and $destinationsValid -and
+        $acceptedArtifactRefsValid)) {
+        $assetMatrixFailures.Add(
+            "${componentId}:identity=$identityValid,rejection=$rejectionValid,destinations=$destinationsValid,artifacts=$acceptedArtifactRefsValid")
+    }
+}
+$assetCandidateMatrixValid = $assetMatrixFailures.Count -eq 0
+Add-GraphicsProfileCheck 'asset evidence matrix is exact and source-lock bound' (
+    $assetCandidateMatrixValid) ($assetMatrixFailures -join ', ')
+
+$acceptedAssetComponentIds = @($assetCandidates | Where-Object {
+    [string]$_.disposition -ceq 'accepted'
+} | Sort-Object { [int]$_.activationOrder } | ForEach-Object { [string]$_.componentId })
+$assetCandidatesClosed = ($assetCandidates.Count -eq $expectedAssetCandidates.Count) -and
+    (@($assetCandidates | Where-Object {
+        [string]$_.disposition -cnotin @('accepted', 'rejected')
+    }).Count -eq 0)
 
 $clientLocks = @($sourcesDocument.components | Where-Object id -ceq 'tethealla-59nl-english')
 $clientMembers = if ($clientLocks.Count -eq 1) {
@@ -337,6 +658,41 @@ foreach ($profile in @($profilesDocument.profiles)) {
     Add-GraphicsProfileCheck "$profileId references locked components" (
         $missingComponents.Count -eq 0) ($missingComponents -join ', ')
 
+    $native = $profile.nativeGraphics
+    $nativeVector = @($native.graphicCtrlDwords | ForEach-Object { [uint32]$_ })
+    $nativeHash = Get-GraphicCtrlVectorSha256 -Dwords $nativeVector
+    $compatibilityProfile = $profileId -cin @(
+        'safe-native-4x3',
+        'dxvk-canary',
+        'd3d8to9-canary'
+    )
+    $expectedPreset = if ($compatibilityProfile) {
+        'mid-compatibility'
+    } else {
+        'high-end'
+    }
+    $expectedVector = if ($compatibilityProfile) {
+        @(1, 0, 0, 0, 1, 1, 1, 0, 0)
+    } else {
+        @(0, 0, 0, 0, 1, 1, 1, 0, 0)
+    }
+    $expectedAdvancedEffects = if ($compatibilityProfile) {
+        'compatibility'
+    } else {
+        'enabled'
+    }
+    $nativeValid = ([string]$native.presetId -ceq $expectedPreset) -and
+        (@(Compare-Object $expectedVector $nativeVector -SyncWindow 0).Count -eq 0) -and
+        (Test-Sha256Text ([string]$native.graphicCtrlSha256)) -and
+        ([string]$native.graphicCtrlSha256 -ceq $nativeHash) -and
+        ([string]$native.advancedEffectsPolicy -ceq $expectedAdvancedEffects) -and
+        ([string]$native.pixelFogPolicy -ceq 'pixel') -and
+        ([string]$native.lowResolutionTexturesPolicy -ceq 'disabled') -and
+        ([string]$native.frameSkipPolicy -ceq 'disabled')
+    Add-GraphicsProfileCheck "$profileId owns an exact native GRAPHICCTRL preset" (
+        $nativeValid) (
+        "preset=$($native.presetId); vector=$($nativeVector -join ','); hash=$nativeHash")
+
     $assetProperty = $profile.PSObject.Properties['localAssetOverlay']
     $modulesProperty = $profile.PSObject.Properties['localModules']
     $hasAssetComposition = ($null -ne $assetProperty -and $null -ne $assetProperty.Value) -or
@@ -361,18 +717,140 @@ foreach ($profile in @($profilesDocument.profiles)) {
     Add-GraphicsProfileCheck "$profileId default window mode is declared" (
         $defaultWindowModeValid) ([string]$profile.display.defaultWindowMode)
 
-    $resolutionSelectionValid = Test-ResolutionSelected `
+    $profileEvidence = @($evidenceDocument.candidates | Where-Object {
+        [string]$_.profileId -ceq $profileId
+    })
+    $profileAccepted = ($profileEvidence.Count -eq 1) -and
+        ([string]$profileEvidence[0].disposition -ceq 'accepted')
+
+    $resolutionSelectionValid = (Test-ResolutionSelected `
         -Selected $profile.display.selectedInternalRender `
-        -Candidates @($profile.display.internalRenderCandidates)
-    $filterSelectionValid = ($null -eq $profile.display.selectedScalingFilter) -or
-        (@($profile.display.scalingFilterCandidates) -ccontains [string]$profile.display.selectedScalingFilter)
-    $msaaSelectionValid = ($null -eq $profile.quality.selectedMsaa) -or
-        (@($profile.quality.msaaCandidates) -contains [int]$profile.quality.selectedMsaa)
+        -Candidates @($profile.display.internalRenderCandidates)) -and
+        ((-not $profileAccepted) -or ($null -ne $profile.display.selectedInternalRender))
+    $filterSelectionValid = (($null -eq $profile.display.selectedScalingFilter) -or
+        (@($profile.display.scalingFilterCandidates) -ccontains [string]$profile.display.selectedScalingFilter)) -and
+        ((-not $profileAccepted) -or ($null -ne $profile.display.selectedScalingFilter))
+    $msaaSelectionValid = (($null -eq $profile.quality.selectedMsaa) -or
+        (@($profile.quality.msaaCandidates) -contains [int]$profile.quality.selectedMsaa)) -and
+        ((-not $profileAccepted) -or ($null -ne $profile.quality.selectedMsaa))
+    $virtualVramSelectionValid = ($null -eq $profile.quality.selectedVirtualVramMb) -or
+        (@($profile.quality.virtualVramMbCandidates) -ccontains
+            $profile.quality.selectedVirtualVramMb)
+    $vsyncSelectionValid = ($null -eq $profile.quality.selectedVsyncOwner) -or
+        (@($profile.quality.vsyncOwnerCandidates) -ccontains
+            [string]$profile.quality.selectedVsyncOwner)
+    $selectedWindowProperty = $profile.display.PSObject.Properties['selectedWindowMode']
+    $selectedWindowMode = if ($null -ne $selectedWindowProperty) {
+        [string]$selectedWindowProperty.Value
+    } else {
+        ''
+    }
+    $presentationSelectionValid = ((-not $profileAccepted) -or
+        (-not [string]::IsNullOrWhiteSpace($selectedWindowMode))) -and
+        ([string]::IsNullOrWhiteSpace($selectedWindowMode) -or
+            ($windowModes -ccontains $selectedWindowMode))
+    $casCandidates = @($profile.postProcessing.strengthCandidates | ForEach-Object { [double]$_ })
+    $casSelectionValid = if ($casCandidates.Count -gt 0) {
+        (($null -eq $profile.postProcessing.selectedStrength) -or
+            ($casCandidates -contains [double]$profile.postProcessing.selectedStrength)) -and
+            ((-not $profileAccepted) -or ($null -ne $profile.postProcessing.selectedStrength))
+    } else {
+        $null -eq $profile.postProcessing.selectedStrength
+    }
+    $selectedAssetsProperty = $profile.PSObject.Properties['selectedAssetComponentIds']
+    $selectedAssets = if ($null -ne $selectedAssetsProperty -and
+        $null -ne $selectedAssetsProperty.Value) {
+        @($selectedAssetsProperty.Value | ForEach-Object { [string]$_ })
+    } else {
+        $null
+    }
+    $assetSelectionValid = $true
+    if ($null -ne $selectedAssets) {
+        $assetSelectionValid = @($selectedAssets | Select-Object -Unique).Count -eq $selectedAssets.Count
+        foreach ($componentId in $selectedAssets) {
+            $assetSelectionValid = $assetSelectionValid -and
+                $localAssetCandidateIdSet.Contains($componentId)
+        }
+    }
+    if ($profileAccepted -and $hasAssetComposition) {
+        $assetSelectionValid = $assetSelectionValid -and
+            ($null -ne $selectedAssets) -and
+            ($selectedAssets.Count -gt 0) -and
+            ($selectedAssets -ccontains [string]$assetProperty.Value.componentId)
+    }
     Add-GraphicsProfileCheck "$profileId selections come from candidate sets" (
-        $resolutionSelectionValid -and $filterSelectionValid -and $msaaSelectionValid) (
-        "resolution=$resolutionSelectionValid; filter=$filterSelectionValid; msaa=$msaaSelectionValid")
+        $resolutionSelectionValid -and $filterSelectionValid -and $msaaSelectionValid -and
+        $virtualVramSelectionValid -and $vsyncSelectionValid -and
+        $presentationSelectionValid -and $casSelectionValid -and
+        $assetSelectionValid) (
+        "resolution=$resolutionSelectionValid; filter=$filterSelectionValid; msaa=$msaaSelectionValid; virtualVram=$virtualVramSelectionValid; vsync=$vsyncSelectionValid; presentation=$presentationSelectionValid; cas=$casSelectionValid; assets=$assetSelectionValid")
+    if ($profileId -ceq 'lab-widescreen-hd-16x10') {
+        $selectedAssetOrderValid = -not $profileAccepted
+        if ($profileAccepted) {
+            $selectedAssetOrderValid = ($null -ne $selectedAssets) -and
+                ($selectedAssets.Count -eq $acceptedAssetComponentIds.Count)
+            for ($assetIndex = 0;
+                $selectedAssetOrderValid -and $assetIndex -lt $acceptedAssetComponentIds.Count;
+                $assetIndex++) {
+                $selectedAssetOrderValid = [string]($acceptedAssetComponentIds[$assetIndex]) -ceq
+                    [string]($selectedAssets[$assetIndex])
+            }
+        }
+        Add-GraphicsProfileCheck 'accepted HD asset selection matches accepted activation order' (
+            $selectedAssetOrderValid) (
+            "accepted=$profileAccepted; expected=$($acceptedAssetComponentIds -join ','); selected=$($selectedAssets -join ',')")
+    }
 
     $usesDgVoodoo = [string]$owner.componentId -ceq 'dgvoodoo2-x86-d3d8'
+    $virtualVramCandidates = @($profile.quality.virtualVramMbCandidates)
+    $virtualVramPolicyValid = if ($usesDgVoodoo) {
+        ($virtualVramCandidates.Count -eq 4) -and
+            (@(Compare-Object @(256, 1024, 2048, 4096) $virtualVramCandidates -SyncWindow 0).Count -eq 0) -and
+            $(if ($profileAccepted) {
+                ($profile.quality.selectedVirtualVramMb -is [ValueType]) -and
+                    ($virtualVramCandidates -contains
+                        [int]$profile.quality.selectedVirtualVramMb)
+            } else {
+                $null -eq $profile.quality.selectedVirtualVramMb
+            })
+    } elseif ([string]$owner.kind -ceq 'application') {
+        ($virtualVramCandidates.Count -eq 1) -and
+            ([string]$virtualVramCandidates[0] -ceq 'application-controlled') -and
+            ([string]$profile.quality.selectedVirtualVramMb -ceq 'application-controlled')
+    } else {
+        ($virtualVramCandidates.Count -eq 1) -and
+            ([string]$virtualVramCandidates[0] -ceq 'renderer-controlled') -and
+            ([string]$profile.quality.selectedVirtualVramMb -ceq 'renderer-controlled')
+    }
+    Add-GraphicsProfileCheck "$profileId virtual VRAM policy matches its renderer" (
+        $virtualVramPolicyValid) (
+        "candidates=$($virtualVramCandidates -join ','); selected=$($profile.quality.selectedVirtualVramMb)")
+
+    $vsyncOwnerCandidates = @($profile.quality.vsyncOwnerCandidates)
+    $vsyncPolicyValid = if ($usesDgVoodoo) {
+        ($vsyncOwnerCandidates.Count -eq 2) -and
+            (@(Compare-Object @('none', 'dgvoodoo') $vsyncOwnerCandidates `
+                -SyncWindow 0 -CaseSensitive).Count -eq 0) -and
+            $(if ($profileAccepted) {
+                $vsyncOwnerCandidates -ccontains [string]$profile.quality.selectedVsyncOwner
+            } else {
+                $null -eq $profile.quality.selectedVsyncOwner
+            }) -and
+            ([string]$profile.quality.vsyncOwner -ceq 'none')
+    } elseif ([string]$owner.kind -ceq 'application') {
+        ($vsyncOwnerCandidates.Count -eq 1) -and
+            ([string]$vsyncOwnerCandidates[0] -ceq 'application-controlled') -and
+            ([string]$profile.quality.selectedVsyncOwner -ceq 'application-controlled') -and
+            ([string]$profile.quality.vsyncOwner -ceq 'application')
+    } else {
+        ($vsyncOwnerCandidates.Count -eq 1) -and
+            ([string]$vsyncOwnerCandidates[0] -ceq 'renderer-controlled') -and
+            ([string]$profile.quality.selectedVsyncOwner -ceq 'renderer-controlled')
+    }
+    Add-GraphicsProfileCheck "$profileId VSync A/B policy matches its renderer" (
+        $vsyncPolicyValid) (
+        "current=$($profile.quality.vsyncOwner); candidates=$($vsyncOwnerCandidates -join ','); selected=$($profile.quality.selectedVsyncOwner)")
+
     $dgVoodooValid = (-not $usesDgVoodoo) -or (
         ([string]$profile.renderer.outputApi -ceq 'd3d11_fl11_0') -and
         ([string]$profile.renderer.featureLevel -ceq '11_0') -and
@@ -577,9 +1055,20 @@ $modernCasValid = $modernProfiles.Count -eq 1
 if ($modernCasValid) {
     $modern = $modernProfiles[0]
     $strengths = @($modern.postProcessing.strengthCandidates)
+    $modernEvidence = @($evidenceDocument.candidates | Where-Object {
+        [string]$_.profileId -ceq 'fidelity-modern-16x10'
+    })
+    $modernAccepted = ($modernEvidence.Count -eq 1) -and
+        ([string]$modernEvidence[0].disposition -ceq 'accepted')
+    $modernSelectionValid = if ($modernAccepted) {
+        ($null -ne $modern.postProcessing.selectedStrength) -and
+            ($strengths -contains [double]$modern.postProcessing.selectedStrength)
+    } else {
+        $null -eq $modern.postProcessing.selectedStrength
+    }
     $modernCasValid = ([string]$modern.postProcessing.effectComponentId -ceq 'psobb-neutral-cas-source') -and
         ($modern.postProcessing.enabledByDefault -eq $false) -and
-        ($null -eq $modern.postProcessing.selectedStrength) -and
+        $modernSelectionValid -and
         ($strengths.Count -eq 3) -and
         ([double]$strengths[0] -eq 0.15) -and
         ([double]$strengths[1] -eq 0.25) -and
@@ -764,6 +1253,15 @@ foreach ($candidate in @($evidenceDocument.candidates)) {
         [string]::IsNullOrWhiteSpace([string]$candidate.rejectionReason)) {
         $acceptedFailures.Add("$($candidate.profileId):rejected-without-reason")
     }
+    foreach ($gateProperty in @($candidate.gates.PSObject.Properties)) {
+        foreach ($artifactRef in @($gateProperty.Value.artifactRefs)) {
+            if (-not (Test-GraphicsEvidenceArtifactReference `
+                    -Reference ([string]$artifactRef))) {
+                $acceptedFailures.Add(
+                    "$($candidate.profileId):$($gateProperty.Name)-invalid-artifact")
+            }
+        }
+    }
     if ([string]$candidate.disposition -cne 'accepted') {
         continue
     }
@@ -799,6 +1297,93 @@ foreach ($candidate in @($evidenceDocument.candidates)) {
 }
 Add-GraphicsProfileCheck 'candidate disposition fails closed' (
     $acceptedFailures.Count -eq 0) ($acceptedFailures -join ', ')
+
+function Test-RollbackChainReachesProfile {
+    param(
+        [Parameter(Mandatory)][object]$StartingProfile,
+        [Parameter(Mandatory)][string]$TargetProfileId,
+        [Parameter(Mandatory)][object[]]$Profiles
+    )
+
+    $visited = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $current = $StartingProfile
+    while ([string]$current.id -cne $TargetProfileId) {
+        if (-not $visited.Add([string]$current.id)) {
+            return $false
+        }
+        $nextId = [string]$current.rollbackProfileId
+        if ([string]::IsNullOrWhiteSpace($nextId)) {
+            return $false
+        }
+        $next = @($Profiles | Where-Object { [string]$_.id -ceq $nextId })
+        if ($next.Count -ne 1) {
+            return $false
+        }
+        $current = $next[0]
+    }
+    $true
+}
+
+$acceptedCandidateIds = [System.Collections.Generic.HashSet[string]]::new(
+    [string[]]@($evidenceDocument.candidates | Where-Object {
+        [string]$_.disposition -ceq 'accepted'
+    } | ForEach-Object { [string]$_.profileId }),
+    [System.StringComparer]::OrdinalIgnoreCase)
+$acceptedLocalProfiles = @($profilesDocument.profiles | Where-Object {
+    [string]$_.channel -ceq 'local-lab' -and
+    [string]$_.distributionClass -ceq 'local-only' -and
+    $acceptedCandidateIds.Contains([string]$_.id)
+})
+$safeNativeAccepted = $acceptedCandidateIds.Contains('safe-native-4x3')
+$acceptedHdProfile = @($acceptedLocalProfiles | Where-Object {
+    [string]$_.id -ceq 'lab-widescreen-hd-16x10'
+})
+$ashenbubsCandidate = @($assetCandidates | Where-Object {
+    [string]$_.componentId -ceq 'ashenbubs-hd-psobb-v1.02-local-import'
+})
+$ashenbubsAccepted = ($ashenbubsCandidate.Count -eq 1) -and
+    ([string]$ashenbubsCandidate[0].disposition -ceq 'accepted')
+$ashenbubsActivationEvidence = $ashenbubsAccepted -and
+    (@($ashenbubsCandidate[0].artifactRefs | Where-Object {
+        [string]$_ -cmatch '^runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1\.02/current/activation\.json#sha256=[a-f0-9]{64}$' -and
+        (Test-GraphicsEvidenceArtifactReference -Reference ([string]$_))
+    }).Count -eq 1)
+$acceptedHdAssetsBound = $acceptedHdProfile.Count -eq 1
+if ($acceptedHdAssetsBound) {
+    $selectedAssets = @($acceptedHdProfile[0].selectedAssetComponentIds |
+        ForEach-Object { [string]$_ })
+    $acceptedHdAssetsBound = $selectedAssets.Count -eq
+        $acceptedAssetComponentIds.Count
+    for ($assetIndex = 0;
+        $acceptedHdAssetsBound -and
+        $assetIndex -lt $acceptedAssetComponentIds.Count;
+        $assetIndex++) {
+        $acceptedHdAssetsBound = [string]$selectedAssets[$assetIndex] -ceq
+            [string]$acceptedAssetComponentIds[$assetIndex]
+    }
+}
+$acceptedLocalRollbackValid = ($acceptedLocalProfiles.Count -eq 1) -and
+    (Test-RollbackChainReachesProfile `
+        -StartingProfile $acceptedLocalProfiles[0] `
+        -TargetProfileId 'safe-native-4x3' `
+        -Profiles @($profilesDocument.profiles))
+$localCompletionPrerequisites = ($acceptedLocalProfiles.Count -eq 1) -and
+    ($acceptedHdProfile.Count -eq 1) -and $safeNativeAccepted -and
+    $acceptedLocalRollbackValid -and $ashenbubsAccepted -and
+    $ashenbubsActivationEvidence -and $acceptedHdAssetsBound -and
+    $assetCandidateMatrixValid -and $assetCandidatesClosed
+$localCompletionClaim = [bool]$evidenceDocument.LocalPrivateGraphicallyAccepted
+$publicCompletionClaim = [bool]$evidenceDocument.PublicDistributableGraphicallyAccepted
+Add-GraphicsProfileCheck 'local graphical completion is fail-closed' (
+    (-not $localCompletionClaim) -or $localCompletionPrerequisites) (
+    "claimed=$localCompletionClaim; acceptedLocalProfiles=$($acceptedLocalProfiles.Count); acceptedHdProfile=$($acceptedHdProfile.Count); safeNativeAccepted=$safeNativeAccepted; rollbackChain=$acceptedLocalRollbackValid; ashenbubsAccepted=$ashenbubsAccepted; activationEvidence=$ashenbubsActivationEvidence; assetsBound=$acceptedHdAssetsBound; assetMatrix=$assetCandidateMatrixValid; assetCandidatesClosed=$assetCandidatesClosed")
+
+$publicProfileAccepted = $acceptedCandidateIds.Contains('fidelity-modern-16x10')
+Add-GraphicsProfileCheck 'public graphical completion remains separately gated' (
+    (-not $publicCompletionClaim) -or
+        ($localCompletionClaim -and $publicProfileAccepted)) (
+    "claimed=$publicCompletionClaim; localAccepted=$localCompletionClaim; publicProfileAccepted=$publicProfileAccepted")
 
 if (-not $Quiet) {
     $results | Format-Table -AutoSize

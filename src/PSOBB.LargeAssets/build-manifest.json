@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "componentId": "project-owned-psobb-large-assets",
   "version": "0.1.0-pinned-59nl",
-  "builtAtUtc": "2026-07-14T19:05:18Z",
+  "builtAtUtc": "2026-07-15T20:54:58Z",
   "baseClient": {
     "relativePath": "Psobb.exe",
     "size": 6971904,
@@ -35,6 +35,7 @@
     "compiler": "MSVC x86 19.51.36248.0",
     "windowsSdk": "10.0.28000.0",
     "cmakeMinimum": "3.25",
+    "cmakeVersion": "4.4.0",
     "languageStandard": "C++20",
     "runtimeLibrary": "MultiThreaded",
     "compileOptions": [
@@ -59,8 +60,8 @@
   "sourceInputs": [
     {
       "path": "src/PSOBB.LargeAssets/CMakeLists.txt",
-      "size": 2353,
-      "sha256": "76efae1c1ace6b711a74aa1fddf6b80b535ac69f9c690970ad12612d0224a56c"
+      "size": 2433,
+      "sha256": "9fd5145fda282ff52be4c3ead75b370e289ee4e9787d91a7055098fe93a08606"
     },
     {
       "path": "src/PSOBB.LargeAssets/include/psobb_large_assets/api.h",
@@ -89,8 +90,8 @@
     },
     {
       "path": "src/PSOBB.LargeAssets/README.md",
-      "size": 4558,
-      "sha256": "69f3fed1a2fe996b25a0fea8fa889828a2b8633c9964bd67856e856f096064bf"
+      "size": 4757,
+      "sha256": "59082d0093f6e6cdb1fbfd00c863c4ac9738e145a9b2952c2ea2c62e42d46360"
     },
     {
       "path": "src/PSOBB.LargeAssets/src/dllmain.cpp",
@@ -166,7 +167,7 @@
   "verificationTool": {
     "relativeBuildPath": "src/PSOBB.LargeAssets/bin/build-x86/Release/PSOBB.LargeAssets.Verify.exe",
     "size": 259584,
-    "sha256": "187aed3b8701783cc6142fce64c50bd47dbb512fd9cfd418eaf5073e88fc4391",
+    "sha256": "e0c0c3dc756e733b3399bbefe1e76114c56bed25818b145d77db123c0a0f266a",
     "expectedOutputContract": [
       "fileSizeMatched=true",
       "sha256Matched=true",

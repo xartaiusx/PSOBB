@@ -293,6 +293,10 @@ foreach ($target in $signatureTargets) {
     Add-GraphicsArtifactCheck "signature $($target.Name)" $signaturePassed $signatureDetail
 }
 
+# Import the native module explicitly. PowerShell's Windows-compatibility
+# autoloader serializes the current directory into generated script text and
+# breaks when the repository path contains an apostrophe.
+Import-Module ConfigDefender -SkipEditionCheck -ErrorAction Stop
 $defender = Get-MpComputerStatus
 Add-GraphicsArtifactCheck 'Microsoft Defender enabled' (
     $defender.AntivirusEnabled -and $defender.RealTimeProtectionEnabled) (

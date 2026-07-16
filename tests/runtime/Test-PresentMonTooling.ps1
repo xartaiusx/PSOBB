@@ -6,8 +6,10 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $captureScript = Join-Path $repositoryRoot 'scripts\Invoke-PSOBBPresentMonCapture.ps1'
 $metricsScript = Join-Path $repositoryRoot 'scripts\Get-PSOBBPresentMonMetrics.ps1'
+$telemetryScript = Join-Path $repositoryRoot 'scripts\Capture-PSOBBGraphicsTelemetry.ps1'
 $captureSource = Get-Content -Raw -LiteralPath $captureScript
 $metricsSource = Get-Content -Raw -LiteralPath $metricsScript
+$telemetrySource = Get-Content -Raw -LiteralPath $telemetryScript
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Add-Result {
@@ -24,7 +26,7 @@ function Add-Result {
     })
 }
 
-foreach ($scriptPath in @($captureScript, $metricsScript)) {
+foreach ($scriptPath in @($captureScript, $metricsScript, $telemetryScript)) {
     $tokens = $null
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseFile(
@@ -67,6 +69,39 @@ $clientGuard =
 Add-Result 'capture pins one exact running PSOBB profile and process' $clientGuard `
     'catalog, materialized profile, path, hash, PID, and start time are checked before and after capture'
 
+$telemetryContract =
+    $captureSource -match 'Capture-PSOBBGraphicsTelemetry\.ps1' -and
+    $captureSource -match 'telemetry-before\.json' -and
+    $captureSource -match 'telemetry-after\.json' -and
+    $telemetrySource -match 'workingSetBytes' -and
+    $telemetrySource -match 'privateBytes' -and
+    $telemetrySource -match 'memoryUsedMiB' -and
+    $telemetrySource -match 'temperatureC' -and
+    $telemetrySource -match 'hardwareThermalSlowdown' -and
+    $telemetrySource -match 'hardwarePowerBrakeSlowdown' -and
+    $telemetrySource -match 'perApplicationUserGpuPreferencePresent' -and
+    $telemetrySource -match 'windowedGameOptimizationPolicy' -and
+    $telemetrySource -match 'startupEvidence' -and
+    $telemetrySource -match 'startupElapsedMilliseconds' -and
+    $telemetrySource -match '\[DateTimeOffset\]::Parse' -and
+    $telemetrySource -match '\[Globalization\.DateTimeStyles\]::RoundtripKind' -and
+    $telemetrySource -match 'Assert-PSOBBLocalLabClientRuntimeContract' -and
+    $telemetrySource -notmatch '(?i)password|credential|account'
+Add-Result 'capture binds before/after memory, GPU, thermal, and throttle telemetry' `
+    $telemetryContract `
+    'two hash-bound telemetry artifacts accompany every timed PresentMon run'
+
+$utcSample = '2026-07-15T21:35:51.4621924Z'
+$parsedUtcSample = [DateTimeOffset]::Parse(
+    $utcSample,
+    [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+$utcReceiptComparisonValid =
+    $parsedUtcSample.Kind -eq [DateTimeKind]::Utc -and
+    $parsedUtcSample.ToString('o') -ceq '2026-07-15T21:35:51.4621924Z'
+Add-Result 'startup receipt timestamps preserve UTC across local time zones' `
+    $utcReceiptComparisonValid $parsedUtcSample.ToString('o')
+
 $requiredOptions = @(
     '--process_id',
     '--output_file',
@@ -101,7 +136,7 @@ $evidenceIsolation =
     $captureSource -match 'Assert-PathWithinRoot' -and
     $captureSource -match 'PSOBB-\{0\}' -and
     $captureSource -match "Guid\]::NewGuid\(\)\.ToString\('N'\)" -and
-    $captureSource -notmatch '(?i)password|credential|twills'
+    $captureSource -notmatch '(?i)password|credential|username|accountname'
 Add-Result 'capture uses unique credential-free evidence and ETW identities' $evidenceIsolation `
     'raw artifacts remain under runtime graphics-evidence with GUID-based run and session names'
 

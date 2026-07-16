@@ -45,7 +45,7 @@ $analysisGuards =
 Add-Result 'import analyzes After as candidate and Before as reference with a required spec' `
     $analysisGuards 'technical disposition remains evidence-derived and pending review'
 
-$lifecycleFree = $scriptSource -notmatch '(?i)Start-Process|Stop-Process|CloseMainWindow|Start-PSOBB|Stop-PSOBB|password|credential|twills'
+$lifecycleFree = $scriptSource -notmatch '(?i)Start-Process|Stop-Process|CloseMainWindow|Start-PSOBB|Stop-PSOBB|password|credential|username|accountname'
 Add-Result 'import performs no process lifecycle or credential operation' `
     $lifecycleFree 'the running or stopped client is observed, never controlled'
 

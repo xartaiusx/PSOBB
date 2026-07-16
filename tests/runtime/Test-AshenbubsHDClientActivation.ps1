@@ -67,7 +67,7 @@ Add-Result 'large-assets build manifest verifies source, ASI, and verifier' (
         'bede4e0a9117a10c0b07a32712a04594604eea586dc779b1f81c34ae8a0b0bcf' -and
     $build.VerifierSize -eq 259584 -and
     $build.VerifierSha256 -ceq
-        '187aed3b8701783cc6142fce64c50bd47dbb512fd9cfd418eaf5073e88fc4391') `
+        'e0c0c3dc756e733b3399bbefe1e76114c56bed25818b145d77db123c0a0f266a') `
     'the ignored x86 build outputs exactly match the source-controlled build contract'
 
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json -Depth 50
@@ -404,6 +404,14 @@ Add-Result 'rollback refuses unknown active bytes' (
     $activation -match 'RequireActiveMatch' -and
     $activation -match 'Rollback refuses an activated target with unknown bytes') `
     'rollback cannot overwrite a post-activation conflict silently'
+Add-Result 'legacy schema rollback is an exact one-way migration bridge' (
+    $activation -match '\$legacySchemaRollback = \$false' -and
+    $activation -match '\[int\]\$rawProfile\.schemaVersion -ne 6' -and
+    $activation -match "profileId -cne 'lab-widescreen-hd-16x10'" -and
+    $activation -match "profileId -cne 'lab-widescreen-16x10'" -and
+    $activation -match 'baseExecutableSha256 -cne' -and
+    $activation -match 'exact clean schema-6 profile') `
+    'the prior materialization can only roll back from exact HD to exact clean before schema-7 replacement'
 Add-Result 'profile records private overlay and local module explicitly' (
     $activation -match 'localAssetOverlay' -and
     $activation -match 'localModules' -and
@@ -437,9 +445,10 @@ Add-Result 'automatic restoration covers failed final validation' (
 Add-Result 'Common admits only the exact declared local overlay' (
     $common -match 'Assert-PSOBBLocalAssetOverlayContract' -and
     $common -match 'Assert-PSOBBExactJsonProperties' -and
+    $common -match "overlay\.selection -cne 'All'" -and
     $common -match 'activation record contains an undeclared extra file' -and
     $common -match 'activated asset count or composed byte total has changed') `
-    'runtime validation closes profile, activation-manifest, and per-asset schemas'
+    'runtime validation requires the complete All foundation and closes every asset schema'
 Add-Result 'Common cannot accept a forged clean HD profile' (
     $common -match "profileId -ceq 'lab-widescreen-hd-16x10'" -and
     $common -match 'HD profile requires its exact asset overlay and large-assets module declarations' -and
@@ -449,8 +458,13 @@ Add-Result 'Common rejects extra loadables and data files' (
     $common.Contains("`$ExpectedLoadablePaths.Add('plugins\PSOBB.LargeAssets.asi')") -and
     $common -match 'SetEquals\(\$expectedLoadablePaths\)' -and
     $common -match 'data tree contains a missing, changed, or undeclared extra file' -and
-    $common -match 'without an asset declaration does not match the exact base data manifest') `
+    $common -match 'without Ashenbubs does not match its exact base-plus-visual-assets manifest') `
     'the one ASI is added to the closed loadable set and declared or clean data is fully hashed'
+Add-Result 'Ashenbubs lifecycle preserves the visual-asset stack' (
+    $activation -match 'Roll back local visual assets in reverse activation order' -and
+    $activation -match 'Activate AshenbubsHD before local visual assets' -and
+    $activation -match "PSObject\.Properties\['localVisualAssets'\]") `
+    'base-overlay activation and rollback cannot silently discard a composed visual stack'
 Add-Result 'Common runs the exact-client verifier for active assets' (
     $common -match 'Invoke-PSOBBLargeAssetsExactClientVerifier' -and
     $common -match 'actualSha256=' -and

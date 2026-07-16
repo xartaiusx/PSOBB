@@ -8,7 +8,10 @@
     "$schema",
     "schemaVersion",
     "generatedAtUtc",
+    "LocalPrivateGraphicallyAccepted",
+    "PublicDistributableGraphicallyAccepted",
     "acceptancePolicy",
+    "assetCandidates",
     "candidates"
   ],
   "properties": {
@@ -21,6 +24,12 @@
     "generatedAtUtc": {
       "type": "string",
       "format": "date-time"
+    },
+    "LocalPrivateGraphicallyAccepted": {
+      "type": "boolean"
+    },
+    "PublicDistributableGraphicallyAccepted": {
+      "type": "boolean"
     },
     "acceptancePolicy": {
       "type": "object",
@@ -67,6 +76,14 @@
         }
       }
     },
+    "assetCandidates": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/assetCandidate"
+      }
+    },
     "candidates": {
       "type": "array",
       "minItems": 1,
@@ -76,6 +93,107 @@
     }
   },
   "$defs": {
+    "artifactRefs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "destinationOwnership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownerComponentId",
+        "source",
+        "destinationPaths",
+        "artifactRefs"
+      ],
+      "properties": {
+        "ownerComponentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "enum": [
+            "composed-activation-manifest",
+            "source-lock-member-map",
+            "source-lock-conflict-map"
+          ]
+        },
+        "destinationPaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^data/"
+          }
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/artifactRefs"
+        }
+      }
+    },
+    "assetCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "componentId",
+        "distributionClass",
+        "activationOrder",
+        "disposition",
+        "collisionPolicy",
+        "destinationOwnership",
+        "note",
+        "rejectionReason",
+        "artifactRefs"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "distributionClass": {
+          "const": "local-only"
+        },
+        "activationOrder": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "disposition": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "collisionPolicy": {
+          "enum": [
+            "immutable-foundation",
+            "additive-no-foundation-collision",
+            "reject-immutable-foundation-collision"
+          ]
+        },
+        "destinationOwnership": {
+          "$ref": "#/$defs/destinationOwnership"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/artifactRefs"
+        }
+      }
+    },
     "gateName": {
       "enum": [
         "provenance",

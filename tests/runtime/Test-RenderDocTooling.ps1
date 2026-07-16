@@ -6,8 +6,10 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $captureScript = Join-Path $repositoryRoot 'scripts\Invoke-PSOBBRenderDocCapture.ps1'
 $registerScript = Join-Path $repositoryRoot 'scripts\Register-PSOBBRenderDocCapture.ps1'
+$replayScript = Join-Path $repositoryRoot 'scripts\Register-PSOBBRenderDocReplayEvidence.ps1'
 $captureSource = Get-Content -Raw -LiteralPath $captureScript
 $registerSource = Get-Content -Raw -LiteralPath $registerScript
+$replaySource = Get-Content -Raw -LiteralPath $replayScript
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Add-Result {
@@ -24,7 +26,7 @@ function Add-Result {
     })
 }
 
-foreach ($scriptPath in @($captureScript, $registerScript)) {
+foreach ($scriptPath in @($captureScript, $registerScript, $replayScript)) {
     $tokens = $null
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseFile(
@@ -79,8 +81,17 @@ Add-Result 'capture uses the official launch command without presentation overri
 
 Add-Result 'capture preserves validated local login persistence before delegated process creation' (
     $captureSource -match
-        'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null\s*\r?\n\s*\$runner\s*=\s*\[System\.Diagnostics\.Process\]::Start\(\$startInfo\)') `
+        'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null[\s\S]*?Set-PSOBBClientNativeGraphics[\s\S]*?\$runner\s*=\s*\[System\.Diagnostics\.Process\]::Start\(\$startInfo\)') `
     'RenderDoc validates registry types without reading or clearing the saved login'
+
+Add-Result 'capture applies profile-owned native graphics under the lifecycle lock' (
+    $captureSource -match 'Enter-PSOBBClientOperationLock' -and
+    $captureSource -match
+        'Set-PSOBBClientNativeGraphics[\s\S]*?\[System\.Diagnostics\.Process\]::Start\(\$startInfo\)' -and
+    $captureSource -match 'nativeGraphicsPresetId' -and
+    $captureSource -match 'graphicCtrlSha256' -and
+    $captureSource -match 'Exit-PSOBBClientOperationLock') `
+    'capture and ordinary launch share the exact hash-verified GRAPHICCTRL policy'
 
 $identityGuard =
     $captureSource -match 'Launched as ID \(\[0-9\]\+\)' -and
@@ -96,7 +107,7 @@ $privacyGuard =
     $captureSource -match 'graphics-evidence' -and
     $captureSource -match 'Assert-PSOBBPrivateRenderDocPath' -and
     $captureSource -match "trigger = 'manual-f12'" -and
-    $captureSource -notmatch '(?i)password|twills|sendkeys|read-host'
+    $captureSource -notmatch '(?i)password|username|accountname|sendkeys|read-host'
 Add-Result 'capture leaves credentials and the manual trigger outside automation' $privacyGuard `
     'private runtime evidence is used and F12 remains a human action'
 
@@ -120,6 +131,16 @@ $registrationGuard =
     $registerSource -match 'Refusing to overwrite existing RenderDoc capture metadata'
 Add-Result 'registration is path-contained, streaming, stable, and append-only' `
     $registrationGuard 'RDC size/SHA-256 are computed only for a stable file matching the private template'
+
+$replayGuard =
+    $replaySource -match 'manual-qrenderdoc-v1\.45-replay' -and
+    $replaySource -match 'ReplayConfirmed' -and
+    $replaySource -match 'requestedDimensionsMatched = \$true' -and
+    $replaySource -match 'capture no longer matches its registered identity' -and
+    $replaySource -match 'Refusing to overwrite existing RenderDoc replay evidence' -and
+    $replaySource -match 'does not infer dimensions from configuration or the RDC file hash'
+Add-Result 'replay attestation is explicit exact-capture and append-only' `
+    $replayGuard 'manual qrenderdoc values must match the configured dimensions and registered RDC identity'
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-RenderDocTests-' + [Guid]::NewGuid().ToString('N'))
@@ -241,6 +262,54 @@ try {
         $null -eq $artifact.replayEvidence.observedOutput -and
         [string]$registered.DimensionClaim -ceq 'none') `
         '3840x2400 and 2560x1600 remain requested expectations only'
+
+    $replay = & $replayScript `
+        -RuntimeRoot $runtimeRoot `
+        -RunRoot $accepted.RunRoot `
+        -PresentEventId 123 `
+        -BackbufferWidth 2560 `
+        -BackbufferHeight 1600 `
+        -InternalRenderWidth 3840 `
+        -InternalRenderHeight 2400 `
+        -BackbufferFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+        -InternalRenderFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+        -ReplayConfirmed `
+        -Confirm:$false
+    $replayRecord = Get-Content -Raw -LiteralPath $replay.EvidencePath |
+        ConvertFrom-Json -Depth 30
+    Add-Result 'synthetic replay attestation records exact observed dimensions' (
+        $replay.Registered -and
+        [string]$replayRecord.status -ceq 'replay-inspected-pass' -and
+        [int]$replayRecord.observedOutput.width -eq 2560 -and
+        [int]$replayRecord.observedOutput.height -eq 1600 -and
+        [int]$replayRecord.observedInternalRender.width -eq 3840 -and
+        [int]$replayRecord.observedInternalRender.height -eq 2400 -and
+        [bool]$replayRecord.requestedDimensionsMatched) `
+        'manual replay evidence is separate from the integrity-only capture artifact'
+
+    $mismatch = New-SyntheticRun -Suffix 'abcdef123460'
+    & $registerScript -RuntimeRoot $runtimeRoot `
+        -RunRoot $mismatch.RunRoot -CapturePath $mismatch.CapturePath | Out-Null
+    $mismatchRejected = $false
+    try {
+        & $replayScript `
+            -RuntimeRoot $runtimeRoot `
+            -RunRoot $mismatch.RunRoot `
+            -PresentEventId 124 `
+            -BackbufferWidth 1920 `
+            -BackbufferHeight 1080 `
+            -InternalRenderWidth 3840 `
+            -InternalRenderHeight 2400 `
+            -BackbufferFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+            -InternalRenderFormat DXGI_FORMAT_R8G8B8A8_UNORM `
+            -ReplayConfirmed `
+            -Confirm:$false | Out-Null
+    } catch {
+        $mismatchRejected = $_.Exception.Message -match
+            'does not confirm the exact configured'
+    }
+    Add-Result 'replay attestation rejects mismatched dimensions' `
+        $mismatchRejected 'observed replay values cannot be promoted when they differ from the exact profile'
 
     $overwriteRejected = $false
     try {

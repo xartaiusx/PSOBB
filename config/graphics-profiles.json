@@ -1,7 +1,7 @@
 {
   "$schema": "./schemas/graphics-profiles.schema.json",
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-14T19:44:39Z",
+  "generatedAtUtc": "2026-07-15T18:49:36Z",
   "baseClient": {
     "componentId": "tethealla-59nl-english",
     "executablePath": "Psobb.exe",
@@ -45,6 +45,25 @@
       "channel": "stable",
       "distributionClass": "public-gated",
       "purpose": "Immutable emergency fallback with no graphics proxy.",
+      "nativeGraphics": {
+        "presetId": "mid-compatibility",
+        "graphicCtrlDwords": [
+          1,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "a27bceac8141950aa389c1d96c70ebdb3db8a3c8dc88ef070cafffc245fc1917",
+        "advancedEffectsPolicy": "compatibility",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "application",
@@ -81,6 +100,7 @@
           "application-controlled"
         ],
         "defaultWindowMode": "application-controlled",
+        "selectedWindowMode": null,
         "monitorPolicy": "application-controlled",
         "scalingFilterCandidates": [
           "application-controlled"
@@ -96,6 +116,14 @@
           0
         ],
         "selectedMsaa": 0,
+        "virtualVramMbCandidates": [
+          "application-controlled"
+        ],
+        "selectedVirtualVramMb": "application-controlled",
+        "vsyncOwnerCandidates": [
+          "application-controlled"
+        ],
+        "selectedVsyncOwner": "application-controlled",
         "vsyncOwner": "application",
         "frameLimitOwner": "application",
         "watermarkEnabled": false,
@@ -115,6 +143,25 @@
       "channel": "canary",
       "distributionClass": "public-gated",
       "purpose": "Known-good D3D11 FL11 supersampled 4:3 clarity baseline.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -156,6 +203,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
           "lanczos-3",
@@ -173,6 +221,18 @@
           0
         ],
         "selectedMsaa": 0,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -192,6 +252,25 @@
       "channel": "local-lab",
       "distributionClass": "local-only",
       "purpose": "Black-box, nonredistributable 16:10 behavior and feasibility evaluation.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -243,6 +322,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "presentationOwner": "client-patch",
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
@@ -263,6 +343,18 @@
           8
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -288,6 +380,25 @@
       "channel": "local-lab",
       "distributionClass": "local-only",
       "purpose": "Private AshenbubsHD v1.02 texture evaluation on the proven no-CAS local widescreen layout with the exact project-owned 59NL large-asset patch.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -345,6 +456,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "presentationOwner": "client-patch",
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
@@ -365,6 +477,18 @@
           8
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -388,6 +512,7 @@
         "baseProfileId": "lab-widescreen-16x10",
         "activationScript": "scripts/Set-PSOBBAshenbubsHDClientActivation.ps1"
       },
+      "selectedAssetComponentIds": null,
       "localModules": [
         {
           "componentId": "project-owned-psobb-large-assets",
@@ -409,6 +534,25 @@
       "channel": "local-lab",
       "distributionClass": "local-only",
       "purpose": "Isolated neutral-CAS evaluation on the proven local-only widescreen reference layout.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -466,6 +610,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "presentationOwner": "client-patch",
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
@@ -484,6 +629,18 @@
           0
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -513,6 +670,25 @@
       "channel": "local-lab",
       "distributionClass": "public-gated",
       "purpose": "Local-lab staging candidate for the project-owned 59NL 16:10 canary, without post-processing.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -564,6 +740,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "presentationOwner": "client-patch",
         "monitorPolicy": "nearest-physical-monitor-from-device-window",
         "scalingFilterCandidates": [
@@ -582,6 +759,18 @@
           0
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -613,6 +802,25 @@
       "channel": "local-lab",
       "distributionClass": "local-only",
       "purpose": "Isolated local evaluation of standard ReShade and the project-owned neutral CAS shader behind the clean-room widescreen canary.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -670,6 +878,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "presentationOwner": "client-patch",
         "monitorPolicy": "nearest-physical-monitor-from-device-window",
         "scalingFilterCandidates": [
@@ -688,6 +897,18 @@
           0
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -724,6 +945,25 @@
       "channel": "canary",
       "distributionClass": "public-gated",
       "purpose": "Intended true-16:10 profile after project-owned patch and restrained CAS acceptance.",
+      "nativeGraphics": {
+        "presetId": "high-end",
+        "graphicCtrlDwords": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "302f04ac1917b0eaecef147a99f7cada007b8bb8cc9ac1d9fd16b1a47d72e8a4",
+        "advancedEffectsPolicy": "enabled",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -781,6 +1021,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
           "lanczos-3",
@@ -800,6 +1041,18 @@
           8
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          256,
+          1024,
+          2048,
+          4096
+        ],
+        "selectedVirtualVramMb": null,
+        "vsyncOwnerCandidates": [
+          "none",
+          "dgvoodoo"
+        ],
+        "selectedVsyncOwner": null,
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -833,6 +1086,25 @@
       "channel": "local-lab",
       "distributionClass": "local-only",
       "purpose": "Isolated unsupported-on-Windows Vulkan compatibility and pacing comparison.",
+      "nativeGraphics": {
+        "presetId": "mid-compatibility",
+        "graphicCtrlDwords": [
+          1,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "a27bceac8141950aa389c1d96c70ebdb3db8a3c8dc88ef070cafffc245fc1917",
+        "advancedEffectsPolicy": "compatibility",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -874,6 +1146,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
           "renderer-controlled"
@@ -889,6 +1162,14 @@
           0
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedVirtualVramMb": "renderer-controlled",
+        "vsyncOwnerCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedVsyncOwner": "renderer-controlled",
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,
@@ -908,6 +1189,25 @@
       "channel": "local-lab",
       "distributionClass": "public-gated",
       "purpose": "Isolated D3D8-to-D3D9 translation comparison, not an upscaler.",
+      "nativeGraphics": {
+        "presetId": "mid-compatibility",
+        "graphicCtrlDwords": [
+          1,
+          0,
+          0,
+          0,
+          1,
+          1,
+          1,
+          0,
+          0
+        ],
+        "graphicCtrlSha256": "a27bceac8141950aa389c1d96c70ebdb3db8a3c8dc88ef070cafffc245fc1917",
+        "advancedEffectsPolicy": "compatibility",
+        "pixelFogPolicy": "pixel",
+        "lowResolutionTexturesPolicy": "disabled",
+        "frameSkipPolicy": "disabled"
+      },
       "renderer": {
         "d3d8Owner": {
           "kind": "proxy",
@@ -942,6 +1242,7 @@
           "resizable"
         ],
         "defaultWindowMode": "borderless",
+        "selectedWindowMode": null,
         "monitorPolicy": "physical-auo-2560x1600-first",
         "scalingFilterCandidates": [
           "renderer-controlled"
@@ -957,6 +1258,14 @@
           0
         ],
         "selectedMsaa": null,
+        "virtualVramMbCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedVirtualVramMb": "renderer-controlled",
+        "vsyncOwnerCandidates": [
+          "renderer-controlled"
+        ],
+        "selectedVsyncOwner": "renderer-controlled",
         "vsyncOwner": "none",
         "frameLimitOwner": "none",
         "watermarkEnabled": false,

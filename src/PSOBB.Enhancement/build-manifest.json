@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "componentId": "project-owned-psobb-enhancement",
   "version": "0.1.0-dev",
-  "builtAtUtc": "2026-07-14T23:03:24Z",
+  "builtAtUtc": "2026-07-15T20:54:58Z",
   "baseClient": {
     "relativePath": "Psobb.exe",
     "size": 6971904,
@@ -15,6 +15,7 @@
     "compiler": "MSVC x86 19.51.36248.0",
     "windowsSdk": "10.0.28000.0",
     "cmakeMinimum": "3.25",
+    "cmakeVersion": "4.4.0",
     "languageStandard": "C++20",
     "runtimeLibrary": "MultiThreaded",
     "compileOptions": [
@@ -22,13 +23,16 @@
       "/WX",
       "/permissive-",
       "/sdl",
+      "/Brepro",
       "/guard:cf",
       "/utf-8",
       "/Zc:__cplusplus",
       "/Zc:inline"
     ],
     "linkOptions": [
+      "/Brepro",
       "/DYNAMICBASE",
+      "/INCREMENTAL:NO",
       "/NXCOMPAT",
       "/GUARD:CF"
     ]
@@ -36,8 +40,8 @@
   "sourceInputs": [
     {
       "path": "src/PSOBB.Enhancement/CMakeLists.txt",
-      "size": 2384,
-      "sha256": "a68cb18cecf168ef6397a38ff262869fcfd7a6df80d541ca0e2d17e4aa45c46b"
+      "size": 2510,
+      "sha256": "c01acbd78c7877112f2027ee5090ac40a0752d07defe55e89926fa7a4c8b04fe"
     },
     {
       "path": "src/PSOBB.Enhancement/include/psobb_enhancement/api.h",
@@ -71,8 +75,8 @@
     },
     {
       "path": "src/PSOBB.Enhancement/README.md",
-      "size": 3130,
-      "sha256": "db5ca9cfdead996a5c7c537c17a92a40f074701629f40634452c9978fdac982d"
+      "size": 3275,
+      "sha256": "0af303fce9a6c1da7101112767dfb0f33a9a454d70fc55b6e69f7442bdbea96c"
     },
     {
       "path": "src/PSOBB.Enhancement/src/dllmain.cpp",
@@ -141,11 +145,17 @@
       "runtimeName": "PSOBB.Enhancement.asi",
       "machine": "x86",
       "size": 216576,
-      "sha256": "c810c44682593a79d702a6bb01c845af1bc01d52db979f90b433437c5581675a",
+      "sha256": "b67a6f64ad35ad8535a7ba7fa5be18f186757fa8af2e31b1d6e1c0dea26a716e",
       "authenticode": "NotSigned"
     }
   ],
+  "verificationTool": {
+    "relativeBuildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.Verify.exe",
+    "size": 216064,
+    "sha256": "a15429d0f25913de072d3d932d3d09eb0e585906941cc6f399b8afab479a253d"
+  },
   "verification": {
+    "cleanRebuildHashesMatched": true,
     "ctest": "2/2 passed",
     "exactClientVerifier": "passed",
     "securityProperties": [

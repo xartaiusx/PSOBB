@@ -78,16 +78,21 @@ if(MSVC)
       /WX
       /permissive-
       /sdl
+      /Brepro
       /guard:cf
       /utf-8
       /Zc:__cplusplus
       /Zc:inline)
   endforeach()
 
-  target_link_options(PSOBB.Enhancement PRIVATE
-    /DYNAMICBASE
-    /NXCOMPAT
-    /GUARD:CF)
+  foreach(target PSOBB.Enhancement PSOBB.Enhancement.Verify)
+    target_link_options(${target} PRIVATE
+      /Brepro
+      /DYNAMICBASE
+      /INCREMENTAL:NO
+      /NXCOMPAT
+      /GUARD:CF)
+  endforeach()
 endif()
 
 if(BUILD_TESTING)

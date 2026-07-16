@@ -648,8 +648,8 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
-        $ArchivePath = Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads') `
-            'AshenbubsHD - PSOBB - All Mods-20260714T162344Z-1-001.zip'
+        $ArchivePath = Join-Path $layout.Archives `
+            'graphics-lab\local-assets\AshenbubsHD-PSOBB-v1.02-cfe0fd18.zip'
     }
     $archive = Assert-LocalRegularFile -Path $ArchivePath -Label 'AshenbubsHD archive'
     Assert-LockedFileIdentity -File $archive -Declaration $component -Label 'AshenbubsHD archive' | Out-Null

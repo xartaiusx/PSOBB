@@ -130,6 +130,20 @@ Add-GraphicsCheck 'profile base hash contract' (
         [string]$clientMembers[0].sha256,
         [System.StringComparison]::OrdinalIgnoreCase)) 'profile is tied to the approved 59NL executable'
 
+$nativeGraphicsValid = $false
+$nativeGraphicsDetail = 'nativeGraphics is missing or invalid'
+try {
+    $nativeGraphics = Assert-PSOBBNativeGraphicsContract `
+        -NativeGraphics $profile.nativeGraphics `
+        -Label 'Materialized client nativeGraphics'
+    $nativeGraphicsValid = $true
+    $nativeGraphicsDetail = "preset=$($nativeGraphics.PresetId); sha256=$($nativeGraphics.GraphicCtrlSha256)"
+} catch {
+    $nativeGraphicsDetail = $_.Exception.Message
+}
+Add-GraphicsCheck 'profile native graphics contract' $nativeGraphicsValid `
+    $nativeGraphicsDetail
+
 $graphicsPreset = if ($renderer -eq 'Native') {
     'Native'
 } elseif ([int]$profile.schemaVersion -ge 3) {

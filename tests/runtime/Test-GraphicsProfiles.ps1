@@ -72,6 +72,34 @@ function Invoke-MutatedContractFailure {
     }
 }
 
+function Set-AcceptedGraphicsCandidate {
+    param(
+        [Parameter(Mandatory)][object]$Candidate,
+        [Parameter(Mandatory)][object]$Profile
+    )
+
+    $Candidate.stage = 'evidence-complete'
+    $Candidate.disposition = 'accepted'
+    $Candidate.blockers = @()
+    $Candidate.rejectionReason = $null
+    foreach ($gate in $Candidate.gates.PSObject.Properties) {
+        $gate.Value.state = 'pass'
+        if (@($gate.Value.artifactRefs).Count -eq 0) {
+            $gate.Value.artifactRefs = @('repo:config/graphics-evidence.json')
+        }
+    }
+
+    $Profile.display.selectedInternalRender = $Profile.display.internalRenderCandidates[0]
+    $Profile.display.selectedScalingFilter = [string]$Profile.display.scalingFilterCandidates[0]
+    $Profile.display.selectedWindowMode = [string]$Profile.display.windowModes[0]
+    $Profile.quality.selectedMsaa = $Profile.quality.msaaCandidates[0]
+    $Profile.quality.selectedVirtualVramMb = $Profile.quality.virtualVramMbCandidates[0]
+    $Profile.quality.selectedVsyncOwner = [string]$Profile.quality.vsyncOwnerCandidates[0]
+    if (@($Profile.postProcessing.strengthCandidates).Count -gt 0) {
+        $Profile.postProcessing.selectedStrength = $Profile.postProcessing.strengthCandidates[0]
+    }
+}
+
 $productionPassed = $false
 $productionDetail = ''
 try {
@@ -85,6 +113,45 @@ Add-TestResult 'production graphics contracts validate' $productionPassed $produ
 
 $productionEvidence = Get-Content -Raw -LiteralPath $evidencePath |
     ConvertFrom-Json -Depth 50
+$completionStateFailClosed =
+    ($productionEvidence.LocalPrivateGraphicallyAccepted -eq $false) -and
+    ($productionEvidence.PublicDistributableGraphicallyAccepted -eq $false)
+Add-TestResult `
+    'graphical completion state remains explicitly pending' `
+    $completionStateFailClosed `
+    ("local={0}; public={1}" -f
+        $productionEvidence.LocalPrivateGraphicallyAccepted,
+        $productionEvidence.PublicDistributableGraphicallyAccepted)
+$expectedAssetMatrix = @(
+    'ashenbubs-hd-psobb-v1.02-local-import|10|pending|immutable-foundation|composed-activation-manifest|ashenbubs-hd-psobb-v1.02-local-import',
+    'luthee-hd-ui-v1.1.6-local-import|20|rejected|additive-no-foundation-collision|source-lock-member-map|luthee-hd-ui-v1.1.6-local-import',
+    'higher-resolution-item-box-textures-2025-12-30-local-import|30|rejected|additive-no-foundation-collision|source-lock-member-map|higher-resolution-item-box-textures-2025-12-30-local-import',
+    'echelon-hd-effects-technics-2019-05-27-local-import|40|rejected|reject-immutable-foundation-collision|source-lock-conflict-map|ashenbubs-hd-psobb-v1.02-local-import',
+    'echelon-hd-blood-2018-06-16-local-import|50|rejected|reject-immutable-foundation-collision|source-lock-conflict-map|ashenbubs-hd-psobb-v1.02-local-import'
+)
+$actualAssetMatrix = @($productionEvidence.assetCandidates | ForEach-Object {
+    '{0}|{1}|{2}|{3}|{4}|{5}' -f
+        [string]$_.componentId,
+        [int]$_.activationOrder,
+        [string]$_.disposition,
+        [string]$_.collisionPolicy,
+        [string]$_.destinationOwnership.source,
+        [string]$_.destinationOwnership.ownerComponentId
+})
+$rejectedAssetCandidates = @($productionEvidence.assetCandidates | Where-Object {
+    [string]$_.disposition -ceq 'rejected'
+})
+$assetMatrixExact =
+    ($actualAssetMatrix.Count -eq $expectedAssetMatrix.Count) -and
+    (@(Compare-Object $expectedAssetMatrix $actualAssetMatrix -SyncWindow 0 -CaseSensitive).Count -eq 0) -and
+    ($rejectedAssetCandidates.Count -eq 4) -and
+    (@($rejectedAssetCandidates | Where-Object {
+        [string]::IsNullOrWhiteSpace([string]$_.rejectionReason)
+    }).Count -eq 0)
+Add-TestResult `
+    'asset candidate matrix preserves exact order and dispositions' `
+    $assetMatrixExact `
+    ($actualAssetMatrix -join '; ')
 $rejectedIds = @($productionEvidence.candidates | Where-Object {
     [string]$_.disposition -ceq 'rejected'
 } | ForEach-Object { [string]$_.profileId })
@@ -111,13 +178,24 @@ $reconciledDispositionsValid =
     ([string]$referenceWide.gates.liveWindow.state -ceq 'pass') -and
     ([string]$referenceCas.stage -ceq 'runtime-verified') -and
     ([string]$referenceCas.disposition -ceq 'pending') -and
-    ([string]$referenceCas.gates.runtimeModuleAllowlist.state -ceq 'pass') -and
+    ([string]$referenceCas.gates.runtimeModuleAllowlist.state -ceq 'pending') -and
+    (@($referenceCas.gates.runtimeModuleAllowlist.artifactRefs).Count -eq 0) -and
+    ([string]$referenceCas.gates.runtimeModuleAllowlist.note -cmatch 'canonical relocation') -and
     ([string]$referenceCas.gates.liveWindow.state -ceq 'pass') -and
     ([string]$privateHd.stage -ceq 'runtime-verified') -and
     ([string]$privateHd.disposition -ceq 'pending') -and
+    ([string]$privateHd.gates.runtimeModuleAllowlist.state -ceq 'pass') -and
+    ([string]$privateHd.gates.liveWindow.state -ceq 'pending') -and
+    ([string]$privateHd.gates.framePacing.state -ceq 'pass') -and
+    ([string]$privateHd.gates.stabilitySoak.state -ceq 'pending') -and
+    ([string]$privateHd.gates.rollback.state -ceq 'pending') -and
+    ([string]$privateHd.gates.framePacing.note -cmatch 'exact High-profile') -and
+    (@($privateHd.gates.framePacing.artifactRefs).Count -gt 0) -and
+    (@($privateHd.gates.stabilitySoak.artifactRefs).Count -gt 0) -and
+    (@($privateHd.gates.rollback.artifactRefs).Count -gt 0) -and
     ([string]$privateHd.gates.casHaloAndClipping.state -ceq 'not-applicable')
 Add-TestResult `
-    'runtime graphics dispositions preserve accepted loads and exact rejections' `
+    'runtime dispositions preserve exact rejections and current HD evidence' `
     $reconciledDispositionsValid `
     ("rejected={0}; wide={1}/{2}; cas={3}/{4}; hd={5}/{6}" -f
         ($rejectedIds -join ','),
@@ -172,6 +250,110 @@ Invoke-MutatedContractFailure 'true-widescreen render above 3840x2400 is rejecte
     $profile.display.internalRenderCandidates[1].height = 3200
 }
 
+Invoke-MutatedContractFailure 'native GRAPHICCTRL vector and SHA cannot drift independently' {
+    param($profiles, $evidence, $sources)
+
+    $profile = @($profiles.profiles | Where-Object id -eq 'lab-widescreen-hd-16x10')[0]
+    $profile.nativeGraphics.graphicCtrlDwords[0] = 1
+}
+
+Invoke-MutatedContractFailure 'pending profile cannot preselect virtual VRAM' {
+    param($profiles, $evidence, $sources)
+
+    $profile = @($profiles.profiles | Where-Object id -eq 'lab-widescreen-hd-16x10')[0]
+    $profile.quality.selectedVirtualVramMb = 1024
+}
+
+Invoke-MutatedContractFailure 'pending profile cannot preselect its VSync winner' {
+    param($profiles, $evidence, $sources)
+
+    $profile = @($profiles.profiles | Where-Object id -eq 'lab-widescreen-hd-16x10')[0]
+    $profile.quality.selectedVsyncOwner = 'dgvoodoo'
+}
+
+Invoke-MutatedContractFailure 'asset candidate matrix cannot omit a required candidate' {
+    param($profiles, $evidence, $sources)
+
+    $evidence.assetCandidates = @($evidence.assetCandidates | Select-Object -Skip 1)
+}
+
+Invoke-MutatedContractFailure 'asset candidate activation order cannot be reordered' {
+    param($profiles, $evidence, $sources)
+
+    $first = $evidence.assetCandidates[0]
+    $evidence.assetCandidates[0] = $evidence.assetCandidates[1]
+    $evidence.assetCandidates[1] = $first
+}
+
+Invoke-MutatedContractFailure 'rejected Echelon collision cannot return to pending' {
+    param($profiles, $evidence, $sources)
+
+    $candidate = @($evidence.assetCandidates | Where-Object {
+        [string]$_.componentId -ceq 'echelon-hd-effects-technics-2019-05-27-local-import'
+    })[0]
+    $candidate.disposition = 'pending'
+    $candidate.rejectionReason = $null
+}
+
+Invoke-MutatedContractFailure 'accepted HD assets must follow accepted activation order' {
+    param($profiles, $evidence, $sources)
+
+    foreach ($assetCandidate in @($evidence.assetCandidates | Select-Object -First 3)) {
+        $assetCandidate.disposition = 'accepted'
+    }
+    $profile = @($profiles.profiles | Where-Object {
+        [string]$_.id -ceq 'lab-widescreen-hd-16x10'
+    })[0]
+    $candidate = @($evidence.candidates | Where-Object {
+        [string]$_.profileId -ceq 'lab-widescreen-hd-16x10'
+    })[0]
+    Set-AcceptedGraphicsCandidate -Candidate $candidate -Profile $profile
+    $profile.selectedAssetComponentIds = @(
+        'luthee-hd-ui-v1.1.6-local-import',
+        'ashenbubs-hd-psobb-v1.02-local-import',
+        'higher-resolution-item-box-textures-2025-12-30-local-import'
+    )
+}
+
+Invoke-MutatedContractFailure 'local completion requires every asset disposition to be closed' {
+    param($profiles, $evidence, $sources)
+
+    foreach ($profileId in @('safe-native-4x3', 'lab-widescreen-16x10')) {
+        $profile = @($profiles.profiles | Where-Object {
+            [string]$_.id -ceq $profileId
+        })[0]
+        $candidate = @($evidence.candidates | Where-Object {
+            [string]$_.profileId -ceq $profileId
+        })[0]
+        Set-AcceptedGraphicsCandidate -Candidate $candidate -Profile $profile
+    }
+    $evidence.LocalPrivateGraphicallyAccepted = $true
+}
+
+Invoke-MutatedContractFailure 'local completion requires the accepted HD foundation profile' {
+    param($profiles, $evidence, $sources)
+
+    $ashenbubs = @($evidence.assetCandidates | Where-Object {
+        [string]$_.componentId -ceq 'ashenbubs-hd-psobb-v1.02-local-import'
+    })[0]
+    $ashenbubs.disposition = 'accepted'
+    $ashenbubs.artifactRefs = @(
+        'repo:config/sources.lock.json',
+        ('runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/' +
+            'current/activation.json#sha256=' + ('a' * 64)))
+
+    foreach ($profileId in @('safe-native-4x3', 'lab-widescreen-16x10')) {
+        $profile = @($profiles.profiles | Where-Object {
+            [string]$_.id -ceq $profileId
+        })[0]
+        $candidate = @($evidence.candidates | Where-Object {
+            [string]$_.profileId -ceq $profileId
+        })[0]
+        Set-AcceptedGraphicsCandidate -Candidate $candidate -Profile $profile
+    }
+    $evidence.LocalPrivateGraphicallyAccepted = $true
+}
+
 Invoke-MutatedContractFailure 'accepted disposition without evidence is rejected' {
     param($profiles, $evidence, $sources)
 
@@ -180,11 +362,58 @@ Invoke-MutatedContractFailure 'accepted disposition without evidence is rejected
     $candidate.disposition = 'accepted'
 }
 
+Invoke-MutatedContractFailure 'pending artifact hash drift is rejected' {
+    param($profiles, $evidence, $sources)
+
+    $candidate = @($evidence.candidates | Where-Object {
+        [string]$_.profileId -ceq 'clarity-dgvoodoo-4x3'
+    })[0]
+    $candidate.gates.runtimeModuleAllowlist.artifactRefs = @(
+        'runtime:canary/runtime/client/missing-profile.json#sha256=' + ('0' * 64))
+}
+
+Invoke-MutatedContractFailure 'accepted profile cannot retain unresolved selections' {
+    param($profiles, $evidence, $sources)
+
+    $profile = @($profiles.profiles | Where-Object id -eq 'lab-widescreen-hd-16x10')[0]
+    $candidate = @($evidence.candidates | Where-Object profileId -eq 'lab-widescreen-hd-16x10')[0]
+    $candidate.stage = 'evidence-complete'
+    $candidate.disposition = 'accepted'
+    $candidate.blockers = @()
+    $candidate.rejectionReason = $null
+    foreach ($gate in $candidate.gates.PSObject.Properties) {
+        $gate.Value.state = 'pass'
+        if (@($gate.Value.artifactRefs).Count -eq 0) {
+            $gate.Value.artifactRefs = @('repo:config/graphics-evidence.json')
+        }
+    }
+    $profile.quality.selectedVirtualVramMb = 256
+    $profile.quality.selectedVsyncOwner = 'none'
+}
+
+Invoke-MutatedContractFailure 'local completion cannot bypass accepted profile prerequisites' {
+    param($profiles, $evidence, $sources)
+
+    $evidence.LocalPrivateGraphicallyAccepted = $true
+}
+
+Invoke-MutatedContractFailure 'public completion cannot bypass local completion' {
+    param($profiles, $evidence, $sources)
+
+    $evidence.PublicDistributableGraphicallyAccepted = $true
+}
+
 Invoke-MutatedContractFailure 'project-owned shader hash drift is rejected' {
     param($profiles, $evidence, $sources)
 
     $component = @($sources.components | Where-Object id -eq 'psobb-neutral-cas-source')[0]
     $component.sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+}
+
+Invoke-MutatedContractFailure 'source-lock generation cannot predate provenance checks' {
+    param($profiles, $evidence, $sources)
+
+    $sources.generatedAtUtc = '2026-01-01T00:00:00Z'
 }
 
 Invoke-MutatedContractFailure 'clean-room profile cannot silently add ReShade' {
