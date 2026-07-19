@@ -12,11 +12,11 @@
 | dgVoodoo renderer profiles | Watermark-free Ultra D3D11 FL11 canary; aspect-correct 3840x2880 supersampling with 2560x1600 borderless and movable/resizable presentation; stable remains Native | Official x86 dgVoodoo | Per upstream terms |
 | True 16:9/16:10 camera and HUD expansion | Not integrated; local evaluation only | Unlicensed public mod as behavior reference, or a licensed/project-owned replacement | No, pending rights |
 | Same-floor shared EXP | Stable set to 0; fork/gate required | Upstream `BBEXPShareMultiplier=1` also rewards tagged players on another floor, so it does not meet the approved contract | After fork and multi-client tests |
-| Server-authoritative damage synchronization | Upstream-capable canary | newserv `EnemyDamageSync` 59NL patch + required-patch gate | Only after multi-client tests |
+| Client-reported damage-desynchronization mitigation | Upstream-capable canary | newserv `EnemyDamageSync` 59NL patch + required-patch gate; this does not make combat server-authoritative | Only after multi-client tests |
 | Reject concurrent use of one account | Upstream-canary; stable release gated | Locked newserv commit `d754a34e271a4fb387be63db34ef0c303e49dcf2` adds `AllowSameAccountConcurrentLogins`; stable `v2026-02-27` at `a649a4a146d04dba320bb579ac291527db0febb5` has no switch | Only after two-client acceptance |
 | 32 slots and expanded limits | Planned/gated migration | Project fork + versioned save schema | Only after restore tests |
 | Fast tekker, MAG alert, rare-sale protection | Stable profile; gameplay acceptance pending | Pinned newserv `FastTekker`, `HungryMagSound`, and `NoRareSelling` 59NL auto-patches | Yes, with MIT notice |
-| 26 palette inputs | Stable profile; full input acceptance pending | Pinned newserv `Palette` 59NL auto-patch, credited upstream to licensed BBPP work | Yes, after client tests |
+| 26 palette inputs | Compatibility/reference only; Phase 1 acceptance pending | Pinned newserv `Palette` 59NL auto-patch, credited upstream to licensed BBPP work; incompatible with future Modern hotbar ownership | Yes, after client tests |
 | XInput/pickup controls | Planned/gated client patch | Project-owned/licensed source | Only after client tests |
 | Rotating 25% boosts/Purist mode | Disabled | Project configuration | After soft launch |
 
@@ -28,9 +28,11 @@ quests, tables, branding, and assets are not copied.
 1. Prefer the exact-version MIT patches shipped by the pinned newserv release.
 2. Build reviewed startup fixes from licensed Blue Burst Patch Project source,
    assigning one owner to every overlapping feature.
-3. Keep newserv as the sole owner of `NoRareSelling` and `Palette`; do not build
-   overlapping BBPP variants. Gate protocol, damage, and storage patches on
-   exact client/server parity and the corresponding multi-client or restore
+3. Keep newserv as the sole owner of `NoRareSelling` and of `Palette` in its
+   compatibility/reference profile; do not build overlapping BBPP variants.
+   `Palette` is incompatible with future Modern hotbar ownership and must be
+   absent from the Modern profile. Gate protocol, damage, and storage patches
+   on exact client/server parity and the corresponding multi-client or restore
    tests.
 4. Keep `psobb-widescreen` evaluation local because its original code has no
    explicit reuse grant. Public true-widescreen support requires permission or
@@ -40,7 +42,9 @@ quests, tables, branding, and assets are not copied.
 
 The tracked `stable-qol` profile contains exactly `AccurateKillCount`,
 `FastTekker`, `HungryMagSound`, `NoRareSelling`, and `Palette` in `AutoPatches`.
-It keeps `BBRequiredPatches` empty. `DrawDistance`, `EnemyHPBars`, and
-`ItemPickup` remain source-canary-only; `EnemyDamageSync`, `ServerEXPDisplay`,
-and `StackLimits` remain protocol-gated; `MoreSaveSlots` remains migration-
-gated. Use the empty `baseline` profile for immediate configuration rollback.
+It keeps `BBRequiredPatches` empty. This records a compatibility/reference
+profile, not Phase 1 acceptance; `Palette` cannot coexist with the future
+Modern hotbar owner. `DrawDistance`, `EnemyHPBars`, and `ItemPickup` remain
+source-canary-only; `EnemyDamageSync`, `ServerEXPDisplay`, and `StackLimits`
+remain protocol-gated; `MoreSaveSlots` remains migration-gated. Use the empty
+`baseline` profile for immediate configuration rollback.

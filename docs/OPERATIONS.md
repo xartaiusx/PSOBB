@@ -90,17 +90,21 @@
    immutable client inventory, not only `Psobb.exe`.
 6. Run `Start-PSOBB.ps1` and `Test-PSOBB.ps1 -Suite Baseline`; confirm the only
    listeners are loopback TCP 11000, 12000, and 12001.
-7. Complete login, character creation, one-person game, combat, item, bank,
-   save, restart, and relog acceptance using the disposable client.
+7. Stable Native is the accepted recovery baseline. Its 2026-07-19
+   loopback-only acceptance used only slot-0 Twills, a FOnewearl, and completed
+   a five-minute Forest/manual-combat scenario, read-only bank inspection,
+   graceful restart, slot-0 relog, semantic verification, and graceful
+   shutdown.
 8. Run `Stop-PSOBB.ps1` so the supervisor sends newserv's shell `exit`; then run
    `Backup-PSOBB.ps1` and `Test-PSOBBRestoreDrill.ps1`.
 9. Back up state before any server, client, map, quest, or save-format change.
 
 ## Graphics canary
 
-The stable client stays Native until the complete combat, bank, restart, and
-relog acceptance sequence passes. A renderer can be prepared without touching
-the running stable client:
+The stable client remains Native as the accepted recovery baseline after the
+2026-07-19 loopback-only combat, bank, restart, relog, and shutdown acceptance.
+This does not accept a graphics canary or any Phase 1 QoL patch. A renderer can
+be prepared without touching the running stable client:
 
 ```powershell
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
@@ -168,9 +172,19 @@ Backups are schema-v3 exact-file snapshots. They bind `system/config.json` and
 Restore rejects older incomplete snapshots and any config/metadata mismatch,
 stages state on the same volume, and rolls both files back if any swap fails.
 The automated drill rechecks that binding before it proves startup, listeners,
-and account indexing; full
-character/bank/team recovery is not accepted until the game-protocol relog
-scenario is completed with disposable state.
+and account indexing. The 2026-07-19 loopback-only Stable Native
+game-protocol relog and character/bank semantic verifier completed the
+remaining recovery-baseline acceptance.
+
+The pinned upstream newserv sorts bank records before sending BB bank contents,
+and a later character save can persist that normalized order. It also assigns
+transient runtime item IDs. A bank inspection is therefore read-only by
+ownership even when only those serialization details change. Verification keeps
+the inventory layout, descriptors, and equipment exact, while the embedded and
+authoritative slot-0 bank representations must match exact order-insensitive
+multisets of full canonical item descriptors. Bank counts and structural
+validity remain fail-closed; physical bank order and transient runtime item IDs
+are not ownership identities.
 
 The pinned unmodified `v2026-02-27` release at commit
 `a649a4a146d04dba320bb579ac291527db0febb5` has no

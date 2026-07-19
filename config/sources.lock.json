@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-15T23:30:00Z",
+  "generatedAtUtc": "2026-07-19T17:20:00Z",
   "components": [
     {
       "id": "newserv-stable-release",
@@ -15,7 +15,7 @@
       "signatureState": "GitHub release digest verified; archive and executable have no Authenticode signature",
       "license": "MIT",
       "redistribution": "Allowed with the upstream MIT license; runtime remains outside Git",
-      "compatibility": "configuration, patch parity, process start, loopback listeners, root login, character creation, lobby entry, and autosave passed; combat, bank, restart, and relog acceptance remain pending",
+      "compatibility": "configuration, patch parity, process start, loopback listeners, root login, character creation, lobby entry, and autosave passed; 2026-07-19 loopback-only Stable Native recovery acceptance passed with slot-0 Twills FOnewearl, including a five-minute Forest/manual-combat scenario, read-only bank inspection, graceful restart and shutdown, relog, and semantic verification",
       "rollbackTarget": "last-known-good/server-v2026-02-27",
     "members": [
       {
@@ -101,7 +101,7 @@
       "signatureState": "No publisher digest or archive signature; Psobb.exe has no Authenticode signature",
       "license": "SEGA proprietary game assets; reuse terms not supplied with the archive",
       "redistribution": "Local import only; never commit, mirror, or publish without separate rights",
-      "compatibility": "archive path safety, Defender scan, executable hash, patch-data parity, root login, character creation, lobby entry, and autosave passed; combat, bank, restart, and relog acceptance remain pending",
+      "compatibility": "archive path safety, Defender scan, executable hash, patch-data parity, root login, character creation, lobby entry, and autosave passed; 2026-07-19 loopback-only Stable Native recovery acceptance passed with slot-0 Twills FOnewearl, including a five-minute Forest/manual-combat scenario, read-only bank inspection, graceful restart and shutdown, relog, and semantic verification",
       "rollbackTarget": "immutable stable/client base",
       "members": [
         {
