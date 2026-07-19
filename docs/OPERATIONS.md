@@ -18,7 +18,7 @@
    state because newly created children can inherit their parent DACL.
 
    ```powershell
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime"
+   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime"
    ```
 
    The current local target inventory is licenses (including account/license
@@ -103,10 +103,10 @@ relog acceptance sequence passes. A renderer can be prepared without touching
 the running stable client:
 
 ```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBClientGraphics.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -WindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Channel Canary -WindowMode Resizable
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBClientGraphics.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -WindowMode Borderless
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -WindowMode Resizable
 ```
 
 The canary is rebuilt from the immutable 59NL base. It accepts only the locked
@@ -146,7 +146,7 @@ For an existing runtime, stop newserv normally, then explicitly promote the
 hash-bound `stable-qol` profile:
 
 ```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
 ```
 
 The command refuses to edit configuration while the approved newserv binary is
@@ -172,10 +172,14 @@ and account indexing; full
 character/bank/team recovery is not accepted until the game-protocol relog
 scenario is completed with disposable state.
 
-The unmodified upstream release has no `AllowSameAccountConcurrentLogins` or
-`CensorCredentials` configuration keys. Packet-data logging is disabled in
-the stable configuration, and concurrent-account rejection remains a tested
-project-fork feature gate; unsupported keys are never added as false security.
+The pinned unmodified `v2026-02-27` release at commit
+`a649a4a146d04dba320bb579ac291527db0febb5` has no
+`AllowSameAccountConcurrentLogins` or `CensorCredentials` configuration keys.
+The separately locked canary source at commit
+`d754a34e271a4fb387be63db34ef0c303e49dcf2` adds both controls, but it remains
+canary-only until the exact build passes two-client acceptance or ships in an
+accepted release. Packet-data logging is disabled in stable, and unsupported
+keys are never added to an older release as false security.
 
 The HTTP API, automatic registration, DNS listener, proxy modes, and public
 firewall rules remain disabled in local operation.
