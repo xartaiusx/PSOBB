@@ -282,7 +282,10 @@ try {
     }
     $profilePath = Join-Path $clientRoot 'client-profile.json'
     $receiptRoot = Join-Path $layout.Logs 'client-startup'
+    $receiptRoot = Assert-PathWithinRoot -Path $receiptRoot -Root $layout.Root
     [void][IO.Directory]::CreateDirectory($receiptRoot)
+    $receiptRoot = Assert-PathWithinRoot -Path $receiptRoot -Root $layout.Root
+    Set-PSOBBProtectedAcl -Path $receiptRoot
     $receiptPath = Join-Path $receiptRoot (
         $process.StartTime.ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ') +
         "-$($process.Id).json")
@@ -325,7 +328,9 @@ try {
             $temporaryReceipt,
             ($receipt | ConvertTo-Json -Depth 8),
             [Text.UTF8Encoding]::new($false))
+        Set-PSOBBProtectedAcl -Path $temporaryReceipt
         Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath
+        Set-PSOBBProtectedAcl -Path $receiptPath
     } finally {
         if (Test-Path -LiteralPath $temporaryReceipt) {
             Remove-Item -LiteralPath $temporaryReceipt -Force

@@ -88,47 +88,6 @@ function Read-PSOBBAdminCredential {
     }
 }
 
-function Test-PSOBBProtectedAcl {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $false
-    }
-    $item = Get-Item -Force -LiteralPath $Path
-    $allowed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    [void]$allowed.Add([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-    [void]$allowed.Add('S-1-5-32-544')
-    [void]$allowed.Add('S-1-5-18')
-    $acl = Get-Acl -LiteralPath $Path
-    if (-not $acl.AreAccessRulesProtected) {
-        return $false
-    }
-    $rules = @($acl.GetAccessRules(
-        $true, $true, [System.Security.Principal.SecurityIdentifier]))
-    if ($rules.Count -ne $allowed.Count) {
-        return $false
-    }
-    $expectedInheritance = if ($item.PSIsContainer) {
-        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-    } else {
-        [System.Security.AccessControl.InheritanceFlags]::None
-    }
-    $found = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($rule in $rules) {
-        if (($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) -or
-            -not $allowed.Contains($rule.IdentityReference.Value) -or
-            $rule.IsInherited -or
-            ($rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) -or
-            ($rule.InheritanceFlags -ne $expectedInheritance) -or
-            ($rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None)) {
-            return $false
-        }
-        [void]$found.Add($rule.IdentityReference.Value)
-    }
-    $found.SetEquals($allowed)
-}
-
 function Write-PSOBBProtectedText {
     [CmdletBinding()]
     param(

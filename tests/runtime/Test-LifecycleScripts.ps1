@@ -856,6 +856,16 @@ Add-Result 'client and session report verified startup latency' (
     $startSessionSource -match 'ClientStartupElapsedMilliseconds' -and
     $startSessionSource -match 'ClientStartupReceiptSha256') `
     'hash-bound load-time evidence ends only after the verified window and presentation settle'
+Add-Result 'client startup receipts receive explicit protected DACLs' (
+    $startClientSource -match
+        '\$receiptRoot\s*=\s*Assert-PathWithinRoot\s+-Path\s+\$receiptRoot\s+-Root\s+\$layout\.Root[\s\S]*?CreateDirectory\(\$receiptRoot\)[\s\S]*?\$receiptRoot\s*=\s*Assert-PathWithinRoot\s+-Path\s+\$receiptRoot\s+-Root\s+\$layout\.Root' -and
+    $startClientSource -match
+        'Set-PSOBBProtectedAcl\s+-Path\s+\$receiptRoot' -and
+    $startClientSource -match
+        'Set-PSOBBProtectedAcl\s+-Path\s+\$temporaryReceipt' -and
+    $startClientSource -match
+        'Move-Item\s+-LiteralPath\s+\$temporaryReceipt\s+-Destination\s+\$receiptPath[\s\S]*?Set-PSOBBProtectedAcl\s+-Path\s+\$receiptPath') `
+    'receipt directory, staged file, and final file are protected before evidence is returned'
 Add-Result 'stable and canary rebuilds materialize catalog-owned native graphics' (
     $resetClientSource -match "'safe-native-4x3'" -and
     $resetClientSource -match "'clarity-dgvoodoo-4x3'" -and

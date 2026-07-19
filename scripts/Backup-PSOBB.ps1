@@ -118,6 +118,8 @@ foreach ($stateRoot in $stateRoots) {
 if (-not (Test-Path -LiteralPath $layout.Backups -PathType Container)) {
     New-Item -ItemType Directory -Path $layout.Backups -Force | Out-Null
 }
+Assert-PathWithinRoot -Path $layout.Backups -Root $layout.Root | Out-Null
+Set-PSOBBProtectedAcl -Path $layout.Backups
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
 $backup = Join-Path $layout.Backups ($BackupKind + '-' + $stamp)
 $partial = $backup + '.partial-' + [Guid]::NewGuid().ToString('N')
@@ -208,6 +210,7 @@ try {
         $manifestPath,
         ($manifest | ConvertTo-Json -Depth 8),
         [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedTreeAcl -Path $partial -Root $layout.Backups
     Move-Item -LiteralPath $partial -Destination $backup
     $completed = $true
 } finally {

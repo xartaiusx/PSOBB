@@ -17,6 +17,18 @@ function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
     $results.Add([pscustomobject]@{ Name = $Name; Passed = $Passed; Detail = $Detail })
 }
 
+function Test-ProtectedTree([Parameter(Mandatory)][string]$Path) {
+    $items = @(Get-Item -Force -LiteralPath $Path) +
+        @(Get-ChildItem -Force -LiteralPath $Path -Recurse)
+    foreach ($item in $items) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not (Test-PSOBBProtectedAcl -Path $item.FullName)) {
+            return $false
+        }
+    }
+    $true
+}
+
 function Test-SuccessfulDrillEvidenceBinding(
     [Parameter(Mandatory)]$Drill,
     [Parameter(Mandatory)]$Manifest,
@@ -149,6 +161,9 @@ try {
 
     $backup = & (Join-Path $repositoryRoot 'scripts\Backup-PSOBB.ps1') `
         -RuntimeRoot $testLayout.Root -Retention 2
+    Add-Result 'published backup tree has exact protected DACLs' `
+        (Test-ProtectedTree -Path $backup.BackupPath) `
+        'all backup directories and files are explicit, protected, and reparse-free'
     $original = @(Get-StateFingerprint `
         -BaseRoot $testLayout.Server `
         -InstallRecordPath $testLayout.InstallRecord)
@@ -300,6 +315,9 @@ try {
     Add-Result 'failed drill retains result only' `
         (($failedDrillChildren.Count -eq 1) -and ($failedDrillChildren[0].Name -eq 'drill-result.json')) `
         "$($failedDrillChildren.Count) retained item(s)"
+    Add-Result 'failed drill evidence has exact protected DACLs' `
+        (Test-ProtectedTree -Path $failedDrillRoot.FullName) `
+        'retained drill directory and result are explicit and protected'
     Remove-Item -LiteralPath $failedDrillBackup -Recurse -Force
 
     # Prove the real transaction replaces extras, captures an emergency backup,
@@ -337,6 +355,9 @@ try {
         -InstallRecordPath (Join-Path $emergencyValidation.BackupPath 'stable\installation.json'))
     $emergencyExact = @(Compare-Object -ReferenceObject $preRestore -DifferenceObject $emergencyState).Count -eq 0
     Add-Result 'emergency backup captures pre-restore state' $emergencyExact $restored.EmergencyManifestSha256
+    Add-Result 'emergency backup tree has exact protected DACLs' `
+        (Test-ProtectedTree -Path $restored.EmergencyBackup) `
+        'pre-restore evidence uses the same protected publication path'
 
     $debris = @(Get-ChildItem -Force -LiteralPath $testLayout.Stable -Filter '.psobb-restore-*')
     Add-Result 'restore leaves no transaction debris' ($debris.Count -eq 0) "$($debris.Count) item(s)"

@@ -312,6 +312,115 @@ function Set-PSOBBProtectedAcl {
     }
 }
 
+function Test-PSOBBProtectedAcl {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $item = Get-Item -Force -LiteralPath $Path
+    $allowed = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    [void]$allowed.Add(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    [void]$allowed.Add('S-1-5-32-544')
+    [void]$allowed.Add('S-1-5-18')
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        return $false
+    }
+    $rules = @($acl.GetAccessRules(
+        $true, $true, [System.Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -ne $allowed.Count) {
+        return $false
+    }
+    $expectedInheritance = if ($item.PSIsContainer) {
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $found = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($rule in $rules) {
+        if (($rule.AccessControlType -ne
+                [System.Security.AccessControl.AccessControlType]::Allow) -or
+            -not $allowed.Contains($rule.IdentityReference.Value) -or
+            $rule.IsInherited -or
+            ($rule.FileSystemRights -ne
+                [System.Security.AccessControl.FileSystemRights]::FullControl) -or
+            ($rule.InheritanceFlags -ne $expectedInheritance) -or
+            ($rule.PropagationFlags -ne
+                [System.Security.AccessControl.PropagationFlags]::None)) {
+            return $false
+        }
+        [void]$found.Add($rule.IdentityReference.Value)
+    }
+    $found.SetEquals($allowed)
+}
+
+function Set-PSOBBProtectedTreeAcl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $safeRoot = Assert-PathWithinRoot -Path $Path -Root $Root
+    if (-not (Test-Path -LiteralPath $safeRoot -PathType Container)) {
+        throw "Protected runtime tree is missing: $safeRoot"
+    }
+
+    # Enumerate one proven directory at a time. A recursive provider walk could
+    # enter a substituted junction before the caller has validated that child.
+    $paths = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $pending = [System.Collections.Generic.Queue[string]]::new()
+    $pending.Enqueue($safeRoot)
+    while ($pending.Count -gt 0) {
+        $directory = Assert-PathWithinRoot -Path $pending.Dequeue() -Root $Root
+        $directoryItem = Get-Item -Force -LiteralPath $directory
+        if (-not $directoryItem.PSIsContainer -or
+            ($directoryItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Protected runtime tree contains an unsafe directory: $directory"
+        }
+        if ($seen.Add($directoryItem.FullName)) {
+            $paths.Add($directoryItem.FullName)
+        }
+
+        foreach ($child in @(Get-ChildItem -Force -LiteralPath $directory |
+                Sort-Object -Property FullName)) {
+            $safeChild = Assert-PathWithinRoot -Path $child.FullName -Root $Root
+            if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Protected runtime tree contains a reparse point: $safeChild"
+            }
+            if ($child.PSIsContainer) {
+                $pending.Enqueue($safeChild)
+            } elseif ($seen.Add($safeChild)) {
+                $paths.Add($safeChild)
+            }
+        }
+    }
+
+    # Protect children before parents so subsequent parent propagation cannot
+    # replace a child's explicit DACL with inherited rules.
+    foreach ($itemPath in @($paths | Sort-Object -Property @{
+                Expression = { $_.Length }
+                Descending = $true
+            }, @{
+                Expression = { $_ }
+                Descending = $false
+            })) {
+        $safeItem = Assert-PathWithinRoot -Path $itemPath -Root $Root
+        $currentItem = Get-Item -Force -LiteralPath $safeItem
+        if (($currentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Protected runtime tree changed to a reparse point: $safeItem"
+        }
+        Set-PSOBBProtectedAcl -Path $safeItem
+    }
+}
+
 function Initialize-PSOBBRuntimeMarker {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
