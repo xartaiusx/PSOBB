@@ -84,6 +84,18 @@ rehashes every file in the signed launcher payload, rejects extra or unsafe
 paths, and recomputes the signed payload-index digest before creating all three
 shortcuts.
 
+Install the current LocalLab desktop contract explicitly so a later reinstall
+cannot fall back to the generic canary defaults:
+
+```powershell
+& .\scripts\Install-PSOBBDesktopShortcuts.ps1 `
+  -RuntimeRoot .\PSOBB-Runtime `
+  -PlayChannel LocalLab `
+  -PlayProfile lab-widescreen-hd-16x10 `
+  -PlayWindowMode Borderless `
+  -PlayPreserveForeground
+```
+
 Profile, monitor, and window-mode selection is written atomically to the schema-v2 `.launcher/active-profile.json` contract. Safe mode selects the stable native 4:3 runtime. Before client startup, the launcher checks the selected channel's materialized `client-profile.json`; a lab, modern, DXVK, or d3d8to9 selection is rejected unless that exact profile ID has actually been built. The private HD profile additionally requires D3D11, exact 2560x1600 true-16:10 output, a disabled watermark, no CAS or ReShade state, the exact local-only AshenbubsHD activation declaration, and exactly one hash-pinned project-owned LargeAssets ASI/INI module. Its **Verify / repair** operation runs activation `Verify`; it never rebuilds or silently reinstalls private assets. The known dgVoodoo clarity profile additionally requires D3D11, 2560x1600 output, the approved 3840x2880 4:3 preset, preserved aspect ratio, and a disabled watermark.
 
 For the primary display profile, the renderer guard also enforces the
@@ -102,7 +114,7 @@ window options never accept account or credential data.
 
 ```powershell
 PSOBB.Launcher.exe --play --channel canary --profile clarity-dgvoodoo-4x3 --window-mode borderless --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --runtime-root "C:\path\to\PSOBB-Runtime"
+PSOBB.Launcher.exe --play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --runtime-root "C:\path\to\PSOBB-Runtime" --preserve-foreground
 PSOBB.Launcher.exe --safe-play --runtime-root "C:\path\to\PSOBB-Runtime"
 PSOBB.Launcher.exe --start-server --runtime-root "C:\path\to\PSOBB-Runtime"
 PSOBB.Launcher.exe --start-client --channel canary --profile clarity-dgvoodoo-4x3 --window-mode resizable --runtime-root "C:\path\to\PSOBB-Runtime"
@@ -114,7 +126,7 @@ PSOBB.Launcher.exe --stop-all --runtime-root "C:\path\to\PSOBB-Runtime"
 `--stop-server` refuses while an approved client is active. `--stop-all`
 always requests client shutdown before the authenticated newserv shutdown
 script. The scripts directory is resolved from `PSOBB_SCRIPT_ROOT`, a parent
-repository directory, or the `PSOBB` repository beside the packaged
+repository directory, or the repository that contains the packaged nested
 `PSOBB-Runtime` directory.
 
 ## Build and test

@@ -102,7 +102,9 @@ public sealed partial class DiagnosticReportBuilder
     public string Sanitize(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var sanitized = SecretAssignment().Replace(value, match => $"{match.Groups["key"].Value}=[REDACTED]");
+        var sanitized = SecretAssignment().Replace(value, match =>
+            $"{match.Groups["keyquote"].Value}{match.Groups["key"].Value}{match.Groups["keyquote"].Value}" +
+            $"{match.Groups["separator"].Value}{match.Groups["valuequote"].Value}[REDACTED]{match.Groups["valuequote"].Value}");
         sanitized = GuildCardNumber().Replace(sanitized, "[GUILD-CARD-REDACTED]");
 
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -115,7 +117,7 @@ public sealed partial class DiagnosticReportBuilder
     }
 
     [GeneratedRegex(
-        "(?<key>(?i:password|passwd|token|secret|credential|username|account(?:\\s*id)?|license|guild\\s*card|guildcard))\\s*[:=]\\s*(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s,;}\\r\\n]+)",
+        "(?<keyquote>[\"'])?(?<key>(?i:password|passwd|token|secret|credential|username|account(?:\\s*id)?|license|guild\\s*card|guildcard))(?(keyquote)\\k<keyquote>)\\s*(?<separator>[:=])\\s*(?:(?<valuequote>\")[^\"\\r\\n]*\"|(?<valuequote>')[^'\\r\\n]*'|[^\\s,;}\\r\\n]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex SecretAssignment();
 

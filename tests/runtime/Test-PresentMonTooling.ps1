@@ -366,9 +366,9 @@ try {
         & $metricsScript `
             -CsvPath (Join-Path $repositoryRoot 'config\graphics-evidence.json') | Out-Null
     } catch {
-        $inRepoRejected = $_.Exception.Message -match 'outside the Git repository'
+        $inRepoRejected = $_.Exception.Message -match 'outside Git-tracked source'
     }
-    Add-Result 'raw evidence inside Git is rejected' $inRepoRejected `
+    Add-Result 'raw evidence inside Git-tracked source is rejected' $inRepoRejected `
         'the analyzer enforces the private graphics-evidence boundary'
 } finally {
     if (Test-Path -LiteralPath $temporaryRoot) {

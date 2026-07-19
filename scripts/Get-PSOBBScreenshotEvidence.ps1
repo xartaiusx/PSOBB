@@ -35,8 +35,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
+. (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 $analyzerSourcePath = Join-Path $PSScriptRoot 'support\PSOBB.ScreenshotAnalyzer.cs'
 
 function Assert-PSOBBPrivatePngPath {
@@ -49,12 +48,7 @@ function Assert-PSOBBPrivatePngPath {
     $item = Get-Item -LiteralPath $Path -ErrorAction Stop
     if (-not $item.PSIsContainer -and $item.Extension -ieq '.png') {
         $fullPath = [System.IO.Path]::GetFullPath($item.FullName)
-        $repositoryPrefix = $repositoryRoot + '\'
-        if ($fullPath.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $fullPath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Purpose must remain outside the Git repository: $fullPath"
-        }
-        return $fullPath
+        return Assert-PSOBBPathOutsideTrackedSource -Path $fullPath -Purpose $Purpose
     }
     throw "$Purpose must be an existing PNG file"
 }

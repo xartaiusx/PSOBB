@@ -2,6 +2,7 @@
 param([Parameter(Mandatory)][string]$RuntimeRoot)
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 
 function Get-ApprovedNewservExecutable {
     $lockPath = Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json'
@@ -20,47 +21,22 @@ function Get-ApprovedNewservExecutable {
 }
 
 function Set-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
-    $security = [System.Security.AccessControl.FileSecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-    @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    ) | ForEach-Object {
-        $security.AddAccessRule(
-            [System.Security.AccessControl.FileSystemAccessRule]::new($_, $fullControl, $allow))
-    }
-    Set-Acl -LiteralPath $Path -AclObject $security
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    Set-PSOBBLifecyclePathAcl -Path $Path -Root $Root | Out-Null
 }
 
 function Assert-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
-    $allowed = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase)
-    @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    ) | ForEach-Object { $allowed.Add($_.Value) | Out-Null }
-    $acl = Get-Acl -LiteralPath $Path
-    if (-not $acl.AreAccessRulesProtected) {
-        throw "Lifecycle file inherits permissions: $Path"
-    }
-    foreach ($rule in $acl.Access) {
-        $sid = $rule.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]).Value
-        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-            -not $allowed.Contains($sid)) {
-            throw "Lifecycle file grants access outside the runtime identities: $Path"
-        }
-    }
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    Assert-PSOBBLifecyclePathAcl `
+        -Path $Path -Root $Root -IsContainer $false | Out-Null
 }
 
 function Write-ProtectedJson {
@@ -71,14 +47,24 @@ function Write-ProtectedJson {
     )
     $safePath = Assert-PathWithinRoot -Path $Path -Root $Root
     $temporary = $safePath + '.' + [Guid]::NewGuid().ToString('N') + '.new'
-    [System.IO.File]::WriteAllText(
-        $temporary,
-        ($Value | ConvertTo-Json -Depth 6),
-        [System.Text.UTF8Encoding]::new($false))
+    $jsonBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        ($Value | ConvertTo-Json -Depth 6))
+    $temporaryStream = $null
     try {
-        Set-LifecycleFileAcl -Path $temporary
+        $temporaryStream = [System.IO.FileStream]::new(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None)
+        $temporaryStream.Write($jsonBytes, 0, $jsonBytes.Length)
+        $temporaryStream.Flush($true)
+        $temporaryStream.Dispose()
+        $temporaryStream = $null
+        Set-LifecycleFileAcl -Path $temporary -Root $Root
         [System.IO.File]::Move($temporary, $safePath, $true)
     } finally {
+        if ($temporaryStream) { $temporaryStream.Dispose() }
+        [Array]::Clear($jsonBytes, 0, $jsonBytes.Length)
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
 }
@@ -102,6 +88,37 @@ function Test-FixedTimeToken {
     }
 }
 
+function Move-NewservControlRequestToClaim {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ControlRequestPath,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $safeRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $safeRequestPath = [System.IO.Path]::GetFullPath($ControlRequestPath)
+    $controlDirectory = [System.IO.Path]::GetDirectoryName($safeRequestPath)
+    Assert-PSOBBLifecyclePathAcl `
+        -Path $controlDirectory -Root $safeRoot -IsContainer $true | Out-Null
+    $expectedRequestPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $controlDirectory 'newserv-control.request.json'))
+    if (-not $safeRequestPath.Equals(
+            $expectedRequestPath,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The fixed newserv control-request path is invalid'
+    }
+    $claimedPath = Assert-PathWithinRoot `
+        -Path (Join-Path $controlDirectory (
+            'newserv-control.in-progress.' + [Guid]::NewGuid().ToString('N') + '.json')) `
+        -Root $safeRoot
+    [System.IO.File]::Move($safeRequestPath, $claimedPath)
+    $claimedPath
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 $child = $null
 $stdoutStream = $null
@@ -113,6 +130,8 @@ $gracefulRequested = $false
 
 try {
     $marker = Assert-PSOBBRuntimeMarker -Layout $layout
+    Assert-PSOBBLifecyclePathAcl `
+        -Path $layout.ControlDirectory -Root $layout.Root -IsContainer $true | Out-Null
     $approved = Get-ApprovedNewservExecutable
     $executable = Assert-PathWithinRoot -Path (Join-Path $layout.Server 'newserv-windows.exe') -Root $layout.Root
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf) -or
@@ -126,7 +145,7 @@ try {
     if (-not (Test-Path -LiteralPath $layout.ControlState -PathType Leaf)) {
         throw 'The protected supervisor startup state is missing'
     }
-    Assert-LifecycleFileAcl -Path $layout.ControlState
+    Assert-LifecycleFileAcl -Path $layout.ControlState -Root $layout.Root
     $startup = Get-Content -Raw -LiteralPath $layout.ControlState | ConvertFrom-Json
     if ($startup.schemaVersion -ne 1 -or $startup.state -ne 'starting' -or
         [string]$startup.installationId -ne [string]$marker.installationId -or
@@ -164,8 +183,8 @@ try {
     $stderrStream = [System.IO.FileStream]::new(
         $stderrPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write,
         [System.IO.FileShare]::Read)
-    Set-LifecycleFileAcl -Path $stdoutPath
-    Set-LifecycleFileAcl -Path $stderrPath
+    Set-LifecycleFileAcl -Path $stdoutPath -Root $layout.Root
+    Set-LifecycleFileAcl -Path $stderrPath -Root $layout.Root
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $executable
@@ -207,8 +226,21 @@ try {
         stderrLog = $stderrPath
     }
     Write-ProtectedJson -Path $layout.PidFile -Value $record -Root $layout.Root
-    [System.IO.File]::WriteAllText($layout.HostPidFile, $PID.ToString(), [System.Text.Encoding]::ASCII)
-    Set-LifecycleFileAcl -Path $layout.HostPidFile
+    $hostPidBytes = [System.Text.Encoding]::ASCII.GetBytes($PID.ToString())
+    $hostPidStream = $null
+    try {
+        $hostPidStream = [System.IO.FileStream]::new(
+            $layout.HostPidFile,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None)
+        $hostPidStream.Write($hostPidBytes, 0, $hostPidBytes.Length)
+        $hostPidStream.Flush($true)
+    } finally {
+        if ($hostPidStream) { $hostPidStream.Dispose() }
+        [Array]::Clear($hostPidBytes, 0, $hostPidBytes.Length)
+    }
+    Set-LifecycleFileAcl -Path $layout.HostPidFile -Root $layout.Root
 
     $readyState = [ordered]@{
         schemaVersion = 1
@@ -224,12 +256,22 @@ try {
     Write-ProtectedJson -Path $layout.ControlState -Value $readyState -Root $layout.Root
 
     while (-not $child.HasExited) {
-        if (Test-Path -LiteralPath $layout.ControlRequest -PathType Leaf) {
+        $claimedRequestPath = $null
+        if (Test-Path -LiteralPath $layout.ControlRequest) {
             try {
-                Assert-LifecycleFileAcl -Path $layout.ControlRequest
-                $request = Get-Content -Raw -LiteralPath $layout.ControlRequest | ConvertFrom-Json
+                $claimedRequestPath = Move-NewservControlRequestToClaim `
+                    -ControlRequestPath $layout.ControlRequest -Root $layout.Root
+                Assert-LifecycleFileAcl `
+                    -Path $claimedRequestPath -Root $layout.Root
+                $requestFile = Get-Item -LiteralPath $claimedRequestPath -Force
+                if (($requestFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                    $requestFile.Length -le 0 -or $requestFile.Length -gt 16KB) {
+                    throw 'The protected supervisor request has an invalid filesystem type or size'
+                }
+                $request = Get-Content -Raw -LiteralPath $claimedRequestPath |
+                    ConvertFrom-Json -Depth 10 -DateKind String
                 $validExitRequest = $false
-                if ($request.schemaVersion -eq 1 -and $request.action -eq 'exit') {
+                if ($request.schemaVersion -eq 1 -and $request.action -ceq 'exit') {
                     $requestStartUtc = if ($request.startTimeUtc -is [DateTime]) {
                         ([DateTime]$request.startTimeUtc).ToUniversalTime()
                     } else {
@@ -243,7 +285,7 @@ try {
                         (Test-FixedTimeToken -Expected $controlToken -Actual ([string]$request.controlToken))
                 }
                 $validCancelRequest = $request.schemaVersion -eq 1 -and
-                    $request.action -eq 'cancel-start' -and
+                    $request.action -ceq 'cancel-start' -and
                     [int]$request.hostPid -eq $PID -and
                     [long]$request.hostStartTimeFileTimeUtc -eq [long]$hostStartTimeFileTimeUtc -and
                     [string]$request.startupRequestId -eq $startupRequestId -and
@@ -267,7 +309,10 @@ try {
                 # Malformed, incorrectly permissioned, or unauthenticated files
                 # are rejected without forwarding any input to newserv.
             } finally {
-                Remove-Item -LiteralPath $layout.ControlRequest -Force -ErrorAction SilentlyContinue
+                if ($claimedRequestPath) {
+                    Remove-Item `
+                        -LiteralPath $claimedRequestPath -Force -ErrorAction SilentlyContinue
+                }
             }
         }
         Start-Sleep -Milliseconds 200
@@ -307,7 +352,7 @@ try {
     if ($stdoutStream) { $stdoutStream.Dispose() }
     if ($stderrStream) { $stderrStream.Dispose() }
     if (-not $child -or $child.HasExited) {
-        @($layout.PidFile, $layout.LegacyPidFile, $layout.HostPidFile, $layout.ControlRequest) |
+        @($layout.PidFile, $layout.LegacyPidFile, $layout.HostPidFile) |
             ForEach-Object {
                 $safePath = Assert-PathWithinRoot -Path $_ -Root $layout.Root
                 Remove-Item -LiteralPath $safePath -Force -ErrorAction SilentlyContinue

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using PSOBB.Launcher.Models;
 
 namespace PSOBB.Launcher.Services;
@@ -29,6 +31,16 @@ public sealed class RuntimeLifecycleObserver : ILifecycleStateObserver
     public RuntimeLifecycleObserver(LoopbackHealthProbe healthProbe)
     {
         _healthProbe = healthProbe;
+    }
+
+    internal static (string ControlStatePath, string ProcessRecordPath) GetLifecycleFilePaths(
+        string runtimeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
+        var controlRoot = Path.Combine(Path.GetFullPath(runtimeRoot), "stable", "control");
+        return (
+            Path.Combine(controlRoot, "newserv-control.json"),
+            Path.Combine(controlRoot, "newserv.process.json"));
     }
 
     public async Task<LifecycleSnapshot> ObserveAsync(
@@ -60,9 +72,11 @@ public sealed class RuntimeLifecycleObserver : ILifecycleStateObserver
             TimeSpan.FromMilliseconds(350),
             cancellationToken).ConfigureAwait(false);
         var serverReady = health.Count == RequiredServerPorts.Length && health.All(port => port.IsHealthy);
-        var lifecycleStatePath = Path.Combine(root, "stable", "newserv-control.json");
-        var serverRecorded = File.Exists(Path.Combine(root, "stable", "newserv.process.json"));
-        var stateText = await ReadLifecycleStateAsync(lifecycleStatePath, cancellationToken).ConfigureAwait(false);
+        var lifecyclePaths = GetLifecycleFilePaths(root);
+        var serverRecorded = File.Exists(lifecyclePaths.ProcessRecordPath);
+        var stateText = await ReadLifecycleStateAsync(
+            lifecyclePaths.ControlStatePath,
+            cancellationToken).ConfigureAwait(false);
 
         if (clientResult.Running && !serverReady)
         {
@@ -174,6 +188,9 @@ public sealed class RuntimeLifecycleObserver : ILifecycleStateObserver
 public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
 {
     private const int MaximumLogLines = 200;
+    private static readonly Regex TerminalControlSequence = new(
+        "\\x1B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\x07\\x1B]*(?:\\x07|\\x1B\\\\|$))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> AllowedScripts = new(StringComparer.OrdinalIgnoreCase)
     {
         "Reset-PSOBBClientRuntime.ps1",
@@ -289,28 +306,113 @@ public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
         }
     }
 
-    private void AddLog(string value)
+    internal void AddLog(string value)
     {
-        foreach (var line in value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var rawLine in value.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            _log.Enqueue(_sanitizer.Sanitize(line));
+            var line = NormalizeDiagnosticLine(rawLine);
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            _log.Enqueue(line);
             while (_log.Count > MaximumLogLines && _log.TryDequeue(out _))
             {
             }
         }
     }
 
-    private string? FirstMeaningfulLine(string value) => value
-        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(_sanitizer.Sanitize)
-        .FirstOrDefault();
+    internal string? FirstMeaningfulLine(string value)
+    {
+        string? fallback = null;
+        var inPowerShellSourceGutter = false;
+        foreach (var rawLine in value.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var line = NormalizeDiagnosticLine(rawLine);
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            fallback ??= line;
+            if (line.Equals("Line |", StringComparison.OrdinalIgnoreCase))
+            {
+                inPowerShellSourceGutter = true;
+                continue;
+            }
+
+            if (IsPowerShellLocationHeader(line))
+            {
+                continue;
+            }
+
+            var separator = inPowerShellSourceGutter ? line.IndexOf('|') : -1;
+            if (separator >= 0)
+            {
+                var prefix = line[..separator].Trim();
+                if (prefix.Length > 0 && prefix.All(char.IsAsciiDigit))
+                {
+                    continue;
+                }
+
+                if (prefix.Length == 0)
+                {
+                    line = line[(separator + 1)..].Trim();
+                    if (line.Length == 0 || line.All(character => character is '~' or '^' or '-'))
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            return line;
+        }
+
+        return fallback;
+    }
+
+    internal string NormalizeDiagnosticLine(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var withoutTerminalSequences = TerminalControlSequence.Replace(value, string.Empty);
+        var normalized = new StringBuilder(withoutTerminalSequences.Length);
+        foreach (var character in withoutTerminalSequences)
+        {
+            if (!char.IsControl(character) || character == '\t')
+            {
+                normalized.Append(character);
+            }
+        }
+
+        return _sanitizer.Sanitize(normalized.ToString()).Trim();
+    }
+
+    private static bool IsPowerShellLocationHeader(string line)
+    {
+        var marker = line.LastIndexOf(".ps1:", StringComparison.OrdinalIgnoreCase);
+        return marker >= 0
+            && line[(marker + ".ps1:".Length)..].All(char.IsAsciiDigit);
+    }
 }
 
 public static class LifecycleScriptLocator
 {
-    public static string Resolve(string? requestedRoot = null)
+    public static string Resolve(string? requestedRoot = null) => Resolve(
+        requestedRoot,
+        Environment.GetEnvironmentVariable("PSOBB_SCRIPT_ROOT"),
+        [AppContext.BaseDirectory, Environment.CurrentDirectory]);
+
+    internal static string Resolve(
+        string? requestedRoot,
+        string? configuredRoot,
+        IEnumerable<string> origins)
     {
-        foreach (var candidate in Candidates(requestedRoot))
+        foreach (var candidate in Candidates(requestedRoot, configuredRoot, origins))
         {
             var scripts = NormalizeCandidate(candidate);
             if (scripts is not null && File.Exists(Path.Combine(scripts, "Start-PSOBB.ps1")))
@@ -323,22 +425,20 @@ public static class LifecycleScriptLocator
             "Could not locate the PSOBB lifecycle scripts. Set PSOBB_SCRIPT_ROOT to the repository scripts directory.");
     }
 
-    private static IEnumerable<string?> Candidates(string? requestedRoot)
+    private static IEnumerable<string?> Candidates(
+        string? requestedRoot,
+        string? configuredRoot,
+        IEnumerable<string> origins)
     {
         yield return requestedRoot;
-        yield return Environment.GetEnvironmentVariable("PSOBB_SCRIPT_ROOT");
+        yield return configuredRoot;
 
-        foreach (var origin in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        foreach (var origin in origins)
         {
             var cursor = new DirectoryInfo(Path.GetFullPath(origin));
             for (var depth = 0; cursor is not null && depth < 10; depth++, cursor = cursor.Parent)
             {
                 yield return cursor.FullName;
-                if (string.Equals(cursor.Name, "PSOBB-Runtime", StringComparison.OrdinalIgnoreCase)
-                    && cursor.Parent is not null)
-                {
-                    yield return Path.Combine(cursor.Parent.FullName, "PSOBB", "scripts");
-                }
             }
         }
     }

@@ -7,6 +7,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 
 function Get-ApprovedNewservExecutable {
     $lockPath = Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json'
@@ -25,67 +26,55 @@ function Get-ApprovedNewservExecutable {
 }
 
 function Set-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
 
-    $security = [System.Security.AccessControl.FileSecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-    @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    ) | ForEach-Object {
-        $security.AddAccessRule(
-            [System.Security.AccessControl.FileSystemAccessRule]::new($_, $fullControl, $allow))
-    }
-    Set-Acl -LiteralPath $Path -AclObject $security
+    Set-PSOBBLifecyclePathAcl -Path $Path -Root $Root | Out-Null
 }
 
 function Assert-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
 
-    $allowed = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase)
-    @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    ) | ForEach-Object { $allowed.Add($_.Value) | Out-Null }
-    $acl = Get-Acl -LiteralPath $Path
-    if (-not $acl.AreAccessRulesProtected) {
-        throw "Lifecycle file inherits permissions: $Path"
-    }
-    foreach ($rule in $acl.Access) {
-        $sid = $rule.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]).Value
-        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-            -not $allowed.Contains($sid)) {
-            throw "Lifecycle file grants access outside the runtime identities: $Path"
-        }
-    }
+    Assert-PSOBBLifecyclePathAcl `
+        -Path $Path -Root $Root -IsContainer $false | Out-Null
 }
 
 function Write-ProtectedJson {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Value,
-        [Parameter(Mandatory)][string]$Root
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$CreateOnly
     )
     $safePath = Assert-PathWithinRoot -Path $Path -Root $Root
     $temporary = $safePath + '.' + [Guid]::NewGuid().ToString('N') + '.new'
-    [System.IO.File]::WriteAllText(
-        $temporary,
-        ($Value | ConvertTo-Json -Depth 6),
-        [System.Text.UTF8Encoding]::new($false))
+    $jsonBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        ($Value | ConvertTo-Json -Depth 6))
+    $temporaryStream = $null
     try {
-        Set-LifecycleFileAcl -Path $temporary
-        [System.IO.File]::Move($temporary, $safePath, $true)
+        $temporaryStream = [System.IO.FileStream]::new(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None)
+        $temporaryStream.Write($jsonBytes, 0, $jsonBytes.Length)
+        $temporaryStream.Flush($true)
+        $temporaryStream.Dispose()
+        $temporaryStream = $null
+        Set-LifecycleFileAcl -Path $temporary -Root $Root
+        if ($CreateOnly) {
+            [System.IO.File]::Move($temporary, $safePath)
+        } else {
+            [System.IO.File]::Move($temporary, $safePath, $true)
+        }
     } finally {
+        if ($temporaryStream) { $temporaryStream.Dispose() }
+        [Array]::Clear($jsonBytes, 0, $jsonBytes.Length)
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
 }
@@ -102,6 +91,7 @@ function Remove-LifecycleFiles {
         $safePath = Assert-PathWithinRoot -Path $_ -Root $Layout.Root
         Remove-Item -LiteralPath $safePath -Force -ErrorAction SilentlyContinue
     }
+    Remove-PSOBBRetiredLifecycleFiles -Layout $Layout
 }
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
@@ -130,6 +120,8 @@ try {
         throw 'Another PSOBB start or stop operation is already in progress'
     }
 
+    Initialize-PSOBBLifecycleControlDirectory -Layout $layout | Out-Null
+
     $exactPathProcesses = @(Get-NewservProcessesAtPath -Layout $layout)
     $process = Get-NewservProcess -Layout $layout
     if (-not $process) {
@@ -143,7 +135,7 @@ try {
     if ($exactPathProcesses.Count -ne 1 -or $exactPathProcesses[0].Id -ne $process.Id) {
         throw 'The exact-path process inventory does not match the validated supervisor record'
     }
-    Assert-LifecycleFileAcl -Path $layout.PidFile
+    Assert-LifecycleFileAcl -Path $layout.PidFile -Root $layout.Root
     $record = Get-Content -Raw -LiteralPath $layout.PidFile | ConvertFrom-Json
     if ([string]$record.controlToken -notmatch '^[A-Za-z0-9_-]{43}$' -or
         [string]$record.executableSha256 -ne $approved.Sha256 -or
@@ -167,8 +159,9 @@ try {
             controlToken = [string]$record.controlToken
             requestedAtUtc = [DateTime]::UtcNow.ToString('o')
         }
-        Write-ProtectedJson -Path $layout.ControlRequest -Value $request -Root $layout.Root
-        Assert-LifecycleFileAcl -Path $layout.ControlRequest
+        Write-ProtectedJson `
+            -Path $layout.ControlRequest -Value $request -Root $layout.Root -CreateOnly
+        Assert-LifecycleFileAcl -Path $layout.ControlRequest -Root $layout.Root
         $requestSent = $true
     }
 

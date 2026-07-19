@@ -6,25 +6,265 @@ param(
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 
 if (-not ('PSOBBLifecycle.NativeSupervisorLauncher' -as [type])) {
     $nativeSupervisorLauncherSource = @'
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace PSOBBLifecycle
 {
-    public sealed class SupervisorLaunchIdentity
+    public enum SupervisorProbeState
     {
+        Absent,
+        Mismatch,
+        Verified,
+        Uninspectable,
+    }
+
+    public sealed class SupervisorProcessProbe
+    {
+        public SupervisorProbeState State { get; }
+        public string Detail { get; }
+
+        internal SupervisorProcessProbe(SupervisorProbeState state, string detail)
+        {
+            State = state;
+            Detail = detail;
+        }
+    }
+
+    internal sealed class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        internal SafeJobHandle(IntPtr handle) : base(true)
+        {
+            SetHandle(handle);
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        protected override bool ReleaseHandle()
+        {
+            return CloseHandle(handle);
+        }
+    }
+
+    public sealed class SupervisorLaunchIdentity : IDisposable
+    {
+        private const uint WaitObject0 = 0;
+        private const uint WaitTimeout = 258;
+        private const uint WaitFailed = 0xFFFFFFFF;
+        private readonly SafeProcessHandle processHandle;
+        private readonly SafeJobHandle jobHandle;
+
         public int ProcessId { get; }
         public long StartTimeFileTimeUtc { get; }
 
-        internal SupervisorLaunchIdentity(int processId, long startTimeFileTimeUtc)
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime
+        {
+            public uint LowDateTime;
+            public uint HighDateTime;
+
+            public long ToInt64()
+            {
+                return unchecked(((long)HighDateTime << 32) | LowDateTime);
+            }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint GetProcessId(SafeProcessHandle process);
+
+        [DllImport(
+            "kernel32.dll",
+            EntryPoint = "QueryFullProcessImageNameW",
+            CharSet = CharSet.Unicode,
+            SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryFullProcessImageName(
+            SafeProcessHandle process,
+            uint flags,
+            StringBuilder imagePath,
+            ref int size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetProcessTimes(
+            SafeProcessHandle process,
+            out FileTime creationTime,
+            out FileTime exitTime,
+            out FileTime kernelTime,
+            out FileTime userTime);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(
+            SafeProcessHandle handle,
+            uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateJobObject(
+            SafeJobHandle job,
+            uint exitCode);
+
+        internal SupervisorLaunchIdentity(
+            int processId,
+            long startTimeFileTimeUtc,
+            SafeProcessHandle processHandle,
+            SafeJobHandle jobHandle)
         {
             ProcessId = processId;
             StartTimeFileTimeUtc = startTimeFileTimeUtc;
+            this.processHandle = processHandle;
+            this.jobHandle = jobHandle;
+        }
+
+        public SupervisorProcessProbe Probe(
+            string expectedExecutablePath,
+            long expectedStartTimeFileTimeUtc)
+        {
+            try
+            {
+                ThrowIfDisposed();
+                uint waitResult = WaitForSingleObject(processHandle, 0);
+                if (waitResult == WaitObject0)
+                {
+                    return new SupervisorProcessProbe(
+                        SupervisorProbeState.Absent,
+                        "The launched supervisor has exited.");
+                }
+                if (waitResult == WaitFailed)
+                {
+                    return Uninspectable("WaitForSingleObject");
+                }
+                if (waitResult != WaitTimeout)
+                {
+                    return new SupervisorProcessProbe(
+                        SupervisorProbeState.Uninspectable,
+                        "WaitForSingleObject returned an unexpected supervisor probe state.");
+                }
+
+                uint handleProcessId = GetProcessId(processHandle);
+                if (handleProcessId == 0)
+                {
+                    return Uninspectable("GetProcessId");
+                }
+                if (handleProcessId != (uint)ProcessId)
+                {
+                    return new SupervisorProcessProbe(
+                        SupervisorProbeState.Mismatch,
+                        "The retained supervisor handle does not match its captured PID.");
+                }
+
+                FileTime creationTime;
+                FileTime exitTime;
+                FileTime kernelTime;
+                FileTime userTime;
+                if (!GetProcessTimes(
+                    processHandle,
+                    out creationTime,
+                    out exitTime,
+                    out kernelTime,
+                    out userTime))
+                {
+                    return Uninspectable("GetProcessTimes");
+                }
+                if (creationTime.ToInt64() != expectedStartTimeFileTimeUtc)
+                {
+                    return new SupervisorProcessProbe(
+                        SupervisorProbeState.Mismatch,
+                        "The retained supervisor handle does not match the captured creation time.");
+                }
+
+                StringBuilder imagePath = new StringBuilder(32768);
+                int size = imagePath.Capacity;
+                if (!QueryFullProcessImageName(processHandle, 0, imagePath, ref size))
+                {
+                    return Uninspectable("QueryFullProcessImageNameW");
+                }
+                string actualPath = Path.GetFullPath(imagePath.ToString());
+                string expectedPath = Path.GetFullPath(expectedExecutablePath);
+                if (!actualPath.Equals(expectedPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new SupervisorProcessProbe(
+                        SupervisorProbeState.Mismatch,
+                        "The retained supervisor handle does not match the expected executable path.");
+                }
+
+                return new SupervisorProcessProbe(
+                    SupervisorProbeState.Verified,
+                    "The retained supervisor handle matches the captured launch identity.");
+            }
+            catch (Exception exception)
+            {
+                return new SupervisorProcessProbe(
+                    SupervisorProbeState.Uninspectable,
+                    exception.Message);
+            }
+        }
+
+        public bool WaitForExit(int milliseconds)
+        {
+            if (milliseconds < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(milliseconds));
+            }
+            ThrowIfDisposed();
+            uint result = WaitForSingleObject(processHandle, unchecked((uint)milliseconds));
+            if (result == WaitObject0)
+            {
+                return true;
+            }
+            if (result == WaitTimeout)
+            {
+                return false;
+            }
+            if (result == WaitFailed)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "WaitForSingleObject failed for the launched supervisor.");
+            }
+            throw new InvalidOperationException(
+                "WaitForSingleObject returned an unexpected supervisor wait state.");
+        }
+
+        public void TerminateTree(uint exitCode)
+        {
+            ThrowIfDisposed();
+            if (!TerminateJobObject(jobHandle, exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "TerminateJobObject failed for the launched supervisor tree.");
+            }
+        }
+
+        public void Dispose()
+        {
+            processHandle.Dispose();
+            jobHandle.Dispose();
+        }
+
+        private SupervisorProcessProbe Uninspectable(string operation)
+        {
+            return new SupervisorProcessProbe(
+                SupervisorProbeState.Uninspectable,
+                new Win32Exception(Marshal.GetLastWin32Error(),
+                    operation + " failed for the launched supervisor.").Message);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (processHandle.IsClosed || jobHandle.IsClosed)
+            {
+                throw new ObjectDisposedException(nameof(SupervisorLaunchIdentity));
+            }
         }
     }
 
@@ -106,6 +346,23 @@ namespace PSOBBLifecycle
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObjectW(
+            IntPtr jobAttributes,
+            string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AssignProcessToJobObject(
+            SafeJobHandle job,
+            SafeProcessHandle process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateJobObject(
+            SafeJobHandle job,
+            uint exitCode);
 
         private static string QuoteArgument(string value)
         {
@@ -200,21 +457,45 @@ namespace PSOBBLifecycle
                     "Failed to create the hidden newserv supervisor process");
             }
 
+            SafeProcessHandle retainedProcessHandle = null;
+            SafeJobHandle retainedJobHandle = null;
+            bool ownershipTransferred = false;
             try
             {
+                retainedProcessHandle = new SafeProcessHandle(
+                    processInformation.hProcess,
+                    true);
+                processInformation.hProcess = IntPtr.Zero;
+                IntPtr rawJobHandle = CreateJobObjectW(IntPtr.Zero, null);
+                if (rawJobHandle == IntPtr.Zero)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(retainedProcessHandle.DangerousGetHandle(), 1);
+                    throw new Win32Exception(error,
+                        "Failed to create the newserv supervisor job object");
+                }
+                retainedJobHandle = new SafeJobHandle(rawJobHandle);
+                if (!AssignProcessToJobObject(retainedJobHandle, retainedProcessHandle))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(retainedProcessHandle.DangerousGetHandle(), 1);
+                    throw new Win32Exception(error,
+                        "Failed to assign the newserv supervisor to its job object");
+                }
+
                 FileTime creationTime;
                 FileTime exitTime;
                 FileTime kernelTime;
                 FileTime userTime;
                 if (!GetProcessTimes(
-                    processInformation.hProcess,
+                    retainedProcessHandle.DangerousGetHandle(),
                     out creationTime,
                     out exitTime,
                     out kernelTime,
                     out userTime))
                 {
                     int error = Marshal.GetLastWin32Error();
-                    TerminateProcess(processInformation.hProcess, 1);
+                    TerminateJobObject(retainedJobHandle, 1);
                     throw new Win32Exception(error,
                         "Failed to capture the newserv supervisor creation identity");
                 }
@@ -223,13 +504,17 @@ namespace PSOBBLifecycle
                 if (ResumeThread(processInformation.hThread) == uint.MaxValue)
                 {
                     int error = Marshal.GetLastWin32Error();
-                    TerminateProcess(processInformation.hProcess, 1);
+                    TerminateJobObject(retainedJobHandle, 1);
                     throw new Win32Exception(error,
                         "Failed to resume the verified newserv supervisor process");
                 }
-                return new SupervisorLaunchIdentity(
+                SupervisorLaunchIdentity identity = new SupervisorLaunchIdentity(
                     unchecked((int)processInformation.dwProcessId),
-                    creationFileTime);
+                    creationFileTime,
+                    retainedProcessHandle,
+                    retainedJobHandle);
+                ownershipTransferred = true;
+                return identity;
             }
             finally
             {
@@ -240,6 +525,15 @@ namespace PSOBBLifecycle
                 if (processInformation.hProcess != IntPtr.Zero)
                 {
                     CloseHandle(processInformation.hProcess);
+                }
+                if (!ownershipTransferred)
+                {
+                    if (retainedJobHandle != null && !retainedJobHandle.IsInvalid)
+                    {
+                        TerminateJobObject(retainedJobHandle, 1);
+                    }
+                    retainedJobHandle?.Dispose();
+                    retainedProcessHandle?.Dispose();
                 }
             }
         }
@@ -267,97 +561,178 @@ function Get-ApprovedNewservExecutable {
 }
 
 function Set-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $security = [System.Security.AccessControl.FileSecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-    $sids = @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
     )
-    foreach ($sid in $sids) {
-        $security.AddAccessRule(
-            [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $fullControl, $allow))
-    }
-    Set-Acl -LiteralPath $Path -AclObject $security
+
+    Set-PSOBBLifecyclePathAcl -Path $Path -Root $Root | Out-Null
 }
 
 function Assert-LifecycleFileAcl {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
 
-    $allowed = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase)
-    @(
-        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null),
-        [System.Security.Principal.SecurityIdentifier]::new(
-            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
-    ) | ForEach-Object { $allowed.Add($_.Value) | Out-Null }
-
-    $acl = Get-Acl -LiteralPath $Path
-    if (-not $acl.AreAccessRulesProtected) {
-        throw "Lifecycle file inherits permissions: $Path"
-    }
-    foreach ($rule in $acl.Access) {
-        $sid = $rule.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]).Value
-        if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-            -not $allowed.Contains($sid)) {
-            throw "Lifecycle file grants access outside the runtime identities: $Path"
-        }
-    }
+    Assert-PSOBBLifecyclePathAcl `
+        -Path $Path -Root $Root -IsContainer $false | Out-Null
 }
 
 function Write-ProtectedJson {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Value,
-        [Parameter(Mandatory)][string]$Root
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$CreateOnly
     )
 
     $safePath = Assert-PathWithinRoot -Path $Path -Root $Root
     $temporary = $safePath + '.' + [Guid]::NewGuid().ToString('N') + '.new'
     Assert-PathWithinRoot -Path $temporary -Root $Root | Out-Null
-    [System.IO.File]::WriteAllText(
-        $temporary,
-        ($Value | ConvertTo-Json -Depth 6),
-        [System.Text.UTF8Encoding]::new($false))
+    $jsonBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        ($Value | ConvertTo-Json -Depth 6))
+    $temporaryStream = $null
     try {
-        Set-LifecycleFileAcl -Path $temporary
-        [System.IO.File]::Move($temporary, $safePath, $true)
+        $temporaryStream = [System.IO.FileStream]::new(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None)
+        $temporaryStream.Write($jsonBytes, 0, $jsonBytes.Length)
+        $temporaryStream.Flush($true)
+        $temporaryStream.Dispose()
+        $temporaryStream = $null
+        Set-LifecycleFileAcl -Path $temporary -Root $Root
+        if ($CreateOnly) {
+            [System.IO.File]::Move($temporary, $safePath)
+        } else {
+            [System.IO.File]::Move($temporary, $safePath, $true)
+        }
     } finally {
+        if ($temporaryStream) { $temporaryStream.Dispose() }
+        [Array]::Clear($jsonBytes, 0, $jsonBytes.Length)
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
 }
 
-function Get-ExactLaunchedSupervisor {
+function ConvertTo-PSOBBSafeLifecycleDiagnostic {
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Identity)
+    param([AllowNull()][string]$Value)
 
-    $candidate = Get-Process -Id ([int]$Identity.Pid) -ErrorAction SilentlyContinue
-    if (-not $candidate) {
-        return $null
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return 'Windows returned no additional process diagnostic.'
     }
-    try {
-        $actualPath = [System.IO.Path]::GetFullPath($candidate.Path)
-        $actualStartFileTime = $candidate.StartTime.ToUniversalTime().ToFileTimeUtc()
-        if (-not $actualPath.Equals(
-                [string]$Identity.ExecutablePath,
-                [System.StringComparison]::OrdinalIgnoreCase) -or
-            [long]$actualStartFileTime -ne [long]$Identity.StartTimeFileTimeUtc) {
-            $candidate.Dispose()
-            return $null
+    $safe = -join @($Value.ToCharArray() | Where-Object {
+        -not [char]::IsControl($_) -or $_ -eq "`t"
+    })
+    $safe = [regex]::Replace(
+        $safe,
+        '(?i)(?<keyquote>["''])?(?<key>password|passwd|token|secret|credential|username|account(?:\s*id)?|license|guild\s*card|guildcard)(?(keyquote)\k<keyquote>)\s*(?<separator>[:=])\s*(?:(?<valuequote>")[^"\r\n]*"|(?<valuequote>'')[^''\r\n]*''|[^\s,;}\r\n]+)',
+        '${keyquote}${key}${keyquote}${separator}${valuequote}[REDACTED]${valuequote}')
+    $safe = [regex]::Replace(
+        $safe,
+        '(?i)(?:guild\s*card|guildcard)\D{0,8}\d{6,16}',
+        '[GUILD-CARD-REDACTED]')
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $safe = $safe.Replace(
+            $env:USERPROFILE,
+            '%USERPROFILE%',
+            [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    $safe = $safe.Trim()
+    if ($safe.Length -gt 1000) {
+        $safe = $safe.Substring(0, 1000) + '...'
+    }
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return 'Windows returned no additional process diagnostic.'
+    }
+    $safe
+}
+
+function Get-LaunchedSupervisorProbe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Identity,
+        [ValidateRange(1, 20)][int]$ProbeAttempts = 5,
+        [ValidateRange(0, 1000)][int]$ProbeDelayMilliseconds = 50
+    )
+
+    if ($null -eq $Identity) {
+        return [pscustomobject]@{
+            State = 'Uninspectable'
+            Detail = 'The supervisor launch identity is unavailable.'
         }
-        return $candidate
+    }
+
+    $nativeIdentityProperty = $Identity.PSObject.Properties['NativeIdentity']
+    if ($null -eq $nativeIdentityProperty -or $null -eq $nativeIdentityProperty.Value) {
+        return [pscustomobject]@{
+            State = 'Uninspectable'
+            Detail = 'The stable native supervisor identity handle is unavailable.'
+        }
+    }
+
+    $nativeIdentity = $nativeIdentityProperty.Value
+    try {
+        $identityPidProperty = $Identity.PSObject.Properties['Pid']
+        $executablePathProperty = $Identity.PSObject.Properties['ExecutablePath']
+        $startTimeProperty = $Identity.PSObject.Properties['StartTimeFileTimeUtc']
+        if ($null -eq $identityPidProperty -or
+            $null -eq $executablePathProperty -or
+            $null -eq $startTimeProperty) {
+            throw 'The supervisor launch identity is incomplete.'
+        }
+
+        $nativePid = [int]$nativeIdentity.ProcessId
+        $identityPid = [int]$identityPidProperty.Value
+        $expectedPath = [System.IO.Path]::GetFullPath([string]$executablePathProperty.Value)
+        $expectedStartTime = [long]$startTimeProperty.Value
     } catch {
-        $candidate.Dispose()
-        return $null
+        return [pscustomobject]@{
+            State = 'Uninspectable'
+            Detail = ConvertTo-PSOBBSafeLifecycleDiagnostic -Value $_.Exception.Message
+        }
+    }
+
+    if ($nativePid -ne $identityPid) {
+        return [pscustomobject]@{
+            State = 'Mismatch'
+            Detail = 'The stable native supervisor handle does not match the captured PID.'
+        }
+    }
+
+    $lastFailure = $null
+    for ($attempt = 1; $attempt -le $ProbeAttempts; $attempt++) {
+        try {
+            $nativeProbe = $nativeIdentity.Probe(
+                $expectedPath,
+                $expectedStartTime)
+            $state = [string]$nativeProbe.State
+            $detail = ConvertTo-PSOBBSafeLifecycleDiagnostic -Value ([string]$nativeProbe.Detail)
+            if ($state -in @('Absent', 'Mismatch', 'Verified')) {
+                return [pscustomobject]@{
+                    State = $state
+                    Detail = $detail
+                }
+            }
+            $lastFailure = $detail
+        } catch {
+            $lastFailure = ConvertTo-PSOBBSafeLifecycleDiagnostic -Value $_.Exception.Message
+        }
+
+        if ($attempt -lt $ProbeAttempts -and $ProbeDelayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $ProbeDelayMilliseconds
+        }
+    }
+
+    [pscustomobject]@{
+        State = 'Uninspectable'
+        Detail = if ($lastFailure) {
+            $lastFailure
+        } else {
+            'The stable supervisor handle could not be inspected.'
+        }
     }
 }
 
@@ -370,50 +745,46 @@ function Stop-ExactLaunchedSupervisorAfterFailure {
         [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$StartupRequestId
     )
 
-    $candidate = Get-ExactLaunchedSupervisor -Identity $Identity
-    if ($candidate) {
-        try {
-            $request = [ordered]@{
-                schemaVersion = 1
-                action = 'cancel-start'
-                hostPid = [int]$Identity.Pid
-                hostStartTimeFileTimeUtc = [long]$Identity.StartTimeFileTimeUtc
-                startupRequestId = $StartupRequestId
-                controlToken = $ControlToken
-                requestedAtUtc = [DateTime]::UtcNow.ToString('o')
-            }
-            Write-ProtectedJson -Path $Layout.ControlRequest -Value $request -Root $Layout.Root
+    $probe = Get-LaunchedSupervisorProbe -Identity $Identity
+    if ($probe.State -in @('Mismatch', 'Uninspectable')) {
+        throw "Refusing failed-start cleanup because the supervisor is $($probe.State): $($probe.Detail)"
+    }
 
-            $deadline = [DateTime]::UtcNow.AddSeconds(5)
-            while ([DateTime]::UtcNow -lt $deadline) {
-                $candidate.Refresh()
-                if ($candidate.HasExited) {
-                    break
-                }
-                Start-Sleep -Milliseconds 100
+    if ($probe.State -eq 'Verified') {
+        $request = [ordered]@{
+            schemaVersion = 1
+            action = 'cancel-start'
+            hostPid = [int]$Identity.Pid
+            hostStartTimeFileTimeUtc = [long]$Identity.StartTimeFileTimeUtc
+            startupRequestId = $StartupRequestId
+            controlToken = $ControlToken
+            requestedAtUtc = [DateTime]::UtcNow.ToString('o')
+        }
+        Write-ProtectedJson `
+            -Path $Layout.ControlRequest -Value $request -Root $Layout.Root -CreateOnly
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if ($Identity.NativeIdentity.WaitForExit(100)) {
+                break
             }
-        } finally {
-            $candidate.Dispose()
         }
     }
 
-    # Reopen and revalidate immediately before the only forceful operation.
-    # Killing the verified supervisor's process tree also prevents a child that
-    # started just before cancellation from becoming an orphan.
-    $revalidated = Get-ExactLaunchedSupervisor -Identity $Identity
-    if ($revalidated) {
-        try {
-            $revalidated.Kill($true)
-            $revalidated.WaitForExit(5000) | Out-Null
-        } finally {
-            $revalidated.Dispose()
-        }
+    # The job was attached before the supervisor's first instruction. Terminating
+    # this retained handle cannot be redirected by PID reuse and includes any
+    # newserv child that appeared immediately before cancellation.
+    try {
+        $Identity.NativeIdentity.TerminateTree(1)
+    } catch {
+        $detail = ConvertTo-PSOBBSafeLifecycleDiagnostic -Value $_.Exception.Message
+        throw "The exact launched supervisor job could not be terminated: $detail"
     }
+    $Identity.NativeIdentity.WaitForExit(5000) | Out-Null
 
-    $stillRunning = Get-ExactLaunchedSupervisor -Identity $Identity
-    if ($stillRunning) {
-        $stillRunning.Dispose()
-        throw 'The exact launched newserv supervisor could not be stopped after startup failed'
+    $finalProbe = Get-LaunchedSupervisorProbe -Identity $Identity
+    if ($finalProbe.State -ne 'Absent') {
+        throw "The launched supervisor cleanup did not reach Absent ($($finalProbe.State)): $($finalProbe.Detail)"
     }
 
     $serverDeadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -436,7 +807,9 @@ function Stop-ExactLaunchedSupervisorAfterFailure {
         $Layout.ControlRequest
     ) | ForEach-Object {
         $safePath = Assert-PathWithinRoot -Path $_ -Root $Layout.Root
-        Remove-Item -LiteralPath $safePath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $safePath) {
+            Remove-Item -LiteralPath $safePath -Force -ErrorAction Stop
+        }
     }
 }
 
@@ -474,7 +847,7 @@ $null = $Background
 $mutexName = 'Local\PSOBB.Newserv.Start.' + ([string]$marker.installationId).Replace('-', '')
 $mutex = [System.Threading.Mutex]::new($false, $mutexName)
 $ownsMutex = $false
-$hostProcess = $null
+$nativeHostIdentity = $null
 $hostIdentity = $null
 $controlToken = $null
 $startupRequestId = $null
@@ -485,10 +858,14 @@ try {
         throw 'Another PSOBB start or stop operation is already in progress'
     }
 
+    Initialize-PSOBBLifecycleControlDirectory -Layout $layout | Out-Null
+
     $running = @(Get-NewservProcessesAtPath -Layout $layout)
     if ($running.Count -gt 0) {
         throw "The approved newserv executable is already running (PID(s): $($running.Id -join ', '))"
     }
+
+    Remove-PSOBBRetiredLifecycleFiles -Layout $layout
 
     $lifecycleFiles = @(
         $layout.PidFile,
@@ -543,29 +920,28 @@ try {
         Pid = $hostProcessId
         ExecutablePath = $expectedHostPath
         StartTimeFileTimeUtc = [long]$nativeHostIdentity.StartTimeFileTimeUtc
+        NativeIdentity = $nativeHostIdentity
     }
-    try {
-        $hostProcess = Get-Process -Id $hostProcessId -ErrorAction Stop
-    } catch {
-        throw 'Failed to create the hidden newserv supervisor process'
-    }
-    $observedHostPath = [System.IO.Path]::GetFullPath($hostProcess.Path)
-    $observedHostStartFileTime = $hostProcess.StartTime.ToUniversalTime().ToFileTimeUtc()
-    if ($hostProcess.Id -ne $hostProcessId -or
-        -not $observedHostPath.Equals($expectedHostPath, [System.StringComparison]::OrdinalIgnoreCase) -or
-        [long]$observedHostStartFileTime -ne [long]$hostIdentity.StartTimeFileTimeUtc) {
-        throw 'The hidden newserv supervisor identity did not match the launched executable'
+    $hostProbe = Get-LaunchedSupervisorProbe `
+        -Identity $hostIdentity `
+        -ProbeAttempts 10 `
+        -ProbeDelayMilliseconds 50
+    if ($hostProbe.State -ne 'Verified') {
+        throw "The hidden newserv supervisor launch was $($hostProbe.State): $($hostProbe.Detail)"
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
     $serverProcess = $null
     $startResult = $null
     while ([DateTime]::UtcNow -lt $deadline) {
-        $hostProcess.Refresh()
-        if ($hostProcess.HasExited) {
+        $hostProbe = Get-LaunchedSupervisorProbe `
+            -Identity $hostIdentity `
+            -ProbeAttempts 3 `
+            -ProbeDelayMilliseconds 25
+        if ($hostProbe.State -eq 'Absent') {
             $detail = 'The newserv supervisor exited during startup'
             if (Test-Path -LiteralPath $layout.ControlState -PathType Leaf) {
-                Assert-LifecycleFileAcl -Path $layout.ControlState
+            Assert-LifecycleFileAcl -Path $layout.ControlState -Root $layout.Root
                 try {
                     $state = Get-Content -Raw -LiteralPath $layout.ControlState | ConvertFrom-Json
                     if (-not [string]::IsNullOrWhiteSpace([string]$state.message)) {
@@ -575,14 +951,17 @@ try {
             }
             throw $detail
         }
+        if ($hostProbe.State -ne 'Verified') {
+            throw "The newserv supervisor became $($hostProbe.State) during startup: $($hostProbe.Detail)"
+        }
 
         if (Test-Path -LiteralPath $layout.PidFile -PathType Leaf) {
-            Assert-LifecycleFileAcl -Path $layout.PidFile
+            Assert-LifecycleFileAcl -Path $layout.PidFile -Root $layout.Root
             $serverProcess = Get-NewservProcess -Layout $layout
             if ($serverProcess) {
                 $record = Get-Content -Raw -LiteralPath $layout.PidFile | ConvertFrom-Json
                 $recordedHostPath = [System.IO.Path]::GetFullPath([string]$record.hostExecutablePath)
-                if ([int]$record.hostPid -ne $hostProcess.Id -or
+                if ([int]$record.hostPid -ne $hostProcessId -or
                     [long]$record.hostStartTimeFileTimeUtc -ne [long]$hostIdentity.StartTimeFileTimeUtc -or
                     -not $recordedHostPath.Equals(
                         [string]$hostIdentity.ExecutablePath,
@@ -594,11 +973,18 @@ try {
                     throw 'The supervisor process record did not match this start request'
                 }
                 if (Test-ExactLoopbackListeners -ProcessId $serverProcess.Id) {
+                    $readyProbe = Get-LaunchedSupervisorProbe `
+                        -Identity $hostIdentity `
+                        -ProbeAttempts 3 `
+                        -ProbeDelayMilliseconds 25
+                    if ($readyProbe.State -ne 'Verified') {
+                        throw "The supervisor was $($readyProbe.State) at readiness: $($readyProbe.Detail)"
+                    }
                     $controlToken = $null
                     $startupCompleted = $true
                     $startResult = [pscustomobject]@{
                         Pid = $serverProcess.Id
-                        HostPid = $hostProcess.Id
+                        HostPid = $hostProcessId
                         Supervised = $true
                         ExecutableSha256 = $approved.Sha256
                         Listeners = @('127.0.0.1:11000', '127.0.0.1:12000', '127.0.0.1:12001')
@@ -635,8 +1021,8 @@ try {
     throw $startupFailure
 } finally {
     $controlToken = $null
-    if ($hostProcess) {
-        $hostProcess.Dispose()
+    if ($nativeHostIdentity) {
+        $nativeHostIdentity.Dispose()
     }
     if ($ownsMutex) {
         $mutex.ReleaseMutex()

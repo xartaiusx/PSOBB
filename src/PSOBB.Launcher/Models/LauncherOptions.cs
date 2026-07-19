@@ -64,15 +64,13 @@ public sealed record LauncherOptions(
 
                 if (File.Exists(Path.Combine(cursor.FullName, "scripts", "Start-PSOBB.ps1")))
                 {
-                    return Path.Combine(
-                        cursor.Parent?.FullName ?? cursor.FullName,
-                        "PSOBB-Runtime");
+                    return Path.Combine(cursor.FullName, "PSOBB-Runtime");
                 }
             }
         }
 
         throw new InvalidOperationException(
-            "Could not locate the adjacent PSOBB-Runtime directory. Use --runtime-root " +
+            "Could not locate the canonical nested PSOBB-Runtime directory. Use --runtime-root " +
             "or set PSOBB_RUNTIME_ROOT explicitly.");
     }
 }

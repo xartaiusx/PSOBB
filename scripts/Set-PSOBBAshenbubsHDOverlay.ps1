@@ -514,14 +514,9 @@ function New-SnapshotId {
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$fullRepositoryRoot = [System.IO.Path]::GetFullPath($repositoryRoot).TrimEnd('\')
-$fullRuntimeRoot = [System.IO.Path]::GetFullPath($layout.Root).TrimEnd('\')
-if ($fullRuntimeRoot.Equals($fullRepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-    $fullRuntimeRoot.StartsWith(
-        $fullRepositoryRoot + '\',
-        [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw 'AshenbubsHD proprietary assets may never be staged inside the Git repository'
-}
+Assert-PSOBBPathOutsideTrackedSource `
+    -Path $layout.Root `
+    -Purpose 'AshenbubsHD proprietary assets' | Out-Null
 if ([string]::IsNullOrWhiteSpace($SourcesLockPath)) {
     $SourcesLockPath = Join-Path $repositoryRoot 'config\sources.lock.json'
 }

@@ -5,7 +5,7 @@
 This subtree was derived from read-only inspection of exactly:
 
 ```text
-C:\Github Repo's\PSOBB-Runtime\stable\runtime\client\Psobb.exe
+C:\Github Repo's\PSOBB\PSOBB-Runtime\stable\runtime\client\Psobb.exe
 ```
 
 No local-lab widescreen overlay and no Ephinea, Ragol, Destiny, or Ultima
@@ -131,7 +131,7 @@ cmake --build .\src\PSOBB.Enhancement\bin\build-x86 `
 ctest --test-dir .\src\PSOBB.Enhancement\bin\build-x86 `
   -C Release --output-on-failure
 & .\src\PSOBB.Enhancement\bin\build-x86\Release\PSOBB.Enhancement.Verify.exe `
-  "C:\Github Repo's\PSOBB-Runtime\stable\runtime\client\Psobb.exe"
+  "C:\Github Repo's\PSOBB\PSOBB-Runtime\stable\runtime\client\Psobb.exe"
 ```
 
 Observed results on 2026-07-15:

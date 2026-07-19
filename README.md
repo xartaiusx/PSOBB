@@ -3,8 +3,8 @@
 This repository is the tracked control plane for a provenance-first,
 Tethealla-client-compatible PSO Blue Burst server. The playable runtime uses
 `newserv`; downloaded server releases, the SEGA client, player data, secrets,
-and backups live outside Git under the adjacent
-`C:\Github Repo's\PSOBB-Runtime` directory.
+and backups live outside Git tracking under the repository-rooted,
+Git-ignored `C:\Github Repo's\PSOBB\PSOBB-Runtime` directory.
 
 ## Safety boundary
 
@@ -73,11 +73,11 @@ black-box evaluation, but that unlicensed binary is never part of a public or
 distributable runtime. Public 16:10 camera and HUD expansion remains gated on a
 licensed, project-owned patch.
 
-The scripts default to a `PSOBB-Runtime` directory beside the repository.
-Override it with the `PSOBB_RUNTIME_ROOT` environment variable when testing an
-isolated copy on a local volume. Runtime roots inside this Git repository and
-UNC/network roots are rejected by default. See [Project layout](docs/PROJECT-LAYOUT.md)
-for the canonical local organization.
+The scripts default to the exact Git-ignored `PSOBB-Runtime` directory at the
+repository root. Override it with the `PSOBB_RUNTIME_ROOT` environment variable
+only when testing an isolated copy on a local volume. Other runtime roots
+inside the repository and all UNC/network roots are rejected. See
+[Project layout](docs/PROJECT-LAYOUT.md) for the canonical local organization.
 Passwords are not printed. Bootstrap credentials begin in user-DPAPI-protected
 files outside Git, and newserv's required BB license copy is protected by a
 narrow filesystem ACL. After `Set-PSOBBPlayerCredential.ps1` successfully

@@ -1,6 +1,168 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:PSOBBRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$script:PSOBBCanonicalRuntimeRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $script:PSOBBRepositoryRoot 'PSOBB-Runtime')).TrimEnd('\')
+
+function Invoke-PSOBBGitBoundaryCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+
+    $git = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $git) {
+        throw 'Git is required to verify the canonical nested runtime boundary'
+    }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $git.Source
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @('-C', $RepositoryRoot) + $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'Windows did not start Git for the runtime boundary check'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            StandardOutput = $stdoutTask.GetAwaiter().GetResult()
+            StandardError = $stderrTask.GetAwaiter().GetResult()
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Assert-PSOBBGitRuntimeBoundary {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RepositoryRoot)
+
+    $repositoryFull = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\')
+    $ignorePath = Join-Path $repositoryFull '.gitignore'
+    if (-not (Test-Path -LiteralPath $ignorePath -PathType Leaf)) {
+        throw 'The canonical nested PSOBB runtime requires the repository .gitignore file'
+    }
+    $hasAnchoredRuntimeRule = @(Get-Content -LiteralPath $ignorePath | Where-Object {
+        $_.Trim().Equals('/PSOBB-Runtime/', [System.StringComparison]::Ordinal)
+    }).Count -eq 1
+    if (-not $hasAnchoredRuntimeRule) {
+        throw 'The repository .gitignore must contain exactly one anchored /PSOBB-Runtime/ rule'
+    }
+
+    $topLevel = Invoke-PSOBBGitBoundaryCommand `
+        -RepositoryRoot $repositoryFull `
+        -Arguments @('rev-parse', '--show-toplevel')
+    if ($topLevel.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel.StandardOutput)) {
+        throw 'The canonical nested PSOBB runtime requires a valid Git worktree'
+    }
+    $reportedTopLevel = [System.IO.Path]::GetFullPath(
+        $topLevel.StandardOutput.Trim()).TrimEnd('\')
+    if (-not $reportedTopLevel.Equals(
+            $repositoryFull,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The PSOBB repository root does not match the effective Git worktree root'
+    }
+
+    # Verify the directory boundary itself plus representative paths from each
+    # sensitive runtime class. A later rule sequence can reopen one child tree
+    # while leaving an unrelated marker ignored, so one marker probe is not a
+    # sufficient repository-boundary check.
+    $ignoreProbePaths = @(
+        'PSOBB-Runtime',
+        'PSOBB-Runtime/.psobb-runtime.json',
+        'PSOBB-Runtime/archives/.psobb-ignore-probe',
+        'PSOBB-Runtime/backups/.psobb-ignore-probe',
+        'PSOBB-Runtime/graphics-evidence/.psobb-ignore-probe',
+        'PSOBB-Runtime/local-lab/runtime/client/Psobb.exe',
+        'PSOBB-Runtime/logs/.psobb-ignore-probe',
+        'PSOBB-Runtime/secrets/.psobb-ignore-probe',
+        'PSOBB-Runtime/stable/runtime/client/Psobb.exe')
+    $ignoreProbe = Invoke-PSOBBGitBoundaryCommand `
+        -RepositoryRoot $repositoryFull `
+        -Arguments (@('check-ignore', '--no-index', '--') + $ignoreProbePaths)
+    $ignoredPaths = @($ignoreProbe.StandardOutput -split "`r?`n" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    $ignoredPathSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($ignoredPath in $ignoredPaths) {
+        [void]$ignoredPathSet.Add($ignoredPath)
+    }
+    $missingIgnoreProbes = @($ignoreProbePaths | Where-Object {
+        -not $ignoredPathSet.Contains($_)
+    })
+    if ($ignoreProbe.ExitCode -ne 0 -or
+        $ignoredPaths.Count -ne $ignoreProbePaths.Count -or
+        $missingIgnoreProbes.Count -ne 0) {
+        throw 'Git does not effectively ignore the complete canonical PSOBB-Runtime boundary'
+    }
+
+    $trackedRuntime = Invoke-PSOBBGitBoundaryCommand `
+        -RepositoryRoot $repositoryFull `
+        -Arguments @('ls-files', '--', 'PSOBB-Runtime')
+    if ($trackedRuntime.ExitCode -ne 0) {
+        throw 'Git could not verify whether canonical PSOBB runtime files are tracked'
+    }
+    $trackedPaths = @($trackedRuntime.StandardOutput -split "`r?`n" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    })
+    if ($trackedPaths.Count -ne 0) {
+        throw "Git already tracks $($trackedPaths.Count) path(s) inside PSOBB-Runtime"
+    }
+}
+
+function Assert-PSOBBCanonicalRuntimeIgnoreContract {
+    [CmdletBinding()]
+    param()
+
+    Assert-PSOBBGitRuntimeBoundary -RepositoryRoot $script:PSOBBRepositoryRoot
+}
+
+function Test-PSOBBPathWithinCanonicalRuntime {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $runtimePrefix = $script:PSOBBCanonicalRuntimeRoot + '\'
+    $fullPath.Equals($script:PSOBBCanonicalRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($runtimePrefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-PSOBBPathOutsideTrackedSource {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Purpose
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $repositoryPrefix = $script:PSOBBRepositoryRoot.TrimEnd('\') + '\'
+    $insideRepository =
+        $fullPath.Equals($script:PSOBBRepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($insideRepository -and -not (Test-PSOBBPathWithinCanonicalRuntime -Path $fullPath)) {
+        throw "$Purpose must remain outside Git-tracked source: $fullPath"
+    }
+    if (Test-PSOBBPathWithinCanonicalRuntime -Path $fullPath) {
+        Assert-PSOBBCanonicalRuntimeIgnoreContract
+        return Assert-PathWithinRoot `
+            -Path $fullPath `
+            -Root $script:PSOBBCanonicalRuntimeRoot
+    }
+    $fullPath
+}
 
 function Get-PSOBBRuntimeRoot {
     [CmdletBinding()]
@@ -10,21 +172,25 @@ function Get-PSOBBRuntimeRoot {
         $RuntimeRoot = $env:PSOBB_RUNTIME_ROOT
     }
     if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-        $repositoryParent = [System.IO.Directory]::GetParent($script:PSOBBRepositoryRoot)
-        if (-not $repositoryParent) {
-            throw 'Could not resolve the parent directory for the PSOBB repository'
-        }
-        $RuntimeRoot = Join-Path $repositoryParent.FullName 'PSOBB-Runtime'
+        $RuntimeRoot = $script:PSOBBCanonicalRuntimeRoot
     }
     $fullRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
     if ($fullRoot.StartsWith('\\', [System.StringComparison]::Ordinal)) {
         throw 'The PSOBB runtime root must be on a local Windows volume, not a UNC/network path'
     }
     $repoPrefix = $script:PSOBBRepositoryRoot.TrimEnd('\') + '\'
-    if (($fullRoot.Equals($script:PSOBBRepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $fullRoot.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)) -and
-        $env:PSOBB_ALLOW_IN_REPO_RUNTIME -ne '1') {
-        throw 'Refusing to place proprietary runtime or credentials inside the Git repository'
+    $insideRepository =
+        $fullRoot.Equals($script:PSOBBRepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullRoot.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($insideRepository -and
+        -not $fullRoot.Equals($script:PSOBBCanonicalRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Only the canonical ignored PSOBB-Runtime directory may contain runtime state inside this repository'
+    }
+    if ($fullRoot.Equals($script:PSOBBCanonicalRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Assert-PSOBBCanonicalRuntimeIgnoreContract
+        Assert-PathWithinRoot `
+            -Path $fullRoot `
+            -Root $script:PSOBBCanonicalRuntimeRoot | Out-Null
     }
     $fullRoot
 }
@@ -47,11 +213,12 @@ function Get-PSOBBLayout {
         Backups       = Join-Path $root 'backups'
         Logs          = Join-Path $root 'logs'
         Secrets       = Join-Path $root 'secrets'
-        PidFile       = Join-Path $root 'stable\newserv.process.json'
-        LegacyPidFile = Join-Path $root 'stable\newserv.pid'
-        HostPidFile   = Join-Path $root 'stable\newserv-host.pid'
-        ControlState  = Join-Path $root 'stable\newserv-control.json'
-        ControlRequest = Join-Path $root 'stable\newserv-control.request.json'
+        ControlDirectory = Join-Path $root 'stable\control'
+        PidFile       = Join-Path $root 'stable\control\newserv.process.json'
+        LegacyPidFile = Join-Path $root 'stable\control\newserv.pid'
+        HostPidFile   = Join-Path $root 'stable\control\newserv-host.pid'
+        ControlState  = Join-Path $root 'stable\control\newserv-control.json'
+        ControlRequest = Join-Path $root 'stable\control\newserv-control.request.json'
         InstallRecord = Join-Path $root 'stable\installation.json'
         RuntimeMarker = Join-Path $root '.psobb-runtime.json'
         BaseClientManifest = Join-Path $root 'stable\base-client.manifest.json'

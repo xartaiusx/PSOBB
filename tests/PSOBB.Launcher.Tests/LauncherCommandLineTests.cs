@@ -59,6 +59,20 @@ public sealed class LauncherCommandLineTests
     }
 
     [TestMethod]
+    public void ResolveDefaultRuntimeRoot_DiscoversRuntimeNestedUnderRepository()
+    {
+        using var repository = new TestRuntime();
+        var scripts = Directory.CreateDirectory(Path.Combine(repository.Root, "scripts"));
+        File.WriteAllText(Path.Combine(scripts.FullName, "Start-PSOBB.ps1"), string.Empty);
+
+        var resolved = LauncherOptions.ResolveDefaultRuntimeRoot(null, [repository.Root]);
+
+        Assert.AreEqual(
+            Path.Combine(Path.GetFullPath(repository.Root), "PSOBB-Runtime"),
+            resolved);
+    }
+
+    [TestMethod]
     public void Parse_AcceptsPreserveForegroundFlag()
     {
         var options = LauncherCommandLine.Parse(

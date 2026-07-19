@@ -1,4 +1,5 @@
 # Proprietary and downloaded runtime content
+/PSOBB-Runtime/
 /runtime/
 /vendor/
 /artifacts/

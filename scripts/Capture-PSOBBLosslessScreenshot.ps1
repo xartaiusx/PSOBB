@@ -13,8 +13,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 
-$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
-
 function Initialize-PSOBBLosslessCaptureType {
     if ($null -ne ('PSOBBLosslessCapture' -as [type])) {
         return
@@ -135,10 +133,7 @@ if (-not $fullOutputPath.StartsWith($evidencePrefix, [System.StringComparison]::
     [System.IO.Path]::GetExtension($fullOutputPath) -ine '.png') {
     throw "Lossless screenshots must be new PNG files under the private runtime graphics-evidence tree: $evidenceRoot"
 }
-if ($fullOutputPath.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-    $fullOutputPath.StartsWith($repositoryRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Raw screenshots cannot be written inside the Git repository'
-}
+Assert-PSOBBPathOutsideTrackedSource -Path $fullOutputPath -Purpose 'Raw screenshots' | Out-Null
 if (Test-Path -LiteralPath $fullOutputPath) {
     throw "Refusing to overwrite an existing screenshot: $fullOutputPath"
 }

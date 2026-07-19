@@ -49,13 +49,13 @@ Add-Result 'analyzer uses only source and Windows/.NET platform assemblies' `
     $sourceOnlyContract 'no Python, package, download, or production dependency'
 
 $privacyContract =
-    $toolSource -match 'must remain outside the Git repository' -and
+    $toolSource -match 'Assert-PSOBBPathOutsideTrackedSource' -and
     $toolSource -match 'rawArtifactsCopiedIntoRepository\s*=\s*\$false' -and
     $toolSource -match 'rawPathsRecorded\s*=\s*\$false' -and
     $toolSource -match 'rawFileNamesRecorded\s*=\s*\$false' -and
     $toolSource -match 'Refusing to overwrite an existing screenshot index'
 Add-Result 'private PNG and redacted-index boundaries are explicit' `
-    $privacyContract 'raw inputs stay outside Git; JSON output is path-free and atomic'
+    $privacyContract 'raw inputs stay in ignored runtime state; JSON output is path-free and atomic'
 
 $metricContract =
     $analyzerSource -match 'DetectedLeftPillarWidthPixels' -and

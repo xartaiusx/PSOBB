@@ -37,9 +37,9 @@ $pngGuards =
     $source -match '0x89, 0x50, 0x4E, 0x47' -and
     $source -match 'Refusing to overwrite' -and
     $source -match 'graphics-evidence' -and
-    $source -match 'Raw screenshots cannot be written inside the Git repository'
+    $source -match 'Assert-PSOBBPathOutsideTrackedSource'
 Add-Result 'capture produces a new signature-verified private PNG' `
-    $pngGuards 'atomic PNG output stays outside Git and is never overwritten'
+    $pngGuards 'atomic PNG output stays inside the ignored runtime and is never overwritten'
 
 $geometryGuards =
     $source -match 'GetClientRect' -and

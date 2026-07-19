@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [string]$RuntimeRoot,
     [switch]$RequireAccepted
 )
 
@@ -7,7 +8,9 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $profilesPath = Join-Path $repositoryRoot 'config\graphics-profiles.json'
 $evidencePath = Join-Path $repositoryRoot 'config\graphics-evidence.json'
 
-& (Join-Path $PSScriptRoot 'Test-PSOBBGraphicsProfiles.ps1') -Quiet | Out-Null
+& (Join-Path $PSScriptRoot 'Test-PSOBBGraphicsProfiles.ps1') `
+    -RuntimeRoot $RuntimeRoot `
+    -Quiet | Out-Null
 $profiles = Get-Content -Raw -LiteralPath $profilesPath | ConvertFrom-Json -Depth 50
 $evidence = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json -Depth 50
 $rows = foreach ($profile in @($profiles.profiles)) {

@@ -1,20 +1,32 @@
 # Project layout
 
-The supported local installation uses two sibling directories under the same
-development root:
+The supported local installation uses one project home with a strict boundary
+between tracked source and an ignored mutable runtime:
 
 ```text
-C:\Github Repo's\
-  PSOBB\             Git-tracked source, configuration, tests, and docs
-  PSOBB-Runtime\     proprietary binaries, private assets, saves, secrets,
-                     captures, build products, logs, and backups
+C:\Github Repo's\PSOBB\
+  .git\               Git metadata
+  config\             tracked declarative configuration and lock data
+  docs\               tracked architecture and operations documentation
+  scripts\            tracked lifecycle and verification tooling
+  src\                tracked project-authored source
+  tests\              tracked automated checks
+  PSOBB-Runtime\      ignored proprietary binaries, private assets, saves,
+                      secrets, captures, build products, logs, and backups
 ```
 
-Keeping the runtime beside, rather than inside, the repository prevents SEGA
-client files, third-party local-only assets, credentials, and generated state
-from entering Git. Scripts derive this sibling runtime automatically; an
-explicit `-RuntimeRoot` or `PSOBB_RUNTIME_ROOT` remains available for isolated
-tests.
+The anchored `/PSOBB-Runtime/` rule in the root `.gitignore` keeps the runtime
+out of Git while retaining one operator-facing project folder. Runtime safety
+checks accept only that exact nested directory beneath the repository; they
+reject every other in-repository runtime location. An explicit `-RuntimeRoot`
+or `PSOBB_RUNTIME_ROOT` remains available for isolated tests on a local volume.
+Git ignore is a tracking boundary, not encryption or backup: runtime ACL,
+credential, and backup policies still apply.
+
+Never run `git clean -x`, `git clean -X`, or an equivalent ignored-file cleanup
+against this worktree: those modes can delete the entire nested runtime,
+including its local backups. Preview ordinary tracked-source cleanup narrowly,
+and keep an independent recovery copy outside the worktree deletion boundary.
 
 The runtime owns these major areas:
 
@@ -38,12 +50,12 @@ The 2026-07-15 relocation retired last-known-good trees, launcher/build output,
 capture-job logs, and diagnostic launch records whose contents were bound to
 the pre-relocation Documents roots. Surviving historical results are retained
 only when they are path-independent and hash-indexed; current artifacts were
-regenerated beneath the canonical sibling runtime. Absolute references to the
+regenerated beneath the canonical nested runtime. Absolute references to the
 retired roots do not belong in source, manifests, or runtime state.
 
 No PSOBB source or runtime directory should remain under the user's Documents
 folder after a verified relocation. Desktop shortcuts are the only expected
-filesystem integration outside the two project directories. Native PSOBB
+filesystem integration outside the project home. Native PSOBB
 registry settings remain necessary for graphics configuration and remembered
 login; only obsolete path-bearing values are removed during relocation.
 
@@ -51,7 +63,7 @@ After a relocation, audit and remove only verified legacy PSOBB remnants:
 
 ```powershell
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Remove-PSOBBLegacyRemnants.ps1 `
-  -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" `
+  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
   -WhatIf
 ```
 

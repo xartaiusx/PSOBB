@@ -3,10 +3,16 @@ param(
     [string]$ProfilesPath,
     [string]$EvidencePath,
     [string]$SourcesLockPath,
+    [string]$RuntimeRoot,
     [switch]$Quiet
 )
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$runtimeRootFull = & {
+    param($RequestedRuntimeRoot, $CommonPath)
+    . $CommonPath
+    Get-PSOBBRuntimeRoot -RuntimeRoot $RequestedRuntimeRoot
+} $RuntimeRoot (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 if ([string]::IsNullOrWhiteSpace($ProfilesPath)) {
     $ProfilesPath = Join-Path $repositoryRoot 'config\graphics-profiles.json'
 }
@@ -88,7 +94,7 @@ function Test-GraphicsEvidenceArtifactReference {
     $root = if ($scope -ceq 'repo') {
         $repositoryRoot
     } else {
-        Join-Path (Split-Path -Parent $repositoryRoot) 'PSOBB-Runtime'
+        $runtimeRootFull
     }
     $root = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
     $path = [System.IO.Path]::GetFullPath((Join-Path $root $relativePath))
@@ -309,7 +315,9 @@ Add-GraphicsProfileCheck 'graphics contracts contain no credential fields' (
 $sourceIds = @($sourcesDocument.components | ForEach-Object { [string]$_.id })
 $duplicateSourceIds = @($sourceIds | Group-Object | Where-Object Count -ne 1)
 Add-GraphicsProfileCheck 'source-lock component IDs are unique' (
-    $duplicateSourceIds.Count -eq 0) (($duplicateSourceIds.Name) -join ', ')
+    $duplicateSourceIds.Count -eq 0) (@($duplicateSourceIds | ForEach-Object {
+        [string]$_.Name
+    }) -join ', ')
 
 $invalidSourceHashes = @($sourcesDocument.components | Where-Object {
     ($null -ne $_.sha256) -and -not (Test-Sha256Text ([string]$_.sha256))

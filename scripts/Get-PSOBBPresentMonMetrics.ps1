@@ -8,8 +8,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
+. (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 
 function Assert-PSOBBEvidencePathOutsideRepository {
     [CmdletBinding()]
@@ -18,13 +17,7 @@ function Assert-PSOBBEvidencePathOutsideRepository {
         [Parameter(Mandatory)][string]$Purpose
     )
 
-    $fullPath = [System.IO.Path]::GetFullPath($Path)
-    $repositoryPrefix = $repositoryRoot + '\'
-    if ($fullPath.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $fullPath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Purpose must remain outside the Git repository: $fullPath"
-    }
-    $fullPath
+    Assert-PSOBBPathOutsideTrackedSource -Path $Path -Purpose $Purpose
 }
 
 function Get-PSOBBStreamingSha256 {

@@ -33,7 +33,7 @@ contract and is not implemented yet.
 ## Runtime layout
 
 ```text
-C:\Github Repo's\PSOBB-Runtime\
+C:\Github Repo's\PSOBB\PSOBB-Runtime\
   archives\          immutable downloads
   sources\           immutable, commit-pinned source snapshots
   stable\server\     pinned newserv runtime and file-based game state

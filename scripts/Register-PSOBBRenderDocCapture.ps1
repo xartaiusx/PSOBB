@@ -9,8 +9,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 
-$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
-
 function Assert-PSOBBPrivateRenderDocEvidencePath {
     [CmdletBinding()]
     param(
@@ -20,12 +18,7 @@ function Assert-PSOBBPrivateRenderDocEvidencePath {
     )
 
     $fullPath = Assert-PathWithinRoot -Path $Path -Root $EvidenceRoot
-    $repositoryPrefix = $repositoryRoot + '\'
-    if ($fullPath.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $fullPath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Purpose must remain outside the Git repository: $fullPath"
-    }
-    $fullPath
+    Assert-PSOBBPathOutsideTrackedSource -Path $fullPath -Purpose $Purpose
 }
 
 function Get-PSOBBStableFileIdentity {
