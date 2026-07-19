@@ -15,7 +15,8 @@ function Get-PSOBBRuntimeAclTargets {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
 
-    @(
+    $targets = [System.Collections.Generic.List[object]]::new()
+    foreach ($target in @(
         [pscustomobject]@{
             Name = 'licenses'
             Path = Join-Path $Layout.Server 'system\licenses'
@@ -60,7 +61,59 @@ function Get-PSOBBRuntimeAclTargets {
             Name = 'supplemental-asset-activations'
             Path = Join-Path $Layout.LocalLab 'visual-asset-activations'
         }
-    )
+    )) {
+        [void]$targets.Add($target)
+    }
+
+    $combatCanary = Get-PSOBBServerEnvironmentLayout `
+        -Layout $Layout -Environment CombatCanary
+    foreach ($definition in @(
+        [pscustomobject]@{
+            Name = 'combat-canary-licenses'
+            Path = Join-Path $combatCanary.Server 'system\licenses'
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-players'
+            Path = Join-Path $combatCanary.Server 'system\players'
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-teams'
+            Path = Join-Path $combatCanary.Server 'system\teams'
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-secrets'
+            Path = $combatCanary.Secrets
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-backups'
+            Path = $combatCanary.Backups
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-logs'
+            Path = $combatCanary.Logs
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-snapshots'
+            Path = $combatCanary.Snapshots
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-control'
+            Path = $combatCanary.ControlDirectory
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-builds'
+            Path = $combatCanary.Builds
+        }
+    )) {
+        # The combat canary is materialized later than the stable runtime. Its
+        # sensitive trees join the policy as soon as they exist; an unsafe file
+        # or reparse point at an expected directory still joins and fails closed.
+        if (Test-Path -LiteralPath $definition.Path) {
+            [void]$targets.Add($definition)
+        }
+    }
+
+    @($targets)
 }
 
 function Get-PSOBBRuntimeAclTargetItems {

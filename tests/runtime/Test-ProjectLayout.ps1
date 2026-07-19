@@ -28,6 +28,27 @@ try {
         $defaultRuntime.Equals($canonicalRuntime, [System.StringComparison]::OrdinalIgnoreCase) `
         $defaultRuntime
 
+    $layout = Get-PSOBBLayout -RuntimeRoot $canonicalRuntime
+    $stableEnvironment = Get-PSOBBServerEnvironmentLayout -Layout $layout
+    Add-Result 'default server environment preserves the stable layout' `
+        ($stableEnvironment.Environment -ceq 'Stable' -and
+         $stableEnvironment.EnvironmentId -ceq 'stable' -and
+         $stableEnvironment.EnvironmentRoot -ceq $layout.Stable -and
+         $stableEnvironment.ServerBase -ceq $layout.ServerBase -and
+         $stableEnvironment.Server -ceq $layout.Server -and
+         $stableEnvironment.Client -ceq $layout.Client -and
+         $stableEnvironment.ControlDirectory -ceq $layout.ControlDirectory -and
+         $stableEnvironment.Backups -ceq $layout.Backups -and
+         $stableEnvironment.Logs -ceq $layout.Logs -and
+         $stableEnvironment.Snapshots -ceq $layout.Backups) `
+        'omitting -Environment remains byte-for-byte mapped to Stable paths'
+
+    Add-Result 'combat canary does not replace the graphics canary root' `
+        ($layout.Canary -ceq (Join-Path $canonicalRuntime 'canary') -and
+         $layout.CombatCanary -ceq (Join-Path $canonicalRuntime 'combat-canary') -and
+         $layout.Canary -cne $layout.CombatCanary) `
+        'graphics canary and combat-canary remain distinct runtime namespaces'
+
     & git -C $repositoryRoot check-ignore -q --no-index -- 'PSOBB-Runtime/probe.bin'
     Add-Result 'Git ignores the canonical runtime recursively' ($LASTEXITCODE -eq 0) `
         'git check-ignore accepted an untracked runtime probe'

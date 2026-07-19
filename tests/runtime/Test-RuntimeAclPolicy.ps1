@@ -4,6 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
+. (Join-Path $repositoryRoot 'scripts\PSOBB.RuntimeAclPolicy.ps1')
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
@@ -86,7 +87,17 @@ $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-RuntimeAclTests-' + [Guid]::NewGuid().ToString('N'))
 $outsideRoot = $temporaryRoot + '-outside'
 $layout = Get-PSOBBLayout -RuntimeRoot $temporaryRoot
+$combatCanary = Get-PSOBBServerEnvironmentLayout `
+    -Layout $layout -Environment CombatCanary
 try {
+    $stableOnlyTargets = @(Get-PSOBBRuntimeAclTargets -Layout $layout)
+    Add-Result 'runtime ACL target inventory remains stable before canary materialization' `
+        ($stableOnlyTargets.Count -eq 11 -and
+         @($stableOnlyTargets.Name | Where-Object {
+                $_ -like 'combat-canary-*'
+            }).Count -eq 0) `
+        'optional combat-canary trees do not change the established stable policy'
+
     foreach ($directory in @(
         $layout.Root,
         (Join-Path $layout.Server 'system\licenses'),
@@ -99,10 +110,50 @@ try {
         (Join-Path $layout.Archives 'graphics-lab\local-assets'),
         (Join-Path $layout.LocalLab 'asset-overlays'),
         (Join-Path $layout.LocalLab 'asset-activations'),
-        (Join-Path $layout.LocalLab 'visual-asset-activations'))) {
+        (Join-Path $layout.LocalLab 'visual-asset-activations'),
+        (Join-Path $combatCanary.Server 'system\licenses'),
+        (Join-Path $combatCanary.Server 'system\players'),
+        (Join-Path $combatCanary.Server 'system\teams'),
+        $combatCanary.Secrets,
+        $combatCanary.Backups,
+        $combatCanary.Logs,
+        $combatCanary.Snapshots,
+        $combatCanary.ControlDirectory,
+        $combatCanary.Builds)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
     Initialize-PSOBBRuntimeMarker -Layout $layout | Out-Null
+
+    $expectedCanaryTargetPaths = [ordered]@{
+        'combat-canary-backups' = $combatCanary.Backups
+        'combat-canary-builds' = $combatCanary.Builds
+        'combat-canary-control' = $combatCanary.ControlDirectory
+        'combat-canary-licenses' = Join-Path $combatCanary.Server 'system\licenses'
+        'combat-canary-logs' = $combatCanary.Logs
+        'combat-canary-players' = Join-Path $combatCanary.Server 'system\players'
+        'combat-canary-secrets' = $combatCanary.Secrets
+        'combat-canary-snapshots' = $combatCanary.Snapshots
+        'combat-canary-teams' = Join-Path $combatCanary.Server 'system\teams'
+    }
+    $materializedTargets = @(Get-PSOBBRuntimeAclTargets -Layout $layout)
+    $materializedCanaryTargets = @($materializedTargets | Where-Object {
+            $_.Name -like 'combat-canary-*'
+        })
+    $canaryTargetIdentityExact = $materializedCanaryTargets.Count -eq 9
+    foreach ($expectedTarget in $expectedCanaryTargetPaths.GetEnumerator()) {
+        $matches = @($materializedCanaryTargets | Where-Object {
+                $_.Name -ceq $expectedTarget.Key -and
+                ([System.IO.Path]::GetFullPath([string]$_.Path)).Equals(
+                    [System.IO.Path]::GetFullPath([string]$expectedTarget.Value),
+                    [System.StringComparison]::OrdinalIgnoreCase)
+            })
+        if ($matches.Count -ne 1) {
+            $canaryTargetIdentityExact = $false
+        }
+    }
+    Add-Result 'runtime ACL policy declares exact combat-canary target identities' `
+        $canaryTargetIdentityExact `
+        'only materialized account, evidence, control, build, and secret trees are added'
 
     $logFile = Join-Path $layout.Logs 'server-fixture.log'
     [System.IO.File]::WriteAllText($logFile, 'fixture')
@@ -130,6 +181,24 @@ try {
     [System.IO.File]::WriteAllText($activationFixture, 'private fixture')
     $supplementalFixture = Join-Path $layout.LocalLab 'visual-asset-activations\activation.json'
     [System.IO.File]::WriteAllText($supplementalFixture, 'private fixture')
+    $canaryLicenseFixture = Join-Path $combatCanary.Server 'system\licenses\0000000001.json'
+    [System.IO.File]::WriteAllText($canaryLicenseFixture, '{"fixture":true}')
+    $canaryPlayerFixture = Join-Path $combatCanary.Server 'system\players\fixture'
+    New-Item -ItemType Directory -Path $canaryPlayerFixture | Out-Null
+    $canaryTeamFixture = Join-Path $combatCanary.Server 'system\teams\fixture.json'
+    [System.IO.File]::WriteAllText($canaryTeamFixture, '{"fixture":true}')
+    $canarySecretFixture = Join-Path $combatCanary.Secrets 'fixture.key'
+    [System.IO.File]::WriteAllText($canarySecretFixture, 'not-a-real-secret')
+    $canaryBackupFixture = Join-Path $combatCanary.Backups 'state-fixture'
+    New-Item -ItemType Directory -Path $canaryBackupFixture | Out-Null
+    $canaryLogFixture = Join-Path $combatCanary.Logs 'server-fixture.log'
+    [System.IO.File]::WriteAllText($canaryLogFixture, 'fixture')
+    $canarySnapshotFixture = Join-Path $combatCanary.Snapshots 'twills-snapshot.json'
+    [System.IO.File]::WriteAllText($canarySnapshotFixture, '{"fixture":true}')
+    $canaryControlFixture = Join-Path $combatCanary.ControlDirectory 'fixture.json'
+    [System.IO.File]::WriteAllText($canaryControlFixture, '{"fixture":true}')
+    $canaryBuildFixture = Join-Path $combatCanary.Builds 'build-receipt.json'
+    [System.IO.File]::WriteAllText($canaryBuildFixture, '{"fixture":true}')
 
     $logAclBefore = Get-Acl -LiteralPath $layout.Logs
     $logOwnerBefore = $logAclBefore.GetOwner(
@@ -155,6 +224,17 @@ try {
         ((Test-ExactProtectedAcl -Path $layout.Logs) -and
          (Test-ExactProtectedAcl -Path $logFile)) `
         'canonical explicit FullControl rules for current user, SYSTEM, and Administrators only'
+    Add-Result 'runtime ACL policy protects combat-canary sensitive trees' `
+        ((Test-ExactProtectedAcl -Path $canaryLicenseFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryPlayerFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryTeamFixture) -and
+         (Test-ExactProtectedAcl -Path $canarySecretFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryBackupFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryLogFixture) -and
+         (Test-ExactProtectedAcl -Path $canarySnapshotFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryControlFixture) -and
+         (Test-ExactProtectedAcl -Path $canaryBuildFixture)) `
+        'canary account, evidence, lifecycle, build, and credential state use the exact protected DACL'
     $logAclAfter = Get-Acl -LiteralPath $layout.Logs
     $fileAclAfter = Get-Acl -LiteralPath $nestedLogFile
     Add-Result 'runtime ACL setter preserves owner and group' `
@@ -181,6 +261,15 @@ try {
     $targetSummaries = @($verification.Records | Where-Object RecordType -eq 'TargetSummary')
     $expectedTargets = @(
         'backups',
+        'combat-canary-backups',
+        'combat-canary-builds',
+        'combat-canary-control',
+        'combat-canary-licenses',
+        'combat-canary-logs',
+        'combat-canary-players',
+        'combat-canary-secrets',
+        'combat-canary-snapshots',
+        'combat-canary-teams',
         'graphics-evidence',
         'licenses',
         'local-asset-activations',
@@ -196,7 +285,7 @@ try {
         (-not $verification.ErrorRecord -and
          $summary.Count -eq 1 -and
          $summary[0].Passed -and
-         $targetSummaries.Count -eq 11 -and
+         $targetSummaries.Count -eq $expectedTargets.Count -and
          @(Compare-Object $expectedTargets $actualTargets).Count -eq 0 -and
          @($targetSummaries | Where-Object { -not $_.Passed }).Count -eq 0) `
         'account state, logs, private evidence, and local-only asset trees are recursively verified'

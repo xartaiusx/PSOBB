@@ -209,6 +209,7 @@ function Get-PSOBBLayout {
         BaseClient    = Join-Path $root 'stable\client'
         Client        = Join-Path $root 'stable\runtime\client'
         Canary        = Join-Path $root 'canary'
+        CombatCanary  = Join-Path $root 'combat-canary'
         LocalLab      = Join-Path $root 'local-lab'
         Backups       = Join-Path $root 'backups'
         Logs          = Join-Path $root 'logs'
@@ -260,6 +261,174 @@ function Assert-PathWithinRoot {
         $cursor = $parent.FullName.TrimEnd('\')
     }
     $fullPath
+}
+
+function Resolve-PSOBBServerEnvironmentName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Environment
+    )
+
+    $normalized = $Environment.Trim() -replace '[\s_-]', ''
+    if ($normalized.Equals('stable', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return 'Stable'
+    }
+    if ($normalized.Equals('combatcanary', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return 'CombatCanary'
+    }
+    throw "Unknown PSOBB server environment '$Environment'; expected Stable or CombatCanary"
+}
+
+function Get-PSOBBServerEnvironmentLayout {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [string]$Environment = 'Stable'
+    )
+
+    $environmentName = Resolve-PSOBBServerEnvironmentName -Environment $Environment
+    $root = [System.IO.Path]::GetFullPath([string]$Layout.Root).TrimEnd('\')
+    if ($root.StartsWith('\\', [System.StringComparison]::Ordinal)) {
+        throw 'PSOBB server environments must be on a local Windows volume'
+    }
+
+    if ($environmentName -eq 'Stable') {
+        $environmentRoot = [string]$Layout.Stable
+        $values = [ordered]@{
+            Environment        = 'Stable'
+            EnvironmentId      = 'stable'
+            Root               = $root
+            EnvironmentRoot    = $environmentRoot
+            ServerBase         = [string]$Layout.ServerBase
+            Server             = [string]$Layout.Server
+            Client             = [string]$Layout.Client
+            ControlDirectory   = [string]$Layout.ControlDirectory
+            PidFile            = [string]$Layout.PidFile
+            LegacyPidFile      = [string]$Layout.LegacyPidFile
+            HostPidFile        = [string]$Layout.HostPidFile
+            ControlState       = [string]$Layout.ControlState
+            ControlRequest     = [string]$Layout.ControlRequest
+            InstallRecord      = [string]$Layout.InstallRecord
+            Backups            = [string]$Layout.Backups
+            Logs               = [string]$Layout.Logs
+            Snapshots          = [string]$Layout.Backups
+            Builds             = Split-Path -Parent ([string]$Layout.ServerBase)
+            RuntimeMarker      = [string]$Layout.RuntimeMarker
+            BaseClient         = [string]$Layout.BaseClient
+            BaseClientManifest = [string]$Layout.BaseClientManifest
+            Secrets            = [string]$Layout.Secrets
+        }
+    } else {
+        $combatCanaryProperty = $Layout.PSObject.Properties['CombatCanary']
+        if ($null -eq $combatCanaryProperty -or
+            [string]::IsNullOrWhiteSpace([string]$combatCanaryProperty.Value)) {
+            throw 'The runtime layout does not declare a CombatCanary root'
+        }
+        $environmentRoot = [string]$combatCanaryProperty.Value
+        $controlDirectory = Join-Path $environmentRoot 'control'
+        $values = [ordered]@{
+            Environment        = 'CombatCanary'
+            EnvironmentId      = 'combat-canary'
+            Root               = $root
+            EnvironmentRoot    = $environmentRoot
+            ServerBase         = Join-Path $environmentRoot 'server-base\release'
+            Server             = Join-Path $environmentRoot 'server\release'
+            Client             = Join-Path $environmentRoot 'runtime\client'
+            ControlDirectory   = $controlDirectory
+            PidFile            = Join-Path $controlDirectory 'newserv.process.json'
+            LegacyPidFile      = Join-Path $controlDirectory 'newserv.pid'
+            HostPidFile        = Join-Path $controlDirectory 'newserv-host.pid'
+            ControlState       = Join-Path $controlDirectory 'newserv-control.json'
+            ControlRequest     = Join-Path $controlDirectory 'newserv-control.request.json'
+            InstallRecord      = Join-Path $environmentRoot 'installation.json'
+            Backups            = Join-Path $environmentRoot 'backups'
+            Logs               = Join-Path $environmentRoot 'logs'
+            Snapshots          = Join-Path $environmentRoot 'snapshots'
+            Builds             = Join-Path $environmentRoot 'builds'
+            RuntimeMarker      = [string]$Layout.RuntimeMarker
+            BaseClient         = Join-Path $environmentRoot 'client'
+            BaseClientManifest = Join-Path $environmentRoot 'base-client.manifest.json'
+            Secrets            = Join-Path $environmentRoot 'secrets'
+        }
+    }
+
+    foreach ($propertyName in @($values.Keys | Where-Object {
+                $_ -notin @('Environment', 'EnvironmentId')
+            })) {
+        $values[$propertyName] = Assert-PathWithinRoot `
+            -Path ([string]$values[$propertyName]) -Root $root
+    }
+    [pscustomobject]$values
+}
+
+function Test-PSOBBPathAncestorOverlap {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$First,
+        [Parameter(Mandatory)][string]$Second
+    )
+
+    $firstPath = [System.IO.Path]::GetFullPath($First).TrimEnd('\')
+    $secondPath = [System.IO.Path]::GetFullPath($Second).TrimEnd('\')
+    $firstPath.Equals($secondPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $firstPath.StartsWith(
+            $secondPath + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $secondPath.StartsWith(
+            $firstPath + '\', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-PSOBBServerEnvironmentIsolation {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $stable = Get-PSOBBServerEnvironmentLayout -Layout $Layout -Environment Stable
+    $combatCanary = Get-PSOBBServerEnvironmentLayout `
+        -Layout $Layout -Environment CombatCanary
+    $stablePaths = [ordered]@{
+        server    = $stable.Server
+        client    = $stable.Client
+        control   = $stable.ControlDirectory
+        logs      = $stable.Logs
+        backups   = $stable.Backups
+        licenses  = Join-Path $stable.Server 'system\licenses'
+        players   = Join-Path $stable.Server 'system\players'
+        teams     = Join-Path $stable.Server 'system\teams'
+        snapshots = $stable.Snapshots
+    }
+    $combatCanaryPaths = [ordered]@{
+        server    = $combatCanary.Server
+        client    = $combatCanary.Client
+        control   = $combatCanary.ControlDirectory
+        logs      = $combatCanary.Logs
+        backups   = $combatCanary.Backups
+        licenses  = Join-Path $combatCanary.Server 'system\licenses'
+        players   = Join-Path $combatCanary.Server 'system\players'
+        teams     = Join-Path $combatCanary.Server 'system\teams'
+        snapshots = $combatCanary.Snapshots
+    }
+
+    foreach ($entry in @($stablePaths.GetEnumerator()) +
+        @($combatCanaryPaths.GetEnumerator())) {
+        Assert-PathWithinRoot -Path ([string]$entry.Value) -Root $stable.Root | Out-Null
+    }
+    foreach ($stableEntry in $stablePaths.GetEnumerator()) {
+        foreach ($combatCanaryEntry in $combatCanaryPaths.GetEnumerator()) {
+            if (Test-PSOBBPathAncestorOverlap `
+                    -First ([string]$stableEntry.Value) `
+                    -Second ([string]$combatCanaryEntry.Value)) {
+                throw "PSOBB Stable $($stableEntry.Key) path overlaps CombatCanary $($combatCanaryEntry.Key) path"
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        StablePathsChecked       = $stablePaths.Count
+        CombatCanaryPathsChecked = $combatCanaryPaths.Count
+        PairwiseChecks           = $stablePaths.Count * $combatCanaryPaths.Count
+        Passed                   = $true
+    }
 }
 
 function New-PSOBBProtectedSecurityDescriptor {
