@@ -13,7 +13,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
-
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 
 function Assert-PSOBBPrivateRenderDocPath {
@@ -25,12 +24,7 @@ function Assert-PSOBBPrivateRenderDocPath {
     )
 
     $fullPath = Assert-PathWithinRoot -Path $Path -Root $RuntimeEvidenceRoot
-    $repositoryPrefix = $repositoryRoot + '\'
-    if ($fullPath.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $fullPath.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Purpose must remain outside the Git repository: $fullPath"
-    }
-    $fullPath
+    Assert-PSOBBPathOutsideTrackedSource -Path $fullPath -Purpose $Purpose
 }
 
 function Get-PSOBBValidatedRenderDocProfile {
@@ -198,6 +192,308 @@ function Get-PSOBBLockedRenderDoc {
     }
 }
 
+function Get-PSOBBDgVoodooRenderDocImportContract {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "The exact dgVoodoo D3D8 owner is missing: $fullPath"
+    }
+
+    $stream = [System.IO.File]::Open(
+        $fullPath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read)
+    try {
+        if ($stream.Length -lt 512 -or $stream.Length -gt 64MB) {
+            throw 'The exact dgVoodoo D3D8 owner has an invalid PE byte size'
+        }
+        $bytes = [byte[]]::new([int]$stream.Length)
+        $read = 0
+        while ($read -lt $bytes.Length) {
+            $count = $stream.Read($bytes, $read, $bytes.Length - $read)
+            if ($count -le 0) {
+                throw 'The exact dgVoodoo D3D8 owner could not be read completely'
+            }
+            $read += $count
+        }
+    } finally {
+        $stream.Dispose()
+    }
+
+    $memory = [System.IO.MemoryStream]::new($bytes, $false)
+    $peReader = $null
+    try {
+        $peReader = [System.Reflection.PortableExecutable.PEReader]::new($memory)
+        $headers = $peReader.PEHeaders
+        if ($null -eq $headers.PEHeader -or
+            [int]$headers.CoffHeader.Machine -ne 0x014C -or
+            [int]$headers.PEHeader.Magic -ne 0x010B) {
+            throw 'The exact dgVoodoo D3D8 owner is not an x86 PE32 image'
+        }
+
+        $importDirectory = $headers.PEHeader.ImportTableDirectory
+        if ([uint32]$importDirectory.RelativeVirtualAddress -eq 0 -or
+            [int]$importDirectory.Size -lt 20) {
+            throw 'The exact dgVoodoo D3D8 owner has no valid PE import directory'
+        }
+
+        $ensureRange = {
+            param(
+                [Parameter(Mandatory)][long]$Offset,
+                [Parameter(Mandatory)][int]$Count,
+                [Parameter(Mandatory)][string]$Label
+            )
+            if ($Offset -lt 0 -or $Count -lt 0 -or
+                $Offset -gt ($bytes.LongLength - $Count)) {
+                throw "The exact dgVoodoo D3D8 owner has an out-of-range $Label"
+            }
+        }
+        $rvaToOffset = {
+            param(
+                [Parameter(Mandatory)][uint32]$Rva,
+                [Parameter(Mandatory)][int]$Count,
+                [Parameter(Mandatory)][string]$Label
+            )
+            if ([uint64]$Rva -lt [uint64]$headers.PEHeader.SizeOfHeaders) {
+                & $ensureRange -Offset ([long]$Rva) -Count $Count -Label $Label
+                return [long]$Rva
+            }
+            foreach ($section in $headers.SectionHeaders) {
+                $span = [Math]::Max(
+                    [uint64][uint32]$section.VirtualSize,
+                    [uint64][uint32]$section.SizeOfRawData)
+                $start = [uint64][uint32]$section.VirtualAddress
+                $end = $start + $span
+                if ([uint64]$Rva -ge $start -and [uint64]$Rva -lt $end) {
+                    $delta = [uint64]$Rva - $start
+                    if ($delta + [uint64]$Count -gt
+                        [uint64][uint32]$section.SizeOfRawData) {
+                        throw "The exact dgVoodoo D3D8 owner maps $Label outside file-backed section data"
+                    }
+                    $offset = [uint64][uint32]$section.PointerToRawData + $delta
+                    if ($offset -gt [uint64][long]::MaxValue) {
+                        throw "The exact dgVoodoo D3D8 owner has an invalid $Label offset"
+                    }
+                    & $ensureRange -Offset ([long]$offset) -Count $Count -Label $Label
+                    return [long]$offset
+                }
+            }
+            throw ('The exact dgVoodoo D3D8 owner cannot map ' +
+                "$Label RVA 0x$($Rva.ToString('X8')) to file-backed data")
+        }
+        $readUInt16 = {
+            param([uint32]$Rva, [string]$Label)
+            $offset = & $rvaToOffset -Rva $Rva -Count 2 -Label $Label
+            [System.BitConverter]::ToUInt16($bytes, [int]$offset)
+        }
+        $readUInt32 = {
+            param([uint32]$Rva, [string]$Label)
+            $offset = & $rvaToOffset -Rva $Rva -Count 4 -Label $Label
+            [System.BitConverter]::ToUInt32($bytes, [int]$offset)
+        }
+        $readAscii = {
+            param(
+                [uint32]$Rva,
+                [int]$MaximumLength,
+                [string]$Label
+            )
+            $characters = [System.Collections.Generic.List[byte]]::new()
+            $terminated = $false
+            for ($index = 0; $index -lt $MaximumLength; $index++) {
+                $characterRva = [uint64]$Rva + [uint64]$index
+                if ($characterRva -gt [uint32]::MaxValue) {
+                    throw "The exact dgVoodoo D3D8 owner has an overflowing $Label RVA"
+                }
+                $offset = & $rvaToOffset `
+                    -Rva ([uint32]$characterRva) `
+                    -Count 1 `
+                    -Label $Label
+                $value = $bytes[[int]$offset]
+                if ($value -eq 0) {
+                    $terminated = $true
+                    break
+                }
+                if ($value -lt 0x20 -or $value -gt 0x7E) {
+                    throw "The exact dgVoodoo D3D8 owner has a non-ASCII $Label"
+                }
+                $characters.Add($value)
+            }
+            if (-not $terminated -or $characters.Count -eq 0) {
+                throw "The exact dgVoodoo D3D8 owner has an invalid $Label"
+            }
+            [System.Text.Encoding]::ASCII.GetString($characters.ToArray())
+        }
+
+        $kernelDescriptors = [System.Collections.Generic.List[object]]::new()
+        $descriptorLimit = [Math]::Min(
+            [int][Math]::Floor([double]$importDirectory.Size / 20.0),
+            1024)
+        $descriptorTerminated = $false
+        for ($index = 0; $index -lt $descriptorLimit; $index++) {
+            $descriptorRva64 =
+                [uint64][uint32]$importDirectory.RelativeVirtualAddress +
+                ([uint64]$index * 20)
+            if ($descriptorRva64 -gt [uint32]::MaxValue) {
+                throw 'The exact dgVoodoo D3D8 owner has an overflowing import descriptor RVA'
+            }
+            $descriptorRva = [uint32]$descriptorRva64
+            $originalFirstThunk = & $readUInt32 `
+                -Rva $descriptorRva `
+                -Label 'import OriginalFirstThunk'
+            $timeDateStamp = & $readUInt32 `
+                -Rva ([uint32]($descriptorRva + 4)) `
+                -Label 'import TimeDateStamp'
+            $forwarderChain = & $readUInt32 `
+                -Rva ([uint32]($descriptorRva + 8)) `
+                -Label 'import ForwarderChain'
+            $nameRva = & $readUInt32 `
+                -Rva ([uint32]($descriptorRva + 12)) `
+                -Label 'import Name'
+            $firstThunk = & $readUInt32 `
+                -Rva ([uint32]($descriptorRva + 16)) `
+                -Label 'import FirstThunk'
+            if ($originalFirstThunk -eq 0 -and $timeDateStamp -eq 0 -and
+                $forwarderChain -eq 0 -and $nameRva -eq 0 -and
+                $firstThunk -eq 0) {
+                $descriptorTerminated = $true
+                break
+            }
+            if ($nameRva -eq 0 -or $firstThunk -eq 0) {
+                throw 'The exact dgVoodoo D3D8 owner has an incomplete PE import descriptor'
+            }
+            $libraryName = & $readAscii `
+                -Rva $nameRva `
+                -MaximumLength 128 `
+                -Label 'import library name'
+            if ($libraryName.Equals(
+                'KERNEL32.DLL',
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+                $kernelDescriptors.Add([pscustomobject]@{
+                    LibraryName = $libraryName
+                    OriginalFirstThunkRva = [uint32]$originalFirstThunk
+                    FirstThunkRva = [uint32]$firstThunk
+                })
+            }
+        }
+        if (-not $descriptorTerminated) {
+            throw 'The exact dgVoodoo D3D8 owner has no terminated PE import descriptor table'
+        }
+        if ($kernelDescriptors.Count -ne 1) {
+            throw 'The exact dgVoodoo D3D8 owner must have one KERNEL32 import descriptor'
+        }
+
+        $kernel = $kernelDescriptors[0]
+        $lookupRva = if ($kernel.OriginalFirstThunkRva -ne 0) {
+            [uint32]$kernel.OriginalFirstThunkRva
+        } else {
+            [uint32]$kernel.FirstThunkRva
+        }
+        $imports = [System.Collections.Generic.List[string]]::new()
+        $thunkTerminated = $false
+        for ($index = 0; $index -lt 1024; $index++) {
+            $thunkRva64 = [uint64]$lookupRva + ([uint64]$index * 4)
+            if ($thunkRva64 -gt [uint32]::MaxValue) {
+                throw 'The exact dgVoodoo D3D8 owner has an overflowing import thunk RVA'
+            }
+            $thunk = & $readUInt32 `
+                -Rva ([uint32]$thunkRva64) `
+                -Label 'KERNEL32 import thunk'
+            if ($thunk -eq 0) {
+                $thunkTerminated = $true
+                break
+            }
+            if (([uint64]$thunk -band [uint64]2147483648) -ne 0) {
+                continue
+            }
+            $hint = & $readUInt16 `
+                -Rva ([uint32]$thunk) `
+                -Label 'KERNEL32 import hint'
+            $nameRva64 = [uint64]$thunk + 2
+            if ($nameRva64 -gt [uint32]::MaxValue) {
+                throw 'The exact dgVoodoo D3D8 owner has an overflowing import name RVA'
+            }
+            $importName = & $readAscii `
+                -Rva ([uint32]$nameRva64) `
+                -MaximumLength 256 `
+                -Label 'KERNEL32 import name'
+            $imports.Add($importName)
+        }
+        if (-not $thunkTerminated) {
+            throw 'The exact dgVoodoo D3D8 owner has no terminated KERNEL32 import thunk table'
+        }
+        foreach ($requiredImport in @('LoadLibraryA', 'GetProcAddress')) {
+            if (-not $imports.Contains($requiredImport)) {
+                throw "The exact dgVoodoo D3D8 owner does not import $requiredImport from KERNEL32"
+            }
+        }
+
+        [pscustomobject]@{
+            Path = $fullPath
+            Machine = 'I386'
+            LibraryName = [string]$kernel.LibraryName
+            OriginalFirstThunkRva = [uint32]$kernel.OriginalFirstThunkRva
+            FirstThunkRva = [uint32]$kernel.FirstThunkRva
+            Imports = @($imports)
+            RenderDocV145Compatible =
+                ([uint32]$kernel.OriginalFirstThunkRva -ne 0)
+        }
+    } finally {
+        if ($peReader) {
+            $peReader.Dispose()
+        }
+        $memory.Dispose()
+    }
+}
+
+function Assert-PSOBBDgVoodooRenderDocCompatibility {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $contract = Get-PSOBBDgVoodooRenderDocImportContract -Path $Path
+    if (-not $contract.RenderDocV145Compatible) {
+        throw ('RenderDoc v1.45 cannot register the D3D11 API for the exact ' +
+            'dgVoodoo D3D8 owner because its KERNEL32 import descriptor has ' +
+            'OriginalFirstThunk=0; launching it would produce API: None.')
+    }
+    $contract
+}
+
+function Assert-PSOBBRenderDocProfileCompatibility {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$Profile
+    )
+
+    $owner = $Profile.Declared.renderer.d3d8Owner
+    if ([string]$owner.componentId -cne 'dgvoodoo2-x86-d3d8') {
+        return [pscustomobject]@{
+            Applicable = $false
+            ComponentId = [string]$owner.componentId
+        }
+    }
+
+    $relativePath = ([string]$owner.relativePath).Replace('/', '\')
+    if ($relativePath -cne 'd3d8.dll') {
+        throw 'The exact dgVoodoo D3D8 owner is not materialized at d3d8.dll'
+    }
+    $clientRoot = Assert-PathWithinRoot `
+        -Path $Profile.ClientRoot `
+        -Root $Layout.Root
+    $ownerPath = Assert-PathWithinRoot `
+        -Path (Join-Path $clientRoot $relativePath) `
+        -Root $clientRoot
+    $contract = Assert-PSOBBDgVoodooRenderDocCompatibility -Path $ownerPath
+    $contract | Add-Member -NotePropertyName Applicable -NotePropertyValue $true
+    $contract | Add-Member `
+        -NotePropertyName ComponentId `
+        -NotePropertyValue ([string]$owner.componentId)
+    $contract
+}
+
 function ConvertTo-PSOBBUInt32ExitCode {
     [CmdletBinding()]
     param([Parameter(Mandatory)][int]$ExitCode)
@@ -229,6 +525,10 @@ function Write-PSOBBJsonAtomically {
     }
 }
 
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
@@ -244,6 +544,9 @@ $profile = Get-PSOBBValidatedRenderDocProfile `
     -Layout $layout `
     -SelectedProfileId $ProfileId
 $renderDoc = Get-PSOBBLockedRenderDoc -Layout $layout
+$renderDocCompatibility = Assert-PSOBBRenderDocProfileCompatibility `
+    -Layout $layout `
+    -Profile $profile
 
 $evidenceRoot = Assert-PathWithinRoot `
     -Path (Join-Path $layout.Root 'graphics-evidence') `

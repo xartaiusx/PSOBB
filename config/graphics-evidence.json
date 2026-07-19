@@ -424,7 +424,7 @@
       "stage": "runtime-verified",
       "disposition": "pending",
       "blockers": [
-        "RenderDoc was armed for the exact All profile, but no .rdc was captured or replay-inspected; backbuffer and internal-render proof remain incomplete.",
+        "The exact High All profile reached RenderDoc target control, but the locked packed dgVoodoo 2.87.3 x86 owner has OriginalFirstThunk=0 and bypasses RenderDoc 1.45's dynamic D3D11 interception. Target control reported API: None and produced no .rdc; backbuffer and internal-render proof remain blocked pending a separately pinned hook-compatible diagnostic path.",
         "The complete lossless scene and HUD geometry corpus and dynamic resize-triggered D3D device recreation remain incomplete.",
         "Blind same-scene HD-versus-stock selection remains incomplete."
       ],
@@ -459,8 +459,8 @@
           "note": "Live inspection of the exact High-profile Forest process found the locked 59NL executable, dgVoodoo as the sole runtime D3D8 owner, the declared DInput ASI loader, local widescreen reference, reproducible PSOBB.LargeAssets.asi, and Windows D3D11/DXGI output chain. Each project/runtime module is path-, size-, and SHA-256-bound.",
           "artifactRefs": [
             "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260715T214323268Z-gameplay-26c4e853d824/module-allowlist.json#sha256=db03d9d20afe7c13892c349e537ec26b364c16a124e40bc8ba95f940e5065365",
-            "runtime:local-lab/runtime/client/client-profile.json#sha256=e968ac6c2207225dec0340419cce9f4e2276e1e18c0c89a3d9574ff6da300390",
-            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=206f5e5404671513334925886c052972f5303112ea59b238f1ad2a13279140d0"
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=a4439a8a2e8375dea8d5fa3fbaf25f2ac5fb4b1089ce6b619889c3b75d887c03",
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=f28c9ab988b658ccad11631a85d993d0c18c31f96fa061adaad8ad40f35646ec"
           ]
         },
       "liveWindow": {
@@ -474,8 +474,12 @@
         },
       "backbufferCapture": {
         "state": "pending",
-        "note": "RenderDoc v1.45 launched and armed the superseded Mid-profile All runtime at an exact 2560x1600 client window, but no .rdc artifact was produced. A new capture under the exact High GRAPHICCTRL profile must prove the backbuffer and internal target by replay inspection.",
-          "artifactRefs": []
+        "note": "RenderDoc v1.45 launched the exact High GRAPHICCTRL All runtime at a verified 2560x1600 client window and exposed target control, but it reported API: None and produced no .rdc. The exact dgVoodoo D3D8 owner has a zero OriginalFirstThunk KERNEL32 import descriptor, so the capture launcher now rejects this known-incompatible path before side effects. The gate remains pending until a separately pinned diagnostic path reports D3D11 (Active) and yields a replayable capture.",
+          "artifactRefs": [
+            "runtime:graphics-evidence/lab-widescreen-hd-16x10/20260717T121928960Z-renderdoc-5b64803a8c5c/renderdoc-launch-manifest.json#sha256=9a602a87cf403cb6a7a6e65ae56c494cee8be63ba52b89f52f8c7cba297ecaba",
+            "repo:scripts/Invoke-PSOBBRenderDocCapture.ps1",
+            "repo:tests/runtime/Test-RenderDocTooling.ps1"
+          ]
         },
       "screenshotCorpus": {
         "state": "pending",
@@ -525,8 +529,8 @@
         "note": "Superseded Mid-profile evidence is retained: rollback restored all 481 targets and the clean widescreen profile, then exact All reactivation restored 481 files totaling 3,447,006,836 bytes. The schema-7 profile plus profile-owned High GRAPHICCTRL transaction and protected registry rollback must be proven together before this gate can pass.",
           "artifactRefs": [
             "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/rejected/rolled-back-20260714T223224198Z/activation.json#sha256=b68f5c3fe98cb06314f046d08964070f028e46443990ea169bcfcd2db96d7e99",
-            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=206f5e5404671513334925886c052972f5303112ea59b238f1ad2a13279140d0",
-            "runtime:local-lab/runtime/client/client-profile.json#sha256=e968ac6c2207225dec0340419cce9f4e2276e1e18c0c89a3d9574ff6da300390"
+            "runtime:local-lab/asset-activations/ashenbubs-hd-psobb-v1.02/current/activation.json#sha256=f28c9ab988b658ccad11631a85d993d0c18c31f96fa061adaad8ad40f35646ec",
+            "runtime:local-lab/runtime/client/client-profile.json#sha256=a4439a8a2e8375dea8d5fa3fbaf25f2ac5fb4b1089ce6b619889c3b75d887c03"
           ]
         },
         "manualVisualSelection": {

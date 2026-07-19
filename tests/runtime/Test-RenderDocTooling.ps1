@@ -79,6 +79,32 @@ $commandGuard =
 Add-Result 'capture uses the official launch command without presentation overrides' `
     $commandGuard 'working directory, private template, and exact executable are the only launch inputs'
 
+$compatibilityCallIndex = $captureSource.IndexOf(
+    '$renderDocCompatibility = Assert-PSOBBRenderDocProfileCompatibility')
+$evidenceDirectoryIndex = $captureSource.IndexOf(
+    '[void][System.IO.Directory]::CreateDirectory($evidenceRoot)')
+$registryMutationIndex = $captureSource.IndexOf(
+    '$graphicsRegistryTransaction = Set-PSOBBClientNativeGraphics')
+$processStartIndex = $captureSource.IndexOf(
+    '$runner = [System.Diagnostics.Process]::Start($startInfo)')
+Add-Result 'capture rejects an incompatible dgVoodoo import contract before side effects' (
+    $compatibilityCallIndex -ge 0 -and
+    $evidenceDirectoryIndex -gt $compatibilityCallIndex -and
+    $registryMutationIndex -gt $compatibilityCallIndex -and
+    $processStartIndex -gt $compatibilityCallIndex -and
+    $captureSource -match
+        'OriginalFirstThunk=0; launching it would produce API: None') `
+    'the exact owner is inspected before evidence directories, registry changes, or RenderDoc start'
+
+$compatibilitySource = [regex]::Match(
+    $captureSource,
+    '(?s)function Get-PSOBBDgVoodooRenderDocImportContract.*?(?=function ConvertTo-PSOBBUInt32ExitCode)').Value
+Add-Result 'dgVoodoo compatibility inspection is read-only and leaves shared state alone' (
+    -not [string]::IsNullOrWhiteSpace($compatibilitySource) -and
+    $compatibilitySource -notmatch
+        '(?i)renderdoc\.conf|Set-ItemProperty|New-ItemProperty|Set-Content|Add-Content|Copy-Item|Move-Item|Remove-Item|WriteAll(?:Bytes|Text)') `
+    'the preflight reads only the exact D3D8 owner and never opens shared RenderDoc configuration'
+
 Add-Result 'capture preserves validated local login persistence before delegated process creation' (
     $captureSource -match
         'Assert-PSOBBClientLoginRegistry\s*\|\s*Out-Null[\s\S]*?Set-PSOBBClientNativeGraphics[\s\S]*?\$runner\s*=\s*\[System\.Diagnostics\.Process\]::Start\(\$startInfo\)') `
@@ -142,10 +168,166 @@ $replayGuard =
 Add-Result 'replay attestation is explicit exact-capture and append-only' `
     $replayGuard 'manual qrenderdoc values must match the configured dimensions and registered RDC identity'
 
+function Set-FixtureUInt16 {
+    param(
+        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][int]$Offset,
+        [Parameter(Mandatory)][uint16]$Value
+    )
+    [Array]::Copy([BitConverter]::GetBytes($Value), 0, $Bytes, $Offset, 2)
+}
+
+function Set-FixtureUInt32 {
+    param(
+        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][int]$Offset,
+        [Parameter(Mandatory)][uint32]$Value
+    )
+    [Array]::Copy([BitConverter]::GetBytes($Value), 0, $Bytes, $Offset, 4)
+}
+
+function Set-FixtureAscii {
+    param(
+        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][int]$Offset,
+        [Parameter(Mandatory)][string]$Value
+    )
+    $encoded = [Text.Encoding]::ASCII.GetBytes($Value)
+    [Array]::Copy($encoded, 0, $Bytes, $Offset, $encoded.Length)
+}
+
+function New-RenderDocPeImportFixture {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][uint32]$OriginalFirstThunkRva
+    )
+
+    $bytes = [byte[]]::new(0x600)
+    $bytes[0] = 0x4D
+    $bytes[1] = 0x5A
+    Set-FixtureUInt32 -Bytes $bytes -Offset 0x3C -Value 0x80
+    Set-FixtureUInt32 -Bytes $bytes -Offset 0x80 -Value 0x00004550
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x84 -Value 0x014C
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x86 -Value 1
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x94 -Value 0x00E0
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x96 -Value 0x210E
+
+    $optionalHeader = 0x98
+    Set-FixtureUInt16 -Bytes $bytes -Offset $optionalHeader -Value 0x010B
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 28) -Value 0x00400000
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 32) -Value 0x1000
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 36) -Value 0x200
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 56) -Value 0x2000
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 60) -Value 0x200
+    Set-FixtureUInt16 -Bytes $bytes -Offset ($optionalHeader + 68) -Value 3
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 92) -Value 16
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 104) -Value 0x1000
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($optionalHeader + 108) -Value 40
+
+    $sectionHeader = $optionalHeader + 0xE0
+    Set-FixtureAscii -Bytes $bytes -Offset $sectionHeader -Value '.rdata'
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($sectionHeader + 8) -Value 0x400
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($sectionHeader + 12) -Value 0x1000
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($sectionHeader + 16) -Value 0x400
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($sectionHeader + 20) -Value 0x200
+    Set-FixtureUInt32 -Bytes $bytes -Offset ($sectionHeader + 36) -Value 0x40000040
+
+    Set-FixtureUInt32 -Bytes $bytes -Offset 0x200 -Value $OriginalFirstThunkRva
+    Set-FixtureUInt32 -Bytes $bytes -Offset 0x20C -Value 0x1080
+    Set-FixtureUInt32 -Bytes $bytes -Offset 0x210 -Value 0x1060
+    foreach ($thunkOffset in @(0x240, 0x260)) {
+        Set-FixtureUInt32 -Bytes $bytes -Offset $thunkOffset -Value 0x10A0
+        Set-FixtureUInt32 -Bytes $bytes -Offset ($thunkOffset + 4) -Value 0x10C0
+    }
+    Set-FixtureAscii -Bytes $bytes -Offset 0x280 -Value "KERNEL32.DLL`0"
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x2A0 -Value 0
+    Set-FixtureAscii -Bytes $bytes -Offset 0x2A2 -Value "LoadLibraryA`0"
+    Set-FixtureUInt16 -Bytes $bytes -Offset 0x2C0 -Value 0
+    Set-FixtureAscii -Bytes $bytes -Offset 0x2C2 -Value "GetProcAddress`0"
+    [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-RenderDocTests-' + [Guid]::NewGuid().ToString('N'))
 [void][System.IO.Directory]::CreateDirectory($temporaryRoot)
 try {
+    $fixtureRoot = Join-Path $temporaryRoot 'pe-fixtures'
+    [void][System.IO.Directory]::CreateDirectory($fixtureRoot)
+    $supportedFixture = Join-Path $fixtureRoot 'supported-d3d8.dll'
+    $zeroOriginalThunkFixture = Join-Path $fixtureRoot 'zero-oft-d3d8.dll'
+    New-RenderDocPeImportFixture `
+        -Path $supportedFixture `
+        -OriginalFirstThunkRva 0x1040
+    New-RenderDocPeImportFixture `
+        -Path $zeroOriginalThunkFixture `
+        -OriginalFirstThunkRva 0
+    $fixtureHashesBefore = @(
+        @($supportedFixture, $zeroOriginalThunkFixture) | ForEach-Object {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash
+        })
+    $fixtureNamesBefore = @(
+        Get-ChildItem -LiteralPath $fixtureRoot -File | Sort-Object Name |
+            ForEach-Object Name)
+    $psobbIdsBefore = @(
+        Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue |
+            Sort-Object Id | ForEach-Object Id)
+
+    . $captureScript -ProfileId 'renderdoc-test-probe'
+    $supportedContract = Get-PSOBBDgVoodooRenderDocImportContract `
+        -Path $supportedFixture
+    $zeroOriginalThunkContract = Get-PSOBBDgVoodooRenderDocImportContract `
+        -Path $zeroOriginalThunkFixture
+    Add-Result 'synthetic PE fixtures expose the exact KERNEL32 import contract' (
+        [uint32]$supportedContract.OriginalFirstThunkRva -eq 0x1040 -and
+        [uint32]$zeroOriginalThunkContract.OriginalFirstThunkRva -eq 0 -and
+        @($supportedContract.Imports) -ccontains 'LoadLibraryA' -and
+        @($supportedContract.Imports) -ccontains 'GetProcAddress') `
+        'the executable parser reads named loader imports and OriginalFirstThunk from PE32 bytes'
+
+    $supportedAccepted = $false
+    try {
+        $acceptedContract = Assert-PSOBBDgVoodooRenderDocCompatibility `
+            -Path $supportedFixture
+        $supportedAccepted = $acceptedContract.RenderDocV145Compatible
+    } catch { }
+    Add-Result 'nonzero OriginalFirstThunk passes the RenderDoc compatibility gate' `
+        $supportedAccepted 'a normal named-import lookup table remains eligible for capture'
+
+    $zeroOriginalThunkRejected = $false
+    $zeroOriginalThunkMessage = ''
+    try {
+        Assert-PSOBBDgVoodooRenderDocCompatibility `
+            -Path $zeroOriginalThunkFixture | Out-Null
+    } catch {
+        $zeroOriginalThunkMessage = $_.Exception.Message
+        $zeroOriginalThunkRejected =
+            $zeroOriginalThunkMessage -match 'OriginalFirstThunk=0' -and
+            $zeroOriginalThunkMessage -match 'API: None'
+    }
+    Add-Result 'zero OriginalFirstThunk fails closed with the API-None diagnosis' `
+        $zeroOriginalThunkRejected $zeroOriginalThunkMessage
+
+    $fixtureHashesAfter = @(
+        @($supportedFixture, $zeroOriginalThunkFixture) | ForEach-Object {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash
+        })
+    $fixtureNamesAfter = @(
+        Get-ChildItem -LiteralPath $fixtureRoot -File | Sort-Object Name |
+            ForEach-Object Name)
+    Add-Result 'compatibility inspection does not mutate its PE inputs' (
+        @(Compare-Object $fixtureHashesBefore $fixtureHashesAfter).Count -eq 0 -and
+        @(Compare-Object $fixtureNamesBefore $fixtureNamesAfter).Count -eq 0) `
+        'both fixture hashes and the containing file inventory remain unchanged'
+
+    Add-Result 'zero-OFT preflight creates no evidence or process artifacts' (
+        @(Get-ChildItem -LiteralPath $temporaryRoot -Directory |
+            Where-Object Name -ne 'pe-fixtures').Count -eq 0 -and
+        @(Compare-Object `
+            $psobbIdsBefore `
+            @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue |
+                Sort-Object Id | ForEach-Object Id)).Count -eq 0) `
+        'the executable rejection path only reads the supplied PE fixture'
+
     $runtimeRoot = Join-Path $temporaryRoot 'runtime'
     [void][System.IO.Directory]::CreateDirectory($runtimeRoot)
     $marker = [ordered]@{

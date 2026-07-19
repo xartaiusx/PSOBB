@@ -82,11 +82,11 @@ accepted.
 The current evidence reconciliation records these outcomes:
 
 No profile is fully accepted yet. The remaining human gates are the visual
-VSync/no-VSync choice, blind stock-versus-HD comparison, manual qrenderdoc
-replay inspection of a real `.rdc`, and review of the complete lossless scene
-corpus. The native 4:3 rollback and the final resizable-window pass also remain
-technical acceptance gates; configuration or process telemetry alone cannot
-substitute for them.
+VSync/no-VSync choice, blind stock-versus-HD comparison, qrenderdoc replay
+inspection of a real `.rdc` after the locked dgVoodoo compatibility block is
+resolved, and review of the complete lossless scene corpus. The native 4:3
+rollback and the final resizable-window pass also remain technical acceptance
+gates; configuration or process telemetry alone cannot substitute for them.
 
 - `lab-widescreen-16x10` is runtime-verified but still pending RenderDoc,
   complete scene/HUD geometry, gameplay pacing, soak, rollback, and blind A/B
@@ -239,6 +239,17 @@ pwsh -File .\scripts\Register-PSOBBRenderDocReplayEvidence.ps1 `
   -ReplayConfirmed
 ```
 
+The exact locked dgVoodoo 2.87.3 x86 D3D8 owner cannot currently reach that
+workflow. Its `KERNEL32.DLL` import descriptor has
+`OriginalFirstThunk=0`, while RenderDoc 1.45 requires the named import lookup
+table to intercept the wrapper's dynamic D3D11 resolution. Live target control
+therefore reports `API: None` and produces no `.rdc`. The launch script now
+detects this exact PE import contract and fails before creating evidence,
+changing native graphics registry state, or starting RenderDoc. Do not patch or
+repack the profile-owned DLL merely to obtain evidence; a capture-enabling
+replacement must be separately pinned and must first prove `D3D11 (Active)` in
+target control. The replay gate remains pending until then.
+
 The append-only replay record is accepted only when the observed dimensions
 match the exact registered profile and the `.rdc` still matches its registered
 hash. It remains an explicit manual qrenderdoc attestation, never an inference
@@ -259,7 +270,8 @@ pwsh -File .\scripts\Get-PSOBBScreenshotEvidence.ps1 `
   -OutputPath "$run\indexes\lobby-candidate.json"
 ```
 
-Both PNG inputs must be outside the repository. The output is a redacted JSON
+Both PNG inputs must remain outside Git-tracked source; the canonical location
+is the ignored `PSOBB-Runtime\graphics-evidence` tree. The output is a redacted JSON
 index containing only safe caller IDs, exact SHA-256/byte size/dimensions,
 edge-band and pillar measurements, active-content sharpness metrics, geometry
 checks, and optional reference deltas. It contains no input path, filename, or
@@ -368,9 +380,9 @@ from the exact LocalLab client and run the analyzer in one transaction with:
 
 ```powershell
 pwsh -File .\scripts\Import-PSOBBCasF10Pair.ps1 `
-  -RuntimeRoot "C:\Github Repo's\PSOBB-Runtime" `
+  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
   -SceneId character-select-fixed-camera `
-  -ValidationSpecPath "C:\Github Repo's\PSOBB-Runtime\graphics-evidence\lab-widescreen-cas-16x10\cas-comparison-20260714\cas-2560x1600-validation.json"
+  -ValidationSpecPath "C:\Github Repo's\PSOBB\PSOBB-Runtime\graphics-evidence\lab-widescreen-cas-16x10\cas-comparison-20260714\cas-2560x1600-validation.json"
 ```
 
 The importer is safe whether the client is running or stopped: it never sends
