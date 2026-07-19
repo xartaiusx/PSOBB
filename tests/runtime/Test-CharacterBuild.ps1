@@ -46,6 +46,20 @@ function Set-Utf16LE {
     [System.Array]::Copy($encoded, 0, $Data, $Offset, $encoded.Length)
 }
 
+function Swap-ByteRanges {
+    param(
+        [Parameter(Mandatory)][byte[]]$Data,
+        [Parameter(Mandatory)][int]$LeftOffset,
+        [Parameter(Mandatory)][int]$RightOffset,
+        [Parameter(Mandatory)][int]$Count
+    )
+
+    $temporary = [byte[]]::new($Count)
+    [System.Array]::Copy($Data, $LeftOffset, $temporary, 0, $Count)
+    [System.Array]::Copy($Data, $RightOffset, $Data, $LeftOffset, $Count)
+    [System.Array]::Copy($temporary, 0, $Data, $RightOffset, $Count)
+}
+
 function Convert-HexToBytes {
     param([Parameter(Mandatory)][string]$Hex)
 
@@ -201,6 +215,38 @@ try {
         $hashBefore -ceq $hashAfter -and
         $verification.CharacterSha256 -ceq $hashBefore) $hashAfter
 
+    $reorderedBankPath = Join-Path $temporaryRoot 'player_reordered_bank_0.psochar'
+    $reorderedBankBytes = [byte[]]$bytes.Clone()
+    Swap-ByteRanges -Data $reorderedBankBytes -LeftOffset 0x708 `
+        -RightOffset (0x708 + (($bankItems.Count - 1) * 0x18)) -Count 0x18
+    [System.IO.File]::WriteAllBytes($reorderedBankPath, $reorderedBankBytes)
+    $reorderedBankHashBefore = (Get-FileHash -LiteralPath $reorderedBankPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $reorderedBankOutput = @(& $verifierScript -Path $reorderedBankPath `
+            -BuildPath $buildPath)
+    $reorderedBankVerification = @($reorderedBankOutput | Where-Object {
+            $_.PSObject.Properties.Name -contains 'Valid'
+        })[-1]
+    $reorderedBankHashAfter = (Get-FileHash -LiteralPath $reorderedBankPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    Add-Result 'complete embedded-bank record reordering is accepted read-only' (
+        $reorderedBankVerification.Valid -and
+        $reorderedBankVerification.BankItems -eq $bankItems.Count -and
+        $reorderedBankHashBefore -ceq $reorderedBankHashAfter -and
+        $reorderedBankVerification.CharacterSha256 -ceq $reorderedBankHashBefore) `
+        'bank identity is the exact descriptor multiset, not serialized position'
+
+    $reorderedInventoryPath = Join-Path $temporaryRoot `
+        'player_reordered_inventory_0.psochar'
+    $reorderedInventoryBytes = [byte[]]$bytes.Clone()
+    Swap-ByteRanges -Data $reorderedInventoryBytes -LeftOffset 0x0C `
+        -RightOffset (0x0C + (($inventoryItems.Count - 1) * 0x1C)) -Count 0x1C
+    [System.IO.File]::WriteAllBytes($reorderedInventoryPath, $reorderedInventoryBytes)
+    Add-Result 'inventory record reordering remains rejected' (
+        Invoke-RejectionCheck -CharacterPath $reorderedInventoryPath `
+            -ContractPath $buildPath -Pattern 'character-build verification check') `
+        'inventory slots and equipped state remain position-bound'
+
     $defaultOutput = @(& $verifierScript -Path $fixturePath)
     $defaultVerification = @($defaultOutput | Where-Object {
             $_.PSObject.Properties.Name -contains 'Valid'
@@ -324,6 +370,37 @@ try {
             -Pattern 'character-build verification check') `
         'unit data1[4] is verified separately from the canonical descriptor'
 
+    $missingBankPath = Join-Path $temporaryRoot 'player_bank_missing_0.psochar'
+    $missingBankBytes = [byte[]]$bytes.Clone()
+    Set-UInt32LE -Data $missingBankBytes -Offset 0x700 `
+        -Value ([uint32]($bankItems.Count - 1))
+    [System.IO.File]::WriteAllBytes($missingBankPath, $missingBankBytes)
+    Add-Result 'missing embedded-bank multiplicity fails closed' (
+        Invoke-RejectionCheck -CharacterPath $missingBankPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'the exact bank item count remains contract-bound'
+
+    $duplicateBankPath = Join-Path $temporaryRoot 'player_bank_duplicate_0.psochar'
+    $duplicateBankBytes = [byte[]]$bytes.Clone()
+    [System.Array]::Copy($duplicateBankBytes, 0x708, $duplicateBankBytes,
+        (0x708 + 0x18), 12)
+    [System.Array]::Copy($duplicateBankBytes, (0x708 + 16), $duplicateBankBytes,
+        (0x708 + 0x18 + 16), 4)
+    [System.IO.File]::WriteAllBytes($duplicateBankPath, $duplicateBankBytes)
+    Add-Result 'duplicate embedded-bank descriptor multiplicity fails closed' (
+        Invoke-RejectionCheck -CharacterPath $duplicateBankPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'matching uses complete 16-byte descriptor multiplicity'
+
+    $alteredBankPath = Join-Path $temporaryRoot 'player_bank_altered_0.psochar'
+    $alteredBankBytes = [byte[]]$bytes.Clone()
+    $alteredBankBytes[0x708 + 16] = $alteredBankBytes[0x708 + 16] -bxor 1
+    [System.IO.File]::WriteAllBytes($alteredBankPath, $alteredBankBytes)
+    Add-Result 'altered embedded-bank descriptor fails closed' (
+        Invoke-RejectionCheck -CharacterPath $alteredBankPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'all 16 canonical descriptor bytes are identity-bearing'
+
     $bankAmountPath = Join-Path $temporaryRoot 'player_bank_amount_0.psochar'
     $bankAmountBytes = [byte[]]$bytes.Clone()
     Set-UInt16LE -Data $bankAmountBytes -Offset (0x708 + 0x14) -Value 2
@@ -332,6 +409,44 @@ try {
         Invoke-RejectionCheck -CharacterPath $bankAmountPath -ContractPath $buildPath `
             -Pattern 'character-build verification check') `
         'bank gear uses one exact non-stack entry'
+
+    $bankPresentPath = Join-Path $temporaryRoot 'player_bank_present_0.psochar'
+    $bankPresentBytes = [byte[]]$bytes.Clone()
+    Set-UInt16LE -Data $bankPresentBytes -Offset (0x708 + 0x16) -Value 0
+    [System.IO.File]::WriteAllBytes($bankPresentPath, $bankPresentBytes)
+    Add-Result 'absent embedded-bank record fails closed' (
+        Invoke-RejectionCheck -CharacterPath $bankPresentPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'every active bank record must be present exactly once'
+
+    $zeroBankIdPath = Join-Path $temporaryRoot 'player_bank_zero_id_0.psochar'
+    $zeroBankIdBytes = [byte[]]$bytes.Clone()
+    Set-UInt32LE -Data $zeroBankIdBytes -Offset (0x708 + 12) -Value 0
+    [System.IO.File]::WriteAllBytes($zeroBankIdPath, $zeroBankIdBytes)
+    Add-Result 'zero embedded-bank item ID fails closed' (
+        Invoke-RejectionCheck -CharacterPath $zeroBankIdPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'runtime item IDs must be valid even though prior values are transient'
+
+    $maximumBankIdPath = Join-Path $temporaryRoot 'player_bank_max_id_0.psochar'
+    $maximumBankIdBytes = [byte[]]$bytes.Clone()
+    Set-UInt32LE -Data $maximumBankIdBytes -Offset (0x708 + 12) `
+        -Value ([uint32]::MaxValue)
+    [System.IO.File]::WriteAllBytes($maximumBankIdPath, $maximumBankIdBytes)
+    Add-Result 'maximum embedded-bank item ID fails closed' (
+        Invoke-RejectionCheck -CharacterPath $maximumBankIdPath -ContractPath $buildPath `
+            -Pattern 'character-build verification check') `
+        'the reserved maximum runtime ID remains invalid'
+
+    $duplicateBankIdPath = Join-Path $temporaryRoot 'player_bank_duplicate_id_0.psochar'
+    $duplicateBankIdBytes = [byte[]]$bytes.Clone()
+    [System.Array]::Copy($duplicateBankIdBytes, (0x708 + 12), $duplicateBankIdBytes,
+        (0x708 + 0x18 + 12), 4)
+    [System.IO.File]::WriteAllBytes($duplicateBankIdPath, $duplicateBankIdBytes)
+    Add-Result 'duplicate embedded-bank item ID fails closed' (
+        Invoke-RejectionCheck -CharacterPath $duplicateBankIdPath `
+            -ContractPath $buildPath -Pattern 'character-build verification check') `
+        'inventory and embedded-bank runtime IDs remain globally unique'
 
     $unknownPropertyPath = Join-Path $temporaryRoot 'unknown_property.json'
     $variant = Read-ContractCopy

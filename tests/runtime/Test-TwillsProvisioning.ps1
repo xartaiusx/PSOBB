@@ -85,6 +85,20 @@ function Get-TestSha256Bytes {
             [System.Security.Cryptography.SHA256]::HashData($Bytes))).ToLowerInvariant()
 }
 
+function Swap-TestByteRanges {
+    param(
+        [Parameter(Mandatory)][byte[]]$Data,
+        [Parameter(Mandatory)][int]$LeftOffset,
+        [Parameter(Mandatory)][int]$RightOffset,
+        [Parameter(Mandatory)][int]$Count
+    )
+
+    $temporary = [byte[]]::new($Count)
+    [System.Array]::Copy($Data, $LeftOffset, $temporary, 0, $Count)
+    [System.Array]::Copy($Data, $RightOffset, $Data, $LeftOffset, $Count)
+    [System.Array]::Copy($temporary, 0, $Data, $RightOffset, $Count)
+}
+
 function New-TestCharacterBytes {
     $bytes = [byte[]]::new(0x399C)
     [System.Array]::Copy(
@@ -367,8 +381,139 @@ try {
             }
         }
     }
-    Add-Result 'inventory, both banks, order, and equipped-slot semantics are exact' `
-        $orderExact 'all contract slots and canonical descriptors match in both bank forms'
+    Add-Result 'deterministic Apply output uses contract inventory and bank order' `
+        $orderExact 'freshly provisioned slots and descriptors match both bank forms exactly'
+
+    $canonicalized = New-TestRuntime -Parent $temporaryRoot -Name 'canonicalized'
+    & $provisioningScript -Action Apply -RuntimeRoot $canonicalized.Root `
+        -BuildPath $buildPath -ExpectedBuildSha256 $buildHash `
+        -ExpectedSourceSha256 $canonicalized.SourceSha256 `
+        -ExpectedSourceBankSha256 $canonicalized.SourceBankSha256 `
+        -ExpectedSigningPublicKeySha256 $canonicalized.SigningPublicKeySha256 `
+        -Confirm:$false *> $null
+    $canonicalizedCharacterBytes = [System.IO.File]::ReadAllBytes(
+        $canonicalized.CharacterPath)
+    $canonicalizedBankBytes = [System.IO.File]::ReadAllBytes(
+        $canonicalized.BankPath)
+    Swap-TestByteRanges -Data $canonicalizedCharacterBytes -LeftOffset 0x708 `
+        -RightOffset (0x708 + (($bankContract.Count - 1) * 0x18)) -Count 0x18
+    Swap-TestByteRanges -Data $canonicalizedBankBytes -LeftOffset 8 `
+        -RightOffset (8 + (($bankContract.Count - 1) * 0x18)) -Count 0x18
+    [System.IO.File]::WriteAllBytes(
+        $canonicalized.CharacterPath, $canonicalizedCharacterBytes)
+    [System.IO.File]::WriteAllBytes(
+        $canonicalized.BankPath, $canonicalizedBankBytes)
+    Set-PSOBBProtectedAcl -Path $canonicalized.CharacterPath
+    Set-PSOBBProtectedAcl -Path $canonicalized.BankPath
+    $canonicalizedCharacterHashBefore = (Get-FileHash `
+        -LiteralPath $canonicalized.CharacterPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $canonicalizedBankHashBefore = (Get-FileHash `
+        -LiteralPath $canonicalized.BankPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $canonicalizedTransactionCountBefore = @(Get-ChildItem -LiteralPath (
+            Join-Path $canonicalized.Backups 'twills-provisioning') `
+            -Directory).Count
+    $canonicalizedVerifyOutput = @(& $provisioningScript -Action Verify `
+            -RuntimeRoot $canonicalized.Root -BuildPath $buildPath `
+            -ExpectedBuildSha256 $buildHash)
+    $canonicalizedVerify = Get-ActionResult -Output $canonicalizedVerifyOutput `
+        -Action 'Verify'
+    $canonicalizedBankVerification = & $bankVerifierScript `
+        -Path $canonicalized.BankPath -BuildPath $buildPath `
+        -ExpectedBuildSha256 $buildHash
+    $canonicalizedCharacterHashAfter = (Get-FileHash `
+        -LiteralPath $canonicalized.CharacterPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $canonicalizedBankHashAfter = (Get-FileHash `
+        -LiteralPath $canonicalized.BankPath `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $canonicalizedTransactionCountAfter = @(Get-ChildItem -LiteralPath (
+            Join-Path $canonicalized.Backups 'twills-provisioning') `
+            -Directory).Count
+    Add-Result 'Verify accepts native bank canonicalization in both save forms read-only' (
+        $canonicalizedVerify.Valid -and
+        $canonicalizedVerify.BankCount -eq $bankContract.Count -and
+        $canonicalizedCharacterHashBefore -ceq $canonicalizedCharacterHashAfter -and
+        $canonicalizedBankHashBefore -ceq $canonicalizedBankHashAfter -and
+        $canonicalizedVerify.CharacterSha256 -ceq $canonicalizedCharacterHashAfter -and
+        $canonicalizedVerify.BankSha256 -ceq $canonicalizedBankHashAfter -and
+        $canonicalizedTransactionCountBefore -eq $canonicalizedTransactionCountAfter -and
+        $canonicalizedBankVerification.Valid -and
+        $canonicalizedBankVerification.OrderingPolicy -ceq 'server-canonicalized' -and
+        -not $canonicalizedBankVerification.ContractOrderPreserved -and
+        $canonicalizedBankVerification.Items[0].SerializedPosition -eq 1 -and
+        $canonicalizedBankVerification.Items[0].ContractSlot -eq $bankContract.Count -and
+        $canonicalizedBankVerification.Items[-1].SerializedPosition -eq
+            $bankContract.Count -and
+        $canonicalizedBankVerification.Items[-1].ContractSlot -eq 1) `
+        'complete 0x18 records move while exact descriptor multiplicity and runtime IDs remain valid'
+
+    $missingAuthoritativeBankBytes = [byte[]]::new($afterBankBytes.Length - 0x18)
+    [System.Array]::Copy(
+        $afterBankBytes, 0, $missingAuthoritativeBankBytes, 0,
+        $missingAuthoritativeBankBytes.Length)
+    Set-TestUInt32LE -Data $missingAuthoritativeBankBytes -Offset 0 `
+        -Value ([uint32]($bankContract.Count - 1))
+
+    $duplicateAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    [System.Array]::Copy(
+        $duplicateAuthoritativeBankBytes, 8,
+        $duplicateAuthoritativeBankBytes, (8 + 0x18), 12)
+    [System.Array]::Copy(
+        $duplicateAuthoritativeBankBytes, (8 + 16),
+        $duplicateAuthoritativeBankBytes, (8 + 0x18 + 16), 4)
+
+    $alteredAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    $alteredAuthoritativeBankBytes[8 + 16] =
+        $alteredAuthoritativeBankBytes[8 + 16] -bxor 1
+
+    $amountAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    Set-TestUInt16LE -Data $amountAuthoritativeBankBytes -Offset (8 + 0x14) `
+        -Value 2
+
+    $presentAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    Set-TestUInt16LE -Data $presentAuthoritativeBankBytes -Offset (8 + 0x16) `
+        -Value 0
+
+    $zeroIdAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    Set-TestUInt32LE -Data $zeroIdAuthoritativeBankBytes -Offset (8 + 12) `
+        -Value 0
+
+    $maximumIdAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    Set-TestUInt32LE -Data $maximumIdAuthoritativeBankBytes -Offset (8 + 12) `
+        -Value ([uint32]::MaxValue)
+
+    $duplicateIdAuthoritativeBankBytes = [byte[]]$afterBankBytes.Clone()
+    [System.Array]::Copy(
+        $duplicateIdAuthoritativeBankBytes, (8 + 12),
+        $duplicateIdAuthoritativeBankBytes, (8 + 0x18 + 12), 4)
+
+    $authoritativeBankCorruptions = @(
+        [pscustomobject]@{ Name = 'missing'; Bytes = $missingAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'duplicate-descriptor'; Bytes = $duplicateAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'altered-descriptor'; Bytes = $alteredAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'amount'; Bytes = $amountAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'present'; Bytes = $presentAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'zero-id'; Bytes = $zeroIdAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'maximum-id'; Bytes = $maximumIdAuthoritativeBankBytes },
+        [pscustomobject]@{ Name = 'duplicate-id'; Bytes = $duplicateIdAuthoritativeBankBytes }
+    )
+    $authoritativeBankFailures = [System.Collections.Generic.List[string]]::new()
+    foreach ($case in $authoritativeBankCorruptions) {
+        $casePath = Join-Path $temporaryRoot (
+            "player_bank-$($case.Name)_0.psobank")
+        [System.IO.File]::WriteAllBytes($casePath, [byte[]]$case.Bytes)
+        if (-not (Test-Rejected -Pattern 'slot-0 PSOBANK' -Operation {
+                    & $bankVerifierScript -Path $casePath -BuildPath $buildPath `
+                        -ExpectedBuildSha256 $buildHash
+                })) {
+            $authoritativeBankFailures.Add([string]$case.Name)
+        }
+    }
+    Add-Result 'authoritative PSOBANK corruption matrix fails closed' (
+        $authoritativeBankFailures.Count -eq 0) `
+        "rejected missing, duplicate/altered descriptors, amount, present, zero/max/duplicate IDs; failures=$([string]::Join(',', $authoritativeBankFailures))"
 
     $unknownsPreserved = $afterBytes[0x0B] -eq $primary.SourceBytes[0x0B]
     for ($index = 0; $index -lt 30; $index++) {

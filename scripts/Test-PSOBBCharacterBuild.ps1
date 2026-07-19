@@ -634,47 +634,99 @@ $inventoryStateMatch = [int]$summary.InventoryCount -eq $inventoryItems.Count -a
 Add-Result -Name 'inventory capacity and exact flags' -Passed $inventoryStateMatch `
     -Detail "used=$($summary.InventoryCount) free=$([int]$build.inventoryPolicy.capacity - [int]$summary.InventoryCount)"
 
-$itemMatch = $true
+$itemMatch = @($summary.InventoryItems).Count -eq $inventoryItems.Count -and
+    [int]$summary.BankCount -eq $bankItems.Count -and
+    @($summary.BankItems).Count -eq $bankItems.Count
 $itemDetails = [System.Collections.Generic.List[string]]::new()
-foreach ($expected in @($build.items)) {
-    $actual = if ([string]$expected.location -ceq 'Inventory') {
-        @($summary.InventoryItems | Where-Object { [int]$_.Slot -eq [int]$expected.slot })
-    } else {
-        @($summary.BankItems | Where-Object { [int]$_.Slot -eq [int]$expected.slot })
-    }
+foreach ($expected in $inventoryItems) {
+    $actual = @($summary.InventoryItems | Where-Object {
+            [int]$_.Slot -eq [int]$expected.slot
+        })
     $passed = $actual.Count -eq 1
     if ($passed) {
         $entry = $actual[0]
         $passed = [int]$entry.Present -eq 1 -and
             [string]$entry.PrimaryId -ceq [string]$expected.primaryId -and
             [string]$entry.CanonicalDescriptorHex -ceq [string]$expected.descriptorHex -and
-            [string]$entry.Location -ceq [string]$expected.location
-        if ([string]$expected.location -ceq 'Inventory') {
-            $expectedFlags = if ([string]$expected.equippedSlot -ceq 'None') { 0 } else { 8 }
-            $expectedUnitIndex = if ([string]$expected.equippedSlot -cmatch '^Unit([1-4])$') {
-                [int]$Matches[1] - 1
-            } else {
-                $null
-            }
-            $passed = $passed -and
-                [int]$entry.UnknownA1 -eq 0 -and
-                [long]$entry.Flags -eq $expectedFlags -and
-                [string]$entry.EquippedSlot -ceq [string]$expected.equippedSlot -and
-                (($null -eq $expectedUnitIndex -and $null -eq $entry.UnitSlotIndex) -or
-                    ($null -ne $expectedUnitIndex -and
-                        [int]$entry.UnitSlotIndex -eq $expectedUnitIndex))
+            [string]$entry.Location -ceq 'Inventory'
+        $expectedFlags = if ([string]$expected.equippedSlot -ceq 'None') { 0 } else { 8 }
+        $expectedUnitIndex = if ([string]$expected.equippedSlot -cmatch '^Unit([1-4])$') {
+            [int]$Matches[1] - 1
         } else {
-            $passed = $passed -and [int]$entry.Amount -eq 1 -and
-                -not [bool]$entry.Equipped -and
-                [string]$entry.EquippedSlot -ceq 'None'
+            $null
         }
+        $passed = $passed -and
+            [int]$entry.UnknownA1 -eq 0 -and
+            [long]$entry.Flags -eq $expectedFlags -and
+            [string]$entry.EquippedSlot -ceq [string]$expected.equippedSlot -and
+            (($null -eq $expectedUnitIndex -and $null -eq $entry.UnitSlotIndex) -or
+                ($null -ne $expectedUnitIndex -and
+                    [int]$entry.UnitSlotIndex -eq $expectedUnitIndex))
     }
     if (-not $passed) {
         $itemMatch = $false
     }
-    $itemDetails.Add("$($expected.location)#$($expected.slot):$($expected.name)=$passed")
+    $itemDetails.Add("Inventory#$($expected.slot):$($expected.name)=$passed")
 }
-Add-Result -Name 'exact owned item layout and canonical descriptors' -Passed $itemMatch `
+
+$expectedBankByDescriptor =
+    [System.Collections.Generic.Dictionary[string,System.Collections.Generic.Queue[object]]]::new(
+        [System.StringComparer]::Ordinal)
+foreach ($expected in $bankItems) {
+    $descriptor = [string]$expected.descriptorHex
+    if (-not $expectedBankByDescriptor.ContainsKey($descriptor)) {
+        $expectedBankByDescriptor.Add(
+            $descriptor,
+            [System.Collections.Generic.Queue[object]]::new())
+    }
+    $expectedBankByDescriptor[$descriptor].Enqueue($expected)
+}
+foreach ($entry in @($summary.BankItems)) {
+    $descriptor = [string]$entry.CanonicalDescriptorHex
+    $passed = $expectedBankByDescriptor.ContainsKey($descriptor) -and
+        $expectedBankByDescriptor[$descriptor].Count -gt 0
+    $expected = $null
+    if ($passed) {
+        $expected = $expectedBankByDescriptor[$descriptor].Dequeue()
+        $passed = [int]$entry.Present -eq 1 -and
+            [int]$entry.Amount -eq 1 -and
+            [string]$entry.PrimaryId -ceq [string]$expected.primaryId -and
+            [string]$entry.Location -ceq 'Bank' -and
+            -not [bool]$entry.Equipped -and
+            [string]$entry.EquippedSlot -ceq 'None' -and
+            [string]$expected.equippedSlot -ceq 'None'
+    }
+    if (-not $passed) {
+        $itemMatch = $false
+    }
+    $expectedLabel = if ($null -eq $expected) {
+        'unexpected'
+    } else {
+        "contract#$($expected.slot):$($expected.name)"
+    }
+    $itemDetails.Add("Bank#$($entry.Slot):$expectedLabel=$passed")
+}
+foreach ($descriptor in $expectedBankByDescriptor.Keys) {
+    while ($expectedBankByDescriptor[$descriptor].Count -gt 0) {
+        $missing = $expectedBankByDescriptor[$descriptor].Dequeue()
+        $itemMatch = $false
+        $itemDetails.Add("Bank:contract#$($missing.slot):$($missing.name)=False")
+    }
+}
+
+$itemIds = [System.Collections.Generic.HashSet[uint32]]::new()
+$itemIdsValid = @($summary.Items).Count -eq @($build.items).Count
+foreach ($entry in @($summary.Items)) {
+    $itemId = [uint32]$entry.ItemId
+    if ($itemId -eq 0 -or $itemId -eq [uint32]::MaxValue -or
+        -not $itemIds.Add($itemId)) {
+        $itemIdsValid = $false
+    }
+}
+$itemMatch = $itemMatch -and $itemIdsValid
+$itemDetails.Add("GlobalItemIds:$($itemIds.Count)/$(@($build.items).Count)=$itemIdsValid")
+
+Add-Result -Name 'exact inventory layout, bank item multiset, and item IDs' -Passed $itemMatch `
     -Detail ([string]::Join('; ', $itemDetails))
 
 $equippedItems = @($summary.InventoryItems | Where-Object { [bool]$_.Equipped })

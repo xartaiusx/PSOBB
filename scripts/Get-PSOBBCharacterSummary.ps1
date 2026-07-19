@@ -79,10 +79,10 @@ function Read-UInt32LE {
         throw "UInt32 read is outside the character file: offset=$Offset"
     }
     return [uint32](
-        [uint32]$Data[$Offset] -bor
-        ([uint32]$Data[$Offset + 1] -shl 8) -bor
-        ([uint32]$Data[$Offset + 2] -shl 16) -bor
-        ([uint32]$Data[$Offset + 3] -shl 24))
+        [uint64]$Data[$Offset] +
+        ([uint64]$Data[$Offset + 1] * 0x100) +
+        ([uint64]$Data[$Offset + 2] * 0x10000) +
+        ([uint64]$Data[$Offset + 3] * 0x1000000))
 }
 
 function Read-MarkedUtf16Name {
@@ -244,6 +244,7 @@ for ($index = 0; $index -lt $inventoryCount; $index++) {
             PrimaryId = Get-PrimaryIdentifier -Data $bytes -Offset $dataOffset
             DescriptorHex = Get-DescriptorHex -Data $bytes -Offset $dataOffset
             CanonicalDescriptorHex = Get-CanonicalDescriptorHex -Data $bytes -Offset $dataOffset
+            ItemId = Read-UInt32LE -Data $bytes -Offset ($dataOffset + 12)
             Equipped = ($flags -band 8) -ne 0
             EquippedSlot = Get-EquippedSlot -Data $bytes -Offset $dataOffset -Flags $flags
             UnitSlotIndex = if ($isUnit) { [int]$bytes[$dataOffset + 4] } else { $null }
@@ -270,6 +271,7 @@ for ($index = 0; $index -lt $bankCount; $index++) {
             PrimaryId = Get-PrimaryIdentifier -Data $bytes -Offset $itemOffset
             DescriptorHex = Get-DescriptorHex -Data $bytes -Offset $itemOffset
             CanonicalDescriptorHex = Get-CanonicalDescriptorHex -Data $bytes -Offset $itemOffset
+            ItemId = Read-UInt32LE -Data $bytes -Offset ($itemOffset + 12)
             Equipped = $false
             EquippedSlot = 'None'
             UnitSlotIndex = $null

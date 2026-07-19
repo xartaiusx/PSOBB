@@ -206,6 +206,7 @@ try {
     Add-Result 'inventory primary identifiers match newserv semantics' (
         $summary.InventoryCount -eq 5 -and $summary.InventoryItems.Count -eq 5 -and
         $summary.InventoryItems[0].Present -eq 1 -and
+        $summary.InventoryItems[0].ItemId -eq [uint32]2864434397 -and
         $summary.InventoryItems[0].UnknownA1 -eq 0 -and
         $summary.InventoryItems[0].Flags -eq 8 -and
         $summary.InventoryItems[0].PrimaryId -ceq '00330100' -and
@@ -232,6 +233,7 @@ try {
         $summary.BankCount -eq 1 -and $summary.BankItems.Count -eq 1 -and
         $summary.BankItems[0].Present -eq 1 -and
         $summary.BankItems[0].Amount -eq 12345 -and
+        $summary.BankItems[0].ItemId -eq [uint32]0x0D0E0F10 -and
         $summary.BankItems[0].PrimaryId -ceq '04000000') `
         'first bank entry follows PlayerBank200 layout'
 

@@ -72,16 +72,22 @@ function Read-UInt32LE {
     param([byte[]]$Data, [int]$Offset)
 
     [uint32](
-        [uint32]$Data[$Offset] -bor
-        ([uint32]$Data[$Offset + 1] -shl 8) -bor
-        ([uint32]$Data[$Offset + 2] -shl 16) -bor
-        ([uint32]$Data[$Offset + 3] -shl 24))
+        [uint64]$Data[$Offset] +
+        ([uint64]$Data[$Offset + 1] * 0x100) +
+        ([uint64]$Data[$Offset + 2] * 0x10000) +
+        ([uint64]$Data[$Offset + 3] * 0x1000000))
 }
 
-function Get-Hex {
-    param([byte[]]$Data, [int]$Offset, [int]$Count)
+function Get-CanonicalDescriptorHex {
+    param([byte[]]$Data, [int]$Offset)
 
-    -join @($Data[$Offset..($Offset + $Count - 1)] | ForEach-Object {
+    $descriptor = [byte[]]::new(16)
+    [System.Array]::Copy($Data, $Offset, $descriptor, 0, 12)
+    [System.Array]::Copy($Data, $Offset + 16, $descriptor, 12, 4)
+    if ($descriptor[0] -eq 0x01 -and $descriptor[1] -eq 0x03) {
+        $descriptor[4] = 0
+    }
+    -join @($descriptor | ForEach-Object {
             $_.ToString('X2', [System.Globalization.CultureInfo]::InvariantCulture)
         })
 }
@@ -101,31 +107,56 @@ if ($count -ne $expectedItems.Count) {
     throw "The slot-0 PSOBANK item count is not exact: expected $($expectedItems.Count), found $count"
 }
 
+$expectedByDescriptor =
+    [System.Collections.Generic.Dictionary[string,System.Collections.Generic.Queue[object]]]::new(
+        [System.StringComparer]::Ordinal)
+for ($index = 0; $index -lt $expectedItems.Count; $index++) {
+    $expected = $expectedItems[$index]
+    $descriptor = [string]$expected.descriptorHex
+    if ([int]$expected.slot -ne ($index + 1) -or
+        [string]$expected.equippedSlot -cne 'None' -or
+        $descriptor -cnotmatch '^[0-9A-F]{32}$') {
+        throw "The slot-0 PSOBANK contract metadata is invalid at slot $($index + 1)"
+    }
+    if (-not $expectedByDescriptor.ContainsKey($descriptor)) {
+        $expectedByDescriptor.Add(
+            $descriptor,
+            [System.Collections.Generic.Queue[object]]::new())
+    }
+    $expectedByDescriptor[$descriptor].Enqueue($expected)
+}
+
 $ids = [System.Collections.Generic.HashSet[uint32]]::new()
 $items = [System.Collections.Generic.List[object]]::new()
 for ($index = 0; $index -lt $expectedItems.Count; $index++) {
     $offset = 8 + ($index * 0x18)
-    $descriptor = (Get-Hex -Data $bytes -Offset $offset -Count 12) +
-        (Get-Hex -Data $bytes -Offset ($offset + 16) -Count 4)
+    $descriptor = Get-CanonicalDescriptorHex -Data $bytes -Offset $offset
     $id = Read-UInt32LE -Data $bytes -Offset ($offset + 12)
     $amount = Read-UInt16LE -Data $bytes -Offset ($offset + 20)
     $present = Read-UInt16LE -Data $bytes -Offset ($offset + 22)
-    $expected = $expectedItems[$index]
-    if ([int]$expected.slot -ne ($index + 1) -or
-        [string]$expected.equippedSlot -cne 'None' -or
-        $descriptor -cne [string]$expected.descriptorHex -or
+    if (-not $expectedByDescriptor.ContainsKey($descriptor) -or
+        $expectedByDescriptor[$descriptor].Count -eq 0) {
+        throw "The slot-0 PSOBANK item at serialized position $($index + 1) is unexpected or duplicated"
+    }
+    $expected = $expectedByDescriptor[$descriptor].Dequeue()
+    if ([string]$expected.equippedSlot -cne 'None' -or
         $amount -ne 1 -or $present -ne 1 -or
         $id -eq 0 -or $id -eq [uint32]::MaxValue -or -not $ids.Add($id)) {
-        throw "The slot-0 PSOBANK item at position $($index + 1) is not exact"
+        throw "The slot-0 PSOBANK item at serialized position $($index + 1) is not structurally exact"
     }
     $items.Add([pscustomobject]@{
             Slot = $index + 1
+            SerializedPosition = $index + 1
+            ContractSlot = [int]$expected.slot
             Name = [string]$expected.name
             DescriptorHex = $descriptor
             ItemId = $id
             Amount = $amount
             Present = $present
         })
+}
+if (@($expectedByDescriptor.Values | Where-Object { $_.Count -ne 0 }).Count -ne 0) {
+    throw 'The slot-0 PSOBANK is missing one or more contracted descriptors'
 }
 
 $buildHashAfter = (Get-FileHash -LiteralPath $resolvedBuildPath `
@@ -149,5 +180,9 @@ if ($buildHashAfter -cne $buildHash -or
     Count = [int]$count
     Meseta = [uint32]$meseta
     UniqueItemIds = $ids.Count
+    OrderingPolicy = 'server-canonicalized'
+    ContractOrderPreserved = @($items | Where-Object {
+            [int]$_.Slot -ne [int]$_.ContractSlot
+        }).Count -eq 0
     Items = @($items)
 }
