@@ -222,3 +222,38 @@ Each entry records:
   the protected installation, snapshot, logs, and quarantines. Stable remains
   the unchanged Native recovery target. Do not retry this server package;
   proceed with the separately bound Stable-derived isolated combat fixture.
+
+## 2026-07-20 / gameplay-native-foundation-v1
+
+- Feature/profile: exact-client safety primitives and inert native Gameplay
+  capability ABI
+- Outcome: source-only foundation accepted; no hook, action observation,
+  gameplay input, process-memory write, runtime deployment, or combat behavior
+  is accepted by this entry
+- Implementation commits: `3d1805d` (`feat: add exact client safety library`),
+  `bd428a4` (`fix: bound expected-byte gates to PE ranges`), `c3bb1f3`
+  (`test: cover expected-byte RVA overflow`), and `49d06af` (`feat: add inert
+  gameplay module`)
+- Exact-client gate: x86 59NL executable SHA-256
+  `dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535`;
+  file size, PE32 contract, and nonempty hook-specific expected-byte ranges
+  must all pass before a later hook may be installed
+- Tests: ClientSafety 1/1; Gameplay ABI 3/3; existing Enhancement regression
+  2/2; MSVC code analysis completed without a remaining diagnostic
+- Binary policy result: the ignored Gameplay test artifact was x86 with ASLR,
+  NX, Control Flow Guard, four undecorated exports, and only `bcrypt.dll` and
+  `KERNEL32.dll` dependencies
+- ABI/state result: explicit pack-8 fixed layout; missing, disabled, and
+  unpinned hosts remain inert with zero feature bits, no accepted client hash,
+  and ten empty display slots; loading the module performs no initialization
+- Scenario: source-only; no server or client was started, no character was
+  logged in, and active gameplay duration was 0 seconds
+- State result: Stable, CombatCanary, Twills, bank, inventory, equipment,
+  techniques, MAG, registry, shortcuts, and shared RenderDoc state were not
+  changed
+- Limitation: safe post-loader activation, committed-page ownership and
+  protection primitives, hook-specific expected bytes, action-state mapping,
+  bounded diagnostics, runtime publication, and both five-minute Twills smokes
+  remain pending
+- Rollback: no runtime rollback is required. Keep the module unpublished; use
+  focused local Git reverts only if this source foundation must be withdrawn.

@@ -118,6 +118,7 @@ retail-content or gameplay acceptance. Stable remained stopped and unchanged.
 | CombatCanary layout and ACL isolation | Materialized and read back 2026-07-20; package frozen after startup rejection | Isolation, ACL, and recovery suites |
 | Reproducible canary server | Source verified 2026-07-20; not live accepted | Offline-input deterministic two-clean-build equality, source-lock proof, and Verify; native sockets are not OS-denied |
 | Sealed Twills snapshot/transaction | Materialized and exact `Both` readback passed 2026-07-20 | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
+| ClientSafety and inert Gameplay ABI | Source-only foundation accepted 2026-07-20; not deployed | Exact identity and range-bound byte-gate tests, fixed x86 ABI, static analysis, hardening and export readback |
 | CombatCanary lifecycle/launcher | Source verified; bounded live startup rejected before readiness | Environment-specific start/observe/stop and launcher tests |
 | Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
 | Current real Stable restore drill | Accepted 2026-07-20 | Protected schema-v3 receipt, exact process image, 2/2 accounts, three loopback listeners, and clean termination |
