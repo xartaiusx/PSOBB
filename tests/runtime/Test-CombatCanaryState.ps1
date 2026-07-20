@@ -278,6 +278,48 @@ function Get-TestMutableCanaryFingerprint {
         -ExcludedTopLevel @('server-base', 'snapshots', 'builds')
 }
 
+function New-TestCombatCanarySourceGateEvidence {
+    param([Parameter(Mandatory)]$Layout)
+
+    $evidenceRoot = Join-Path $Layout.EnvironmentRoot 'evidence'
+    $gateRoot = Join-Path $evidenceRoot 'source-gate-20260720T064219Z'
+    $matrixRoot = Join-Path $gateRoot 'recovery-matrix'
+    New-Item -ItemType Directory -Path $matrixRoot -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $gateRoot 'source-gate.json'),
+        '{"schemaVersion":1,"canonicalStateMaterialized":false}',
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $matrixRoot 'manifest.json'),
+        '{"schemaVersion":1,"totalFailed":0}',
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $matrixRoot 'shard-00.stdout.log'),
+        'synthetic source gate',
+        [System.Text.UTF8Encoding]::new($false))
+    $olderEvidence = Join-Path $evidenceRoot 'older-source-evidence'
+    New-Item -ItemType Directory -Path $olderEvidence | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $olderEvidence 'receipt.json'),
+        '{"schemaVersion":1}',
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $evidenceRoot 'cleanup-receipt.json'),
+        '{"schemaVersion":1,"outcome":"preserved"}',
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $evidenceRoot 'cleanup-addendum.json'),
+        '{"schemaVersion":1,"outcome":"preserved"}',
+        [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedTreeAcl -Path $evidenceRoot `
+        -Root $Layout.EnvironmentRoot
+    [pscustomobject]@{
+        EvidenceRoot = $evidenceRoot
+        GateRoot = $gateRoot
+        PayloadPath = Join-Path $matrixRoot 'shard-00.stdout.log'
+    }
+}
+
 function Remove-TestTemporaryTree {
     param([Parameter(Mandatory)][string]$Root)
 
@@ -2970,6 +3012,103 @@ try {
         Remove-Item -LiteralPath $path -Recurse -Force
     }
 
+    $sourceGate = New-TestCombatCanarySourceGateEvidence -Layout $canary
+    $sourceGateFingerprint = Get-TestTreeFingerprint `
+        -Root $sourceGate.EvidenceRoot
+    $sourceGateWhatIf = & (Join-Path $transactionScriptsRoot `
+        'Initialize-PSOBBCombatCanary.ps1') @initializeParameters -WhatIf
+    Add-Result 'first install WhatIf accepts and preserves sealed source evidence' (
+        [bool]$sourceGateWhatIf.WhatIf -and
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $sourceGateFingerprint -and
+        -not (Test-Path -LiteralPath $canary.InstallRecord)) `
+        'protected evidence remained byte-for-byte exact'
+
+    $entryBoundRejected = $false
+    $byteBoundRejected = $false
+    try {
+        Get-PSOBBOrdinaryTreeSnapshot -Path $sourceGate.GateRoot `
+            -Root $sourceGate.EvidenceRoot -RequireProtectedAcl `
+            -MaximumEntries 1 -MaximumBytes 64MB | Out-Null
+    } catch { $entryBoundRejected = $true }
+    try {
+        Get-PSOBBOrdinaryTreeSnapshot -Path $sourceGate.GateRoot `
+            -Root $sourceGate.EvidenceRoot -RequireProtectedAcl `
+            -MaximumEntries 512 -MaximumBytes 1 | Out-Null
+    } catch { $byteBoundRejected = $true }
+    Add-Result 'source evidence traversal enforces count and byte bounds' (
+        $entryBoundRejected -and $byteBoundRejected) `
+        'existing ordinary-tree helper rejected both bounded inventories'
+
+    $renamedSourceGatePath = Join-Path $sourceGate.EvidenceRoot `
+        'renamed-source-evidence'
+    [System.IO.Directory]::Move(
+        $sourceGate.GateRoot, $renamedSourceGatePath)
+    $missingSourceGateFingerprint = Get-TestTreeFingerprint `
+        -Root $sourceGate.EvidenceRoot
+    $missingSourceGateRejected = $false
+    try {
+        & (Join-Path $transactionScriptsRoot `
+            'Initialize-PSOBBCombatCanary.ps1') @initializeParameters | Out-Null
+    } catch {
+        $missingSourceGateRejected = $_.Exception.Message -ceq
+            'First combat-canary initialization refuses preexisting mutable state or evidence'
+    }
+    Add-Result 'first install rejects evidence without a source gate' (
+        $missingSourceGateRejected -and
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $missingSourceGateFingerprint) `
+        'all structurally safe non-source evidence remained byte-for-byte'
+    [System.IO.Directory]::Move(
+        $renamedSourceGatePath, $sourceGate.GateRoot)
+
+    $payloadAcl = Get-Acl -LiteralPath $sourceGate.PayloadPath
+    $payloadAcl.SetAccessRuleProtection($false, $true)
+    Set-Acl -LiteralPath $sourceGate.PayloadPath -AclObject $payloadAcl
+    $unprotectedFingerprint = Get-TestTreeFingerprint `
+        -Root $sourceGate.EvidenceRoot
+    $unprotectedRejected = $false
+    try {
+        & (Join-Path $transactionScriptsRoot `
+            'Initialize-PSOBBCombatCanary.ps1') @initializeParameters | Out-Null
+    } catch {
+        $unprotectedRejected = $_.Exception.Message -ceq
+            'First combat-canary initialization refuses preexisting mutable state or evidence'
+    }
+    Add-Result 'first install rejects and preserves unprotected evidence' (
+        $unprotectedRejected -and
+        -not (Test-PSOBBProtectedAcl -Path $sourceGate.PayloadPath) -and
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $unprotectedFingerprint) `
+        'initializer did not normalize the rejected ACL or bytes'
+    Set-PSOBBProtectedAcl -Path $sourceGate.PayloadPath
+
+    $reparseTarget = Join-Path $canary.Builds 'source-gate-reparse-target'
+    $reparsePath = Join-Path $sourceGate.GateRoot 'unexpected-link'
+    New-Item -ItemType Directory -Path $reparseTarget -Force | Out-Null
+    New-Item -ItemType Junction -Path $reparsePath `
+        -Target $reparseTarget | Out-Null
+    $reparseFingerprint = Get-TestTreeFingerprint `
+        -Root $sourceGate.EvidenceRoot
+    $reparseRejected = $false
+    try {
+        & (Join-Path $transactionScriptsRoot `
+            'Initialize-PSOBBCombatCanary.ps1') @initializeParameters | Out-Null
+    } catch {
+        $reparseRejected = $_.Exception.Message -ceq
+            'First combat-canary initialization refuses preexisting mutable state or evidence'
+    }
+    Add-Result 'first install rejects and preserves reparse evidence' (
+        $reparseRejected -and
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $reparseFingerprint) `
+        'reparse evidence remained present and untraversed'
+    [System.IO.Directory]::Delete($reparsePath, $false)
+    if ((Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -cne
+        $sourceGateFingerprint) {
+        throw 'The sealed source-gate fixture did not restore exactly'
+    }
+
     $emptyMutableFingerprint = Get-TestMutableCanaryFingerprint -Layout $canary
     $initializeManifest = Get-Content -Raw -LiteralPath (
         Join-Path $created.SnapshotPath 'manifest.json') |
@@ -3151,6 +3290,10 @@ try {
     Add-Result 'Initialize compensates exactly after every swap boundary' `
         $initializeCompensationExact `
         "boundaries=$initializeBoundariesPassed/11"
+    Add-Result 'Initialize failures never mutate sealed source evidence' (
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $sourceGateFingerprint) `
+        'all injected publication failures preserved exact evidence bytes'
     if (-not $initializeCompensationExact) {
         throw "Initialize compensation failed at boundary $boundary"
     }
@@ -3170,6 +3313,21 @@ try {
         [bool]$initialized.Initialized -and [bool]$initialized.Changed -and
         [bool]$idempotent.Initialized -and -not [bool]$idempotent.Changed -and
         [bool]$installedBeforeMutation.Valid) 'changed=true then changed=false'
+    $sourceGateAfterInstallValid = $false
+    try {
+        $sourceGateAfterInstall = Get-PSOBBOrdinaryTreeSnapshot `
+            -Path $sourceGate.EvidenceRoot -Root $canary.EnvironmentRoot `
+            -RequireProtectedAcl -MaximumEntries 512 -MaximumBytes 64MB
+        $sourceGateAfterInstallValid =
+            @($sourceGateAfterInstall.Items | Where-Object {
+                    -not $_.IsDirectory
+                }).Count -ge 1
+    } catch { $sourceGateAfterInstallValid = $false }
+    Add-Result 'successful Initialize never mutates sealed source evidence' (
+        $sourceGateAfterInstallValid -and
+        (Get-TestTreeFingerprint -Root $sourceGate.EvidenceRoot) -ceq
+            $sourceGateFingerprint) `
+        'apply and idempotent readback preserved bytes, inventory, and ACL safety'
 
     $installedExtraDirectory = Join-Path $canary.Server `
         'system\players\empty-unmanifested'

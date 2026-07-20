@@ -813,6 +813,10 @@ function Get-PSOBBRuntimeAclTargets {
         [pscustomobject]@{
             Name = 'combat-canary-builds'
             Path = $combatCanary.Builds
+        },
+        [pscustomobject]@{
+            Name = 'combat-canary-evidence'
+            Path = Join-Path $combatCanary.EnvironmentRoot 'evidence'
         }
     )) {
         # The combat canary is materialized later than the stable runtime. Its

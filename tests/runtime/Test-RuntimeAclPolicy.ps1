@@ -101,6 +101,7 @@ $outsideRoot = $temporaryRoot + '-outside'
 $layout = Get-PSOBBLayout -RuntimeRoot $temporaryRoot
 $combatCanary = Get-PSOBBServerEnvironmentLayout `
     -Layout $layout -Environment CombatCanary
+$combatCanaryEvidence = Join-Path $combatCanary.EnvironmentRoot 'evidence'
 try {
     $stableOnlyTargets = @(Get-PSOBBRuntimeAclTargets -Layout $layout)
     Add-Result 'runtime ACL target inventory remains stable before canary materialization' `
@@ -131,15 +132,26 @@ try {
         $combatCanary.Logs,
         $combatCanary.Snapshots,
         $combatCanary.ControlDirectory,
-        $combatCanary.Builds)) {
+        $combatCanary.Builds,
+        $combatCanaryEvidence)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
+    $sourceGateFixture = Join-Path $combatCanaryEvidence `
+        'source-gate-20260720T064219Z'
+    New-Item -ItemType Directory -Path $sourceGateFixture | Out-Null
+    $sourceGateReceiptFixture = Join-Path $sourceGateFixture `
+        'source-gate.json'
+    [System.IO.File]::WriteAllText(
+        $sourceGateReceiptFixture,
+        '{"schemaVersion":1}',
+        [System.Text.UTF8Encoding]::new($false))
     Initialize-PSOBBRuntimeMarker -Layout $layout | Out-Null
 
     $expectedCanaryTargetPaths = [ordered]@{
         'combat-canary-backups' = $combatCanary.Backups
         'combat-canary-builds' = $combatCanary.Builds
         'combat-canary-control' = $combatCanary.ControlDirectory
+        'combat-canary-evidence' = $combatCanaryEvidence
         'combat-canary-licenses' = Join-Path $combatCanary.Server 'system\licenses'
         'combat-canary-logs' = $combatCanary.Logs
         'combat-canary-players' = Join-Path $combatCanary.Server 'system\players'
@@ -151,7 +163,7 @@ try {
     $materializedCanaryTargets = @($materializedTargets | Where-Object {
             $_.Name -like 'combat-canary-*'
         })
-    $canaryTargetIdentityExact = $materializedCanaryTargets.Count -eq 9
+    $canaryTargetIdentityExact = $materializedCanaryTargets.Count -eq 10
     foreach ($expectedTarget in $expectedCanaryTargetPaths.GetEnumerator()) {
         $matches = @($materializedCanaryTargets | Where-Object {
                 $_.Name -ceq $expectedTarget.Key -and
@@ -615,7 +627,9 @@ try {
          (Test-ExactProtectedAcl -Path $canaryLogFixture) -and
          (Test-ExactProtectedAcl -Path $canarySnapshotFixture) -and
          (Test-ExactProtectedAcl -Path $canaryControlFixture) -and
-         (Test-ExactProtectedAcl -Path $canaryBuildFixture)) `
+         (Test-ExactProtectedAcl -Path $canaryBuildFixture) -and
+         (Test-ExactProtectedAcl -Path $combatCanaryEvidence) -and
+         (Test-ExactProtectedAcl -Path $sourceGateReceiptFixture)) `
         'canary account, evidence, lifecycle, build, and credential state use the exact protected DACL'
     $logAclAfter = Get-Acl -LiteralPath $layout.Logs
     $fileAclAfter = Get-Acl -LiteralPath $nestedLogFile
@@ -646,6 +660,7 @@ try {
         'combat-canary-backups',
         'combat-canary-builds',
         'combat-canary-control',
+        'combat-canary-evidence',
         'combat-canary-licenses',
         'combat-canary-logs',
         'combat-canary-players',

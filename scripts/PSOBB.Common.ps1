@@ -2528,8 +2528,14 @@ function Get-PSOBBOrdinaryTreeSnapshot {
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Root,
         [string]$Label = 'recovery tree',
-        [switch]$RequireProtectedAcl
+        [switch]$RequireProtectedAcl,
+        [ValidateRange(1, 2147483647)][int]$MaximumEntries = 2147483647,
+        [long]$MaximumBytes = [long]::MaxValue
     )
+
+    if ($MaximumBytes -lt 1) {
+        throw "The $Label has an invalid aggregate byte bound"
+    }
 
     $safeTreeRoot = Assert-PSOBBOrdinaryContainedPath `
         -Path $Path -Root $Root -Kind Directory -Label $Label
@@ -2537,6 +2543,8 @@ function Get-PSOBBOrdinaryTreeSnapshot {
     $pending = [System.Collections.Generic.Queue[string]]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
+    $entryCount = 0
+    [long]$aggregateBytes = 0
     $pending.Enqueue($safeTreeRoot)
     while ($pending.Count -gt 0) {
         $directoryPath = Assert-PathWithinRoot `
@@ -2559,6 +2567,10 @@ function Get-PSOBBOrdinaryTreeSnapshot {
             })
         foreach ($child in @(Get-ChildItem -Force -LiteralPath $directoryPath |
                 Sort-Object -Property FullName)) {
+            $entryCount++
+            if ($entryCount -gt $MaximumEntries) {
+                throw "The $Label exceeds its entry-count bound"
+            }
             $safeChild = Assert-PathWithinRoot `
                 -Path $child.FullName -Root $safeTreeRoot
             if (($child.Attributes -band
@@ -2570,6 +2582,14 @@ function Get-PSOBBOrdinaryTreeSnapshot {
             if ($child.PSIsContainer) {
                 $pending.Enqueue($safeChild)
             } else {
+                if ($child.Length -lt 0 -or
+                    [long]::MaxValue - $aggregateBytes -lt [long]$child.Length) {
+                    throw "The $Label aggregate byte count overflowed"
+                }
+                $aggregateBytes += [long]$child.Length
+                if ($aggregateBytes -gt $MaximumBytes) {
+                    throw "The $Label exceeds its aggregate byte bound"
+                }
                 if (-not $seen.Add($child.FullName)) {
                     throw "The $Label contains a repeated file identity"
                 }

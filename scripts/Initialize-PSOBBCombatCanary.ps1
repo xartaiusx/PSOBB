@@ -161,13 +161,50 @@ function Assert-PSOBBCombatInitializeFirstInstallEmpty {
     }
     $allowed = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($name in @('server-base', 'snapshots', 'builds')) {
+    foreach ($name in @('server-base', 'snapshots', 'builds', 'evidence')) {
         [void]$allowed.Add($name)
     }
     $unexpected = @(Get-ChildItem -Force -LiteralPath $Layout.EnvironmentRoot |
         Where-Object { -not $allowed.Contains($_.Name) })
     if ($unexpected.Count -ne 0) {
         throw 'First combat-canary initialization refuses preexisting mutable state or evidence'
+    }
+    $evidenceRoot = Join-Path $Layout.EnvironmentRoot 'evidence'
+    if (Test-Path -LiteralPath $evidenceRoot) {
+        try {
+            $safeEvidence = Assert-PSOBBOrdinaryContainedPath `
+                -Path $evidenceRoot -Root $Layout.EnvironmentRoot `
+                -Kind Directory -Label 'combat canary evidence root'
+            $evidenceItem = Get-Item -Force -LiteralPath $safeEvidence
+            $children = @(Get-ChildItem -Force -LiteralPath $safeEvidence)
+            if ($evidenceItem.Name -cne 'evidence' -or
+                -not (Test-PSOBBProtectedAcl -Path $safeEvidence) -or
+                $children.Count -lt 1) {
+                throw 'Unsafe evidence layout'
+            }
+            $tree = Get-PSOBBOrdinaryTreeSnapshot `
+                -Path $safeEvidence -Root $Layout.EnvironmentRoot `
+                -Label 'combat canary evidence' -RequireProtectedAcl `
+                -MaximumEntries 512 -MaximumBytes 64MB
+            $sourceGates = @($children | Where-Object {
+                    $_.PSIsContainer -and $_.Name -cmatch
+                        '^source-gate-[0-9]{8}T[0-9]{6}Z$'
+                })
+            $populatedSourceGates = @($sourceGates | Where-Object {
+                    $sourceGatePrefix = $_.FullName.TrimEnd('\') + '\'
+                    @($tree.Items | Where-Object {
+                            -not $_.IsDirectory -and
+                            ([string]$_.Path).StartsWith(
+                                $sourceGatePrefix,
+                                [System.StringComparison]::OrdinalIgnoreCase)
+                        }).Count -gt 0
+                })
+            if ($populatedSourceGates.Count -lt 1) {
+                throw 'Empty evidence layout'
+            }
+        } catch {
+            throw 'First combat-canary initialization refuses preexisting mutable state or evidence'
+        }
     }
     $true
 }
