@@ -916,6 +916,37 @@ $stopSessionLocked = $stopSessionSource -match 'Enter-PSOBBClientOperationLock' 
     $stopSessionSource -match 'Exit-PSOBBClientOperationLock'
 Add-Result 'stop-all is one guarded lifecycle transaction' $stopSessionLocked 'a concurrent client start cannot enter between client and server shutdown'
 
+$stopSessionTokens = $null
+$stopSessionErrors = $null
+$stopSessionAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $stopSessionSource,
+    [ref]$stopSessionTokens,
+    [ref]$stopSessionErrors)
+$environmentNameFunctions = @($stopSessionAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Get-PSOBBSessionEnvironmentNames'
+        }, $true))
+$emptySessionCensusAccepted = $false
+$malformedSessionCensusRejected = $false
+if ($stopSessionErrors.Count -eq 0 -and
+    $environmentNameFunctions.Count -eq 1) {
+    Invoke-Expression $environmentNameFunctions[0].Extent.Text
+    $emptySessionCensusAccepted = @(
+        Get-PSOBBSessionEnvironmentNames -Records @()).Count -eq 0
+    try {
+        Get-PSOBBSessionEnvironmentNames `
+            -Records @([pscustomobject]@{ Classification = 'ApprovedExactPath' }) |
+            Out-Null
+    } catch {
+        $malformedSessionCensusRejected =
+            $_.Exception.Message -match 'missing ServerEnvironment'
+    }
+}
+Add-Result 'stop-all accepts an empty strict-mode client census' (
+    $emptySessionCensusAccepted -and $malformedSessionCensusRejected) `
+    'zero clients selects no environment; malformed records still fail closed'
+
 $stopClientSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Stop-PSOBBClient.ps1')
 $stopClientTokens = $null
 $stopClientErrors = $null

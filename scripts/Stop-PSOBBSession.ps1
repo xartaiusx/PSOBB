@@ -14,6 +14,22 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 
+function Get-PSOBBSessionEnvironmentNames {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Records
+    )
+
+    @($Records | ForEach-Object {
+            if ($null -eq $_ -or
+                -not $_.PSObject.Properties['ServerEnvironment']) {
+                throw 'A lifecycle census record is missing ServerEnvironment'
+            }
+            [string]$_.ServerEnvironment
+        } | Sort-Object -Unique)
+}
+
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $environmentWasExplicit = $PSBoundParameters.ContainsKey('ServerEnvironment')
@@ -35,8 +51,10 @@ if (@($namedClients | Where-Object {
         }).Count -gt 0) {
     throw 'The global client/server census contains an unknown or uninspectable PSOBB process; no PID action was attempted'
 }
-$clientEnvironments = @($namedClients.ServerEnvironment | Sort-Object -Unique)
-$serverEnvironments = @($serverCensus.ServerEnvironment | Sort-Object -Unique)
+$clientEnvironments = @(Get-PSOBBSessionEnvironmentNames `
+        -Records $namedClients)
+$serverEnvironments = @(Get-PSOBBSessionEnvironmentNames `
+        -Records $serverCensus)
 if ($clientEnvironments.Count -gt 1 -or $serverEnvironments.Count -gt 1 -or
     ($clientEnvironments.Count -eq 1 -and $serverEnvironments.Count -eq 1 -and
         [string]$clientEnvironments[0] -cne [string]$serverEnvironments[0])) {
