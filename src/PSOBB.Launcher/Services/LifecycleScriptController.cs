@@ -1,15 +1,19 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using PSOBB.Launcher.Models;
 
 namespace PSOBB.Launcher.Services;
 
 public interface ILifecycleStateObserver
 {
-    Task<LifecycleSnapshot> ObserveAsync(string runtimeRoot, CancellationToken cancellationToken = default);
+    Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
 }
 
 public interface ILifecycleScriptExecutor
@@ -23,197 +27,148 @@ public interface ILifecycleScriptExecutor
         CancellationToken cancellationToken = default);
 }
 
-public sealed class RuntimeLifecycleObserver : ILifecycleStateObserver
+internal interface ICanonicalLifecycleRootAuthority
 {
-    private static readonly int[] RequiredServerPorts = [11000, 12000, 12001];
-    private readonly LoopbackHealthProbe _healthProbe;
+    string? ExpectedRepositoryRoot { get; }
+
+    CanonicalLifecycleLayout ValidateLifecycleRoot(string runtimeRoot);
+}
+
+public sealed class RuntimeLifecycleObserver : ILifecycleStateObserver, ICanonicalLifecycleRootAuthority
+{
+    private readonly CanonicalLifecycleRepositoryGuard _rootGuard;
+    private readonly IRuntimeIdentityProbe _identityProbe;
 
     public RuntimeLifecycleObserver(LoopbackHealthProbe healthProbe)
     {
-        _healthProbe = healthProbe;
+        ArgumentNullException.ThrowIfNull(healthProbe);
+        var layout = new CanonicalLifecycleInstallationResolver().Resolve();
+        _rootGuard = new CanonicalLifecycleRepositoryGuard(layout.RepositoryRoot);
+        _identityProbe = new ExactRuntimeIdentityProbe(
+            _rootGuard,
+            new WindowsRuntimePlatformProbe(),
+            new PowerShellRuntimeContractVerifier(_rootGuard));
     }
 
+    internal RuntimeLifecycleObserver(
+        IRuntimeIdentityProbe identityProbe,
+        CanonicalLifecycleRepositoryGuard? rootGuard = null)
+    {
+        _identityProbe = identityProbe ?? throw new ArgumentNullException(nameof(identityProbe));
+        _rootGuard = rootGuard ?? new CanonicalLifecycleRepositoryGuard();
+    }
+
+    string? ICanonicalLifecycleRootAuthority.ExpectedRepositoryRoot =>
+        _rootGuard.ExpectedRepositoryRoot;
+
+    CanonicalLifecycleLayout ICanonicalLifecycleRootAuthority.ValidateLifecycleRoot(string runtimeRoot) =>
+        _rootGuard.Validate(runtimeRoot);
+
     internal static (string ControlStatePath, string ProcessRecordPath) GetLifecycleFilePaths(
-        string runtimeRoot)
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
-        var controlRoot = Path.Combine(Path.GetFullPath(runtimeRoot), "stable", "control");
+        var environmentRoot = serverEnvironment switch
+        {
+            ServerEnvironmentKind.Stable => "stable",
+            ServerEnvironmentKind.CombatCanary => "combat-canary",
+            _ => throw new ArgumentOutOfRangeException(nameof(serverEnvironment)),
+        };
+        var controlRoot = Path.Combine(Path.GetFullPath(runtimeRoot), environmentRoot, "control");
         return (
             Path.Combine(controlRoot, "newserv-control.json"),
             Path.Combine(controlRoot, "newserv.process.json"));
     }
 
-    public async Task<LifecycleSnapshot> ObserveAsync(
+    internal static IReadOnlySet<string> GetApprovedClientPaths(
         string runtimeRoot,
-        CancellationToken cancellationToken = default)
+        ServerEnvironmentKind serverEnvironment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
         var root = Path.GetFullPath(runtimeRoot);
-        var clientResult = ObserveClients(root);
-        if (clientResult.Unverifiable)
+        return serverEnvironment switch
         {
-            return new(
-                LauncherLifecycleState.Faulted,
-                ServerRunning: false,
-                ClientRunning: true,
-                "A PSOBB process exists but Windows did not provide an executable path; lifecycle actions fail closed.");
-        }
-        if (clientResult.Unapproved)
-        {
-            return new(
-                LauncherLifecycleState.Faulted,
-                ServerRunning: false,
-                ClientRunning: true,
-                "A PSOBB process is running outside every approved runtime path; lifecycle actions fail closed.");
-        }
-
-        var health = await _healthProbe.ProbeAsync(
-            RequiredServerPorts,
-            TimeSpan.FromMilliseconds(350),
-            cancellationToken).ConfigureAwait(false);
-        var serverReady = health.Count == RequiredServerPorts.Length && health.All(port => port.IsHealthy);
-        var lifecyclePaths = GetLifecycleFilePaths(root);
-        var serverRecorded = File.Exists(lifecyclePaths.ProcessRecordPath);
-        var stateText = await ReadLifecycleStateAsync(
-            lifecyclePaths.ControlStatePath,
-            cancellationToken).ConfigureAwait(false);
-
-        if (clientResult.Running && !serverReady)
-        {
-            return new(
-                LauncherLifecycleState.Faulted,
-                serverRecorded,
-                ClientRunning: true,
-                "An approved PSOBB client is running while the required local server ports are not healthy.");
-        }
-
-        if (clientResult.Running)
-        {
-            return new(LauncherLifecycleState.Running, true, true, "Local server and approved PSOBB client are running.");
-        }
-
-        if (serverReady)
-        {
-            return new(LauncherLifecycleState.ServerReady, true, false, "Local server is ready; no approved client is running.");
-        }
-
-        if (serverRecorded || stateText.Equals("starting", StringComparison.OrdinalIgnoreCase))
-        {
-            return new(LauncherLifecycleState.ServerStarting, true, false, "Local server startup is in progress.");
-        }
-
-        return new(LauncherLifecycleState.Stopped, false, false, "Local server and approved PSOBB clients are stopped.");
-    }
-
-    private static ClientObservation ObserveClients(string runtimeRoot)
-    {
-        var approvedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            Path.GetFullPath(Path.Combine(runtimeRoot, "stable", "runtime", "client", "Psobb.exe")),
-            Path.GetFullPath(Path.Combine(runtimeRoot, "canary", "runtime", "client", "Psobb.exe")),
-            Path.GetFullPath(Path.Combine(runtimeRoot, "local-lab", "runtime", "client", "Psobb.exe")),
-        };
-
-        var running = false;
-        var unverifiable = false;
-        var unapproved = false;
-        foreach (var process in Process.GetProcessesByName("Psobb"))
-        {
-            using (process)
+            ServerEnvironmentKind.Stable => new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                string? executablePath;
-                try
-                {
-                    executablePath = process.MainModule?.FileName;
-                }
-                catch (Exception exception) when (
-                    exception is InvalidOperationException
-                        or System.ComponentModel.Win32Exception
-                        or NotSupportedException)
-                {
-                    unverifiable = true;
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(executablePath))
-                {
-                    unverifiable = true;
-                }
-                else if (approvedPaths.Contains(Path.GetFullPath(executablePath)))
-                {
-                    running = true;
-                }
-                else
-                {
-                    unapproved = true;
-                }
-            }
-        }
-
-        return new(running, unverifiable, unapproved);
+                Path.GetFullPath(Path.Combine(root, "stable", "runtime", "client", "Psobb.exe")),
+                Path.GetFullPath(Path.Combine(root, "canary", "runtime", "client", "Psobb.exe")),
+                Path.GetFullPath(Path.Combine(root, "local-lab", "runtime", "client", "Psobb.exe")),
+            },
+            ServerEnvironmentKind.CombatCanary => new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                Path.GetFullPath(Path.Combine(root, "combat-canary", "runtime", "client", "Psobb.exe")),
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(serverEnvironment)),
+        };
     }
 
-    private static async Task<string> ReadLifecycleStateAsync(
-        string path,
-        CancellationToken cancellationToken)
+    public Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        ObserveAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(path))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            await using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                bufferSize: 4096,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            return document.RootElement.TryGetProperty("state", out var state)
-                ? state.GetString() ?? string.Empty
-                : string.Empty;
-        }
-        catch (Exception exception) when (exception is IOException or JsonException)
-        {
-            return string.Empty;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        _rootGuard.Validate(runtimeRoot);
+        return _identityProbe.ObserveAsync(runtimeRoot, serverEnvironment, cancellationToken);
     }
 
-    private sealed record ClientObservation(bool Running, bool Unverifiable, bool Unapproved);
 }
 
-public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
+public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor, ICanonicalLifecycleRootAuthority
 {
     private const int MaximumLogLines = 200;
-    private static readonly Regex TerminalControlSequence = new(
-        "\\x1B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\x07\\x1B]*(?:\\x07|\\x1B\\\\|$))",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly HashSet<string> AllowedScripts = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Reset-PSOBBClientRuntime.ps1",
-        "New-PSOBBGraphicsLabRuntime.ps1",
-        "Set-PSOBBAshenbubsHDClientActivation.ps1",
-        "Start-PSOBB.ps1",
-        "Start-PSOBBClient.ps1",
-        "Start-PSOBBSession.ps1",
-        "Stop-PSOBB.ps1",
-        "Stop-PSOBBClient.ps1",
-        "Stop-PSOBBSession.ps1",
-    };
-
+    private static readonly TimeSpan DefaultExecutionTimeout = TimeSpan.FromMinutes(5);
     private readonly ConcurrentQueue<string> _log = new();
-    private readonly DiagnosticReportBuilder _sanitizer = new();
-    private readonly string _scriptRoot;
-    private readonly string _powerShellExecutable;
+    private readonly DiagnosticLineSanitizer _diagnosticSanitizer = new();
+    private readonly IPowerShellExecutableAuthority _powerShellAuthority;
+    private readonly LifecycleInvocationProcessStopCoordinator _processStopCoordinator;
+    private readonly CanonicalLifecycleRepositoryGuard _rootGuard;
+    private readonly Action? _afterSecondValidation;
+    private readonly Func<Process, bool> _processStarter;
+    private readonly TimeSpan _executionTimeout;
 
-    public PowerShellLifecycleScriptExecutor(string? scriptRoot = null, string powerShellExecutable = "pwsh.exe")
+    public PowerShellLifecycleScriptExecutor()
+        : this(
+            CreateProductionRootGuard(),
+            TrustedPowerShellExecutableAuthority.CreateProduction())
     {
-        _scriptRoot = LifecycleScriptLocator.Resolve(scriptRoot);
-        _powerShellExecutable = powerShellExecutable;
     }
+
+    internal PowerShellLifecycleScriptExecutor(
+        CanonicalLifecycleRepositoryGuard rootGuard,
+        IPowerShellExecutableAuthority? powerShellAuthority = null,
+        Action? afterSecondValidation = null,
+        Func<Process, bool>? processStarter = null,
+        LifecycleInvocationProcessStopCoordinator? processStopCoordinator = null,
+        TimeSpan? executionTimeout = null)
+    {
+        _rootGuard = rootGuard ?? throw new ArgumentNullException(nameof(rootGuard));
+        _powerShellAuthority = powerShellAuthority
+            ?? TrustedPowerShellExecutableAuthority.CreateProduction();
+        _afterSecondValidation = afterSecondValidation;
+        _processStarter = processStarter ?? (static process => process.Start());
+        _processStopCoordinator = processStopCoordinator
+            ?? new LifecycleInvocationProcessStopCoordinator();
+        _executionTimeout = executionTimeout ?? DefaultExecutionTimeout;
+        if (_executionTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(executionTimeout),
+                "The lifecycle-command execution timeout must be positive.");
+        }
+    }
+
+    string? ICanonicalLifecycleRootAuthority.ExpectedRepositoryRoot =>
+        _rootGuard.ExpectedRepositoryRoot;
+
+    CanonicalLifecycleLayout ICanonicalLifecycleRootAuthority.ValidateLifecycleRoot(string runtimeRoot) =>
+        _rootGuard.Validate(runtimeRoot);
 
     public IReadOnlyList<string> LogTail => _log.ToArray();
 
@@ -223,86 +178,127 @@ public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default)
     {
-        if (!AllowedScripts.Contains(scriptName))
-        {
-            throw new InvalidOperationException($"Lifecycle script '{scriptName}' is not allowlisted.");
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
         ArgumentNullException.ThrowIfNull(arguments);
-        var scriptPath = Path.GetFullPath(Path.Combine(_scriptRoot, scriptName));
-        if (!scriptPath.StartsWith(_scriptRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-                StringComparison.OrdinalIgnoreCase)
-            || !File.Exists(scriptPath))
-        {
-            throw new FileNotFoundException($"The required lifecycle script is missing: {scriptName}", scriptPath);
-        }
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _powerShellExecutable,
-            WorkingDirectory = Path.GetDirectoryName(_scriptRoot)
-                ?? throw new InvalidDataException("The lifecycle script root has no parent directory."),
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var fixedArgument in new[]
-        {
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            scriptPath,
-        })
-        {
-            startInfo.ArgumentList.Add(fixedArgument);
-        }
-
-        foreach (var argument in arguments)
-        {
-            if (argument.Any(char.IsControl))
-            {
-                throw new InvalidOperationException("Lifecycle script arguments may not contain control characters.");
-            }
-
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
-        {
-            throw new InvalidOperationException($"Windows did not start the {scriptName} lifecycle command.");
-        }
-
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+        using var executionTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        executionTimeout.CancelAfter(_executionTimeout);
+        var executionToken = executionTimeout.Token;
+        CanonicalLifecycleInvocationLease? scriptLease = null;
+        PowerShellExecutableLease? powerShellLease = null;
+        Process? process = null;
+        var releaseOwnedResources = true;
         try
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited)
+            scriptLease = _rootGuard.AcquireScriptInvocation(runtimeRoot, scriptName);
+            powerShellLease = _powerShellAuthority.Acquire();
+            var layout = scriptLease.Layout;
+            var scriptPath = scriptLease.ScriptPath;
+            var powerShellIdentity = powerShellLease.Identity;
+
+            var startInfo = new ProcessStartInfo
             {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                FileName = powerShellIdentity.FullPath,
+                WorkingDirectory = layout.RepositoryRoot,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var fixedArgument in new[]
+                     {
+                         "-NoLogo",
+                         "-NoProfile",
+                         "-NonInteractive",
+                         "-ExecutionPolicy",
+                         "Bypass",
+                         "-File",
+                         scriptPath,
+                     })
+            {
+                startInfo.ArgumentList.Add(fixedArgument);
             }
 
+            foreach (var argument in arguments)
+            {
+                if (argument.Any(char.IsControl))
+                {
+                    throw new InvalidOperationException(
+                        "Lifecycle script arguments may not contain control characters.");
+                }
+
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            process = new Process { StartInfo = startInfo };
+            executionToken.ThrowIfCancellationRequested();
+            scriptLease.Revalidate();
+            powerShellLease.Revalidate();
+            _afterSecondValidation?.Invoke();
+            executionToken.ThrowIfCancellationRequested();
+            scriptLease.Revalidate();
+            powerShellLease.Revalidate();
+            if (!_processStarter(process))
+            {
+                throw new InvalidOperationException(
+                    $"Windows did not start the {scriptName} lifecycle command.");
+            }
+
+            var standardOutput = process.StandardOutput.ReadToEndAsync(executionToken);
+            var standardError = process.StandardError.ReadToEndAsync(executionToken);
+            await process.WaitForExitAsync(executionToken).ConfigureAwait(false);
+            var output = await standardOutput.ConfigureAwait(false);
+            var error = await standardError.ConfigureAwait(false);
+            AddLog(output);
+            AddLog(error);
+
+            if (process.ExitCode != 0)
+            {
+                var detail = FirstMeaningfulLine(error)
+                    ?? FirstMeaningfulLine(output)
+                    ?? "No diagnostic was returned.";
+                throw new InvalidOperationException(
+                    $"{scriptName} failed with exit code {process.ExitCode}: {detail}");
+            }
+        }
+        catch (Exception exception) when (
+            process is not null
+            && scriptLease is not null
+            && powerShellLease is not null)
+        {
+            var stop = await _processStopCoordinator.StopOrQuarantineAsync(
+                process,
+                scriptLease,
+                powerShellLease).ConfigureAwait(false);
+            if (!stop.ExitConfirmed)
+            {
+                releaseOwnedResources = false;
+                throw new UnconfirmedLifecycleChildExitException(
+                    "lifecycle command",
+                    stop.Failure,
+                    stop.QuarantineIncidentId
+                        ?? throw new InvalidOperationException(
+                            "An unconfirmed child exit did not receive a quarantine identifier."));
+            }
+            if (exception is OperationCanceledException
+                && !cancellationToken.IsCancellationRequested
+                && executionTimeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"The lifecycle command exceeded its " +
+                    $"{_executionTimeout.TotalSeconds:0.###}-second limit.");
+            }
             throw;
         }
-        var output = await standardOutput.ConfigureAwait(false);
-        var error = await standardError.ConfigureAwait(false);
-        AddLog(output);
-        AddLog(error);
-
-        if (process.ExitCode != 0)
+        finally
         {
-            var detail = FirstMeaningfulLine(error) ?? FirstMeaningfulLine(output) ?? "No diagnostic was returned.";
-            throw new InvalidOperationException($"{scriptName} failed with exit code {process.ExitCode}: {detail}");
+            if (releaseOwnedResources)
+            {
+                process?.Dispose();
+                powerShellLease?.Dispose();
+                scriptLease?.Dispose();
+            }
         }
     }
 
@@ -378,18 +374,7 @@ public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
 
     internal string NormalizeDiagnosticLine(string value)
     {
-        ArgumentNullException.ThrowIfNull(value);
-        var withoutTerminalSequences = TerminalControlSequence.Replace(value, string.Empty);
-        var normalized = new StringBuilder(withoutTerminalSequences.Length);
-        foreach (var character in withoutTerminalSequences)
-        {
-            if (!char.IsControl(character) || character == '\t')
-            {
-                normalized.Append(character);
-            }
-        }
-
-        return _sanitizer.Sanitize(normalized.ToString()).Trim();
+        return _diagnosticSanitizer.Normalize(value);
     }
 
     private static bool IsPowerShellLocationHeader(string line)
@@ -398,65 +383,11 @@ public sealed class PowerShellLifecycleScriptExecutor : ILifecycleScriptExecutor
         return marker >= 0
             && line[(marker + ".ps1:".Length)..].All(char.IsAsciiDigit);
     }
-}
 
-public static class LifecycleScriptLocator
-{
-    public static string Resolve(string? requestedRoot = null) => Resolve(
-        requestedRoot,
-        Environment.GetEnvironmentVariable("PSOBB_SCRIPT_ROOT"),
-        [AppContext.BaseDirectory, Environment.CurrentDirectory]);
-
-    internal static string Resolve(
-        string? requestedRoot,
-        string? configuredRoot,
-        IEnumerable<string> origins)
+    private static CanonicalLifecycleRepositoryGuard CreateProductionRootGuard()
     {
-        foreach (var candidate in Candidates(requestedRoot, configuredRoot, origins))
-        {
-            var scripts = NormalizeCandidate(candidate);
-            if (scripts is not null && File.Exists(Path.Combine(scripts, "Start-PSOBB.ps1")))
-            {
-                return scripts;
-            }
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate the PSOBB lifecycle scripts. Set PSOBB_SCRIPT_ROOT to the repository scripts directory.");
-    }
-
-    private static IEnumerable<string?> Candidates(
-        string? requestedRoot,
-        string? configuredRoot,
-        IEnumerable<string> origins)
-    {
-        yield return requestedRoot;
-        yield return configuredRoot;
-
-        foreach (var origin in origins)
-        {
-            var cursor = new DirectoryInfo(Path.GetFullPath(origin));
-            for (var depth = 0; cursor is not null && depth < 10; depth++, cursor = cursor.Parent)
-            {
-                yield return cursor.FullName;
-            }
-        }
-    }
-
-    private static string? NormalizeCandidate(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate))
-        {
-            return null;
-        }
-
-        var fullPath = Path.GetFullPath(candidate);
-        if (string.Equals(new DirectoryInfo(fullPath).Name, "scripts", StringComparison.OrdinalIgnoreCase))
-        {
-            return fullPath.TrimEnd(Path.DirectorySeparatorChar);
-        }
-
-        return Path.Combine(fullPath, "scripts");
+        var layout = new CanonicalLifecycleInstallationResolver().Resolve();
+        return new CanonicalLifecycleRepositoryGuard(layout.RepositoryRoot);
     }
 }
 
@@ -468,34 +399,68 @@ public sealed class LifecycleScriptController
 
     public LifecycleScriptController(ILifecycleStateObserver observer, ILifecycleScriptExecutor executor)
     {
-        _observer = observer;
-        _executor = executor;
+        _observer = observer ?? throw new ArgumentNullException(nameof(observer));
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        if (observer is ICanonicalLifecycleRootAuthority observerAuthority
+            && executor is ICanonicalLifecycleRootAuthority executorAuthority
+            && observerAuthority.ExpectedRepositoryRoot is not null
+            && executorAuthority.ExpectedRepositoryRoot is not null
+            && !observerAuthority.ExpectedRepositoryRoot.Equals(
+                executorAuthority.ExpectedRepositoryRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The lifecycle observer and executor are bound to different repository roots.");
+        }
     }
 
     public IReadOnlyList<string> LogTail => _executor.LogTail;
 
-    public Task<LifecycleSnapshot> ObserveAsync(string runtimeRoot, CancellationToken cancellationToken = default) =>
-        _observer.ObserveAsync(runtimeRoot, cancellationToken);
+    public Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        ObserveAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        return _observer.ObserveAsync(runtimeRoot, serverEnvironment, cancellationToken);
+    }
+
+    public Task<LifecycleSnapshot> StartServerAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        StartServerAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StartServerAsync(
         string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
         if (current.State is LauncherLifecycleState.ServerReady or LauncherLifecycleState.Running)
         {
+            RequireAuthenticated(current);
             return current;
         }
 
         if (current.State == LauncherLifecycleState.ServerStarting)
         {
+            RequireAuthenticated(current);
             return await WaitForAsync(
                 runtimeRoot,
-                state => state.State is LauncherLifecycleState.ServerReady or LauncherLifecycleState.Running,
+                serverEnvironment,
+                state => state.IdentityAuthenticated
+                    && state.State is LauncherLifecycleState.ServerReady or LauncherLifecycleState.Running,
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (current.State == LauncherLifecycleState.Faulted)
+        if (current.State != LauncherLifecycleState.Stopped || !current.IdentityAuthenticated)
         {
             throw new InvalidOperationException(current.Detail);
         }
@@ -503,70 +468,113 @@ public sealed class LifecycleScriptController
         await _executor.ExecuteAsync(
             "Start-PSOBB.ps1",
             runtimeRoot,
-            ["-RuntimeRoot", Path.GetFullPath(runtimeRoot)],
+            EnvironmentArguments(runtimeRoot, serverEnvironment),
             cancellationToken).ConfigureAwait(false);
         return await WaitForAsync(
             runtimeRoot,
-            state => state.State is LauncherLifecycleState.ServerReady or LauncherLifecycleState.Running,
+            serverEnvironment,
+            state => state.IdentityAuthenticated
+                && state.State is LauncherLifecycleState.ServerReady or LauncherLifecycleState.Running,
             cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> StartClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        StartClientAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StartClientAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selection);
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
-        if (current.ClientRunning && current.State != LauncherLifecycleState.Faulted)
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
+        if (current.ClientRunning && current.State == LauncherLifecycleState.Running)
         {
+            RequireAuthenticated(current);
             return current;
         }
 
-        if (current.State != LauncherLifecycleState.ServerReady)
+        if (current.State != LauncherLifecycleState.ServerReady || !current.IdentityAuthenticated)
         {
             throw new InvalidOperationException("The local server must be healthy before starting the client.");
         }
 
-        var arguments = ClientLaunchArguments(runtimeRoot, selection);
+        var arguments = ClientLaunchArguments(runtimeRoot, selection, serverEnvironment);
         await _executor.ExecuteAsync(
             "Start-PSOBBClient.ps1",
             runtimeRoot,
             arguments,
             cancellationToken).ConfigureAwait(false);
-        return await WaitForAsync(runtimeRoot, state => state.ClientRunning, cancellationToken).ConfigureAwait(false);
+        return await WaitForAsync(
+            runtimeRoot,
+            serverEnvironment,
+            state => state.IdentityAuthenticated
+                && state.State == LauncherLifecycleState.Running
+                && state.ClientRunning,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> PlayAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        PlayAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> PlayAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selection);
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
-        if (current.ClientRunning && current.State != LauncherLifecycleState.Faulted)
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
+        if (current.ClientRunning && current.State == LauncherLifecycleState.Running)
         {
+            RequireAuthenticated(current);
             return current;
         }
-        if (current.State == LauncherLifecycleState.Faulted)
+        if (!current.IdentityAuthenticated
+            || current.State is not (LauncherLifecycleState.Stopped or LauncherLifecycleState.ServerReady))
         {
             throw new InvalidOperationException(current.Detail);
         }
 
-        var arguments = ClientLaunchArguments(runtimeRoot, selection);
+        var arguments = ClientLaunchArguments(runtimeRoot, selection, serverEnvironment);
         await _executor.ExecuteAsync(
             "Start-PSOBBSession.ps1",
             runtimeRoot,
             arguments,
             cancellationToken).ConfigureAwait(false);
-        return await WaitForAsync(runtimeRoot, state => state.ClientRunning, cancellationToken).ConfigureAwait(false);
+        return await WaitForAsync(
+            runtimeRoot,
+            serverEnvironment,
+            state => state.IdentityAuthenticated
+                && state.State == LauncherLifecycleState.Running
+                && state.ClientRunning,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> StopClientAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        StopClientAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StopClientAsync(
         string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
         if (!current.ClientRunning)
         {
             return current;
@@ -575,16 +583,25 @@ public sealed class LifecycleScriptController
         await _executor.ExecuteAsync(
             "Stop-PSOBBClient.ps1",
             runtimeRoot,
-            ["-RuntimeRoot", Path.GetFullPath(runtimeRoot)],
+            EnvironmentArguments(runtimeRoot, serverEnvironment),
             cancellationToken).ConfigureAwait(false);
-        return await WaitForAsync(runtimeRoot, state => !state.ClientRunning, cancellationToken).ConfigureAwait(false);
+        return await WaitForAsync(
+            runtimeRoot, serverEnvironment, state => !state.ClientRunning, cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> StopServerAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        StopServerAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StopServerAsync(
         string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
         if (current.ClientRunning)
         {
             throw new InvalidOperationException("Stop the client first, or use Stop all.");
@@ -598,16 +615,25 @@ public sealed class LifecycleScriptController
         await _executor.ExecuteAsync(
             "Stop-PSOBB.ps1",
             runtimeRoot,
-            ["-RuntimeRoot", Path.GetFullPath(runtimeRoot)],
+            EnvironmentArguments(runtimeRoot, serverEnvironment),
             cancellationToken).ConfigureAwait(false);
-        return await WaitForAsync(runtimeRoot, state => !state.ServerRunning, cancellationToken).ConfigureAwait(false);
+        return await WaitForAsync(
+            runtimeRoot, serverEnvironment, state => !state.ServerRunning, cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> StopAllAsync(
+        string runtimeRoot,
+        CancellationToken cancellationToken = default) =>
+        StopAllAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StopAllAsync(
         string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
         if (!current.ServerRunning && !current.ClientRunning)
         {
             return current;
@@ -616,23 +642,47 @@ public sealed class LifecycleScriptController
         await _executor.ExecuteAsync(
             "Stop-PSOBBSession.ps1",
             runtimeRoot,
-            ["-Target", "All", "-RuntimeRoot", Path.GetFullPath(runtimeRoot)],
+            [
+                "-Target", "All",
+                "-ServerEnvironment", ToScriptServerEnvironment(serverEnvironment),
+                "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
+            ],
             cancellationToken).ConfigureAwait(false);
         return await WaitForAsync(
             runtimeRoot,
+            serverEnvironment,
             state => !state.ServerRunning && !state.ClientRunning,
             cancellationToken).ConfigureAwait(false);
     }
 
+    public Task<LifecycleSnapshot> RepairClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        RepairClientAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
+
     public async Task<LifecycleSnapshot> RepairClientAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var current = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
-        if (current.ServerRunning || current.ClientRunning)
+        ValidateCanonicalRootAgreement(runtimeRoot);
+        if (serverEnvironment == ServerEnvironmentKind.CombatCanary)
         {
-            throw new InvalidOperationException("Stop both the server and client before repairing a client profile.");
+            throw new NotSupportedException(
+                "CombatCanary client repair is owned by its sealed initialization and reset workflow.");
+        }
+
+        var current = await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
+        if (current.State != LauncherLifecycleState.Stopped
+            || !current.IdentityAuthenticated
+            || current.ServerRunning
+            || current.ClientRunning)
+        {
+            throw new InvalidOperationException(
+                "Client repair requires an identity-authenticated exact Stopped state for the complete runtime.");
         }
 
         var repair = RepairCommand(runtimeRoot, selection);
@@ -641,7 +691,33 @@ public sealed class LifecycleScriptController
             runtimeRoot,
             repair.Arguments,
             cancellationToken).ConfigureAwait(false);
-        return await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+        return await _observer.ObserveAsync(
+            runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void ValidateCanonicalRootAgreement(string runtimeRoot)
+    {
+        if (_observer is not ICanonicalLifecycleRootAuthority observerAuthority
+            || _executor is not ICanonicalLifecycleRootAuthority executorAuthority)
+        {
+            return;
+        }
+
+        var observerLayout = observerAuthority.ValidateLifecycleRoot(runtimeRoot);
+        var executorLayout = executorAuthority.ValidateLifecycleRoot(runtimeRoot);
+        if (!observerLayout.RepositoryRoot.Equals(
+                executorLayout.RepositoryRoot,
+                StringComparison.OrdinalIgnoreCase)
+            || !observerLayout.RuntimeRoot.Equals(
+                executorLayout.RuntimeRoot,
+                StringComparison.OrdinalIgnoreCase)
+            || !observerLayout.ScriptsRoot.Equals(
+                executorLayout.ScriptsRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The lifecycle observer and executor did not derive one canonical repository layout.");
+        }
     }
 
     private static RepairScript RepairCommand(string runtimeRoot, LifecycleSelection selection)
@@ -698,6 +774,7 @@ public sealed class LifecycleScriptController
 
     private async Task<LifecycleSnapshot> WaitForAsync(
         string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
         Func<LifecycleSnapshot, bool> predicate,
         CancellationToken cancellationToken)
     {
@@ -705,10 +782,15 @@ public sealed class LifecycleScriptController
         LifecycleSnapshot? latest = null;
         do
         {
-            latest = await _observer.ObserveAsync(runtimeRoot, cancellationToken).ConfigureAwait(false);
+            latest = await _observer.ObserveAsync(
+                runtimeRoot, serverEnvironment, cancellationToken).ConfigureAwait(false);
             if (predicate(latest))
             {
                 return latest;
+            }
+            if (latest.State == LauncherLifecycleState.Faulted)
+            {
+                throw new InvalidOperationException(latest.Detail);
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
@@ -716,6 +798,15 @@ public sealed class LifecycleScriptController
         while (DateTimeOffset.UtcNow < deadline);
 
         throw new TimeoutException($"Lifecycle transition did not complete: {latest?.Detail ?? "no state was observed"}");
+    }
+
+    private static void RequireAuthenticated(LifecycleSnapshot snapshot)
+    {
+        if (!snapshot.IdentityAuthenticated)
+        {
+            throw new InvalidOperationException(
+                "Lifecycle evidence was advisory and did not pass exact process, executable, binding, and listener authentication.");
+        }
     }
 
     private static string ToScriptWindowMode(LauncherWindowMode windowMode) => windowMode switch
@@ -726,16 +817,44 @@ public sealed class LifecycleScriptController
         _ => throw new ArgumentOutOfRangeException(nameof(windowMode)),
     };
 
+    private static string ToScriptServerEnvironment(ServerEnvironmentKind serverEnvironment) =>
+        serverEnvironment switch
+        {
+            ServerEnvironmentKind.Stable => "Stable",
+            ServerEnvironmentKind.CombatCanary => "CombatCanary",
+            _ => throw new ArgumentOutOfRangeException(nameof(serverEnvironment)),
+        };
+
+    private static List<string> EnvironmentArguments(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment) =>
+    [
+        "-ServerEnvironment", ToScriptServerEnvironment(serverEnvironment),
+        "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
+    ];
+
     private static List<string> ClientLaunchArguments(
         string runtimeRoot,
-        LifecycleSelection selection)
+        LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment)
     {
-        var arguments = new List<string>
+        var arguments = new List<string>();
+        if (serverEnvironment == ServerEnvironmentKind.Stable)
         {
-            "-Channel", selection.Channel.ToString(),
-            "-WindowMode", ToScriptWindowMode(selection.WindowMode),
-            "-RuntimeRoot", Path.GetFullPath(runtimeRoot),
-        };
+            arguments.Add("-Channel");
+            arguments.Add(selection.Channel.ToString());
+            arguments.Add("-WindowMode");
+            arguments.Add(ToScriptWindowMode(selection.WindowMode));
+        }
+        else if (serverEnvironment != ServerEnvironmentKind.CombatCanary)
+        {
+            throw new ArgumentOutOfRangeException(nameof(serverEnvironment));
+        }
+
+        arguments.Add("-ServerEnvironment");
+        arguments.Add(ToScriptServerEnvironment(serverEnvironment));
+        arguments.Add("-RuntimeRoot");
+        arguments.Add(Path.GetFullPath(runtimeRoot));
         if (selection.PreserveForeground)
         {
             arguments.Add("-PreserveForeground");

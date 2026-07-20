@@ -2,6 +2,7 @@ namespace PSOBB.Launcher.Models;
 
 public enum LauncherLifecycleState
 {
+    Unknown,
     Stopped,
     ServerStarting,
     ServerReady,
@@ -16,6 +17,12 @@ public enum LauncherWindowMode
     ProfileDefault,
     Borderless,
     Resizable,
+}
+
+public enum ServerEnvironmentKind
+{
+    Stable,
+    CombatCanary,
 }
 
 public sealed record GraphicsProfileOption(
@@ -111,4 +118,5 @@ public sealed record LifecycleSnapshot(
     LauncherLifecycleState State,
     bool ServerRunning,
     bool ClientRunning,
-    string Detail);
+    string Detail,
+    bool IdentityAuthenticated = false);

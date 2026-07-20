@@ -2,7 +2,64 @@ using PSOBB.Launcher.Models;
 
 namespace PSOBB.Launcher.Services;
 
-public sealed class LauncherCoordinator : IAsyncDisposable
+internal interface ILauncherCoordinator : IAsyncDisposable
+{
+    IReadOnlyList<string> ServerLogLines { get; }
+
+    Task<ReleaseVerification> VerifyAsync(
+        ReleaseManifest manifest,
+        string runtimeRoot,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PortHealth>> CheckHealthAsync(
+        ReleaseManifest manifest,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StartServerAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StartClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StartSessionAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StopClientAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StopServerAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> StopAllAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+
+    Task<LifecycleSnapshot> RepairClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class LauncherCoordinator : ILauncherCoordinator
 {
     private readonly ArtifactVerifier _artifactVerifier;
     private readonly LoopbackHealthProbe _healthProbe;
@@ -43,54 +100,114 @@ public sealed class LauncherCoordinator : IAsyncDisposable
     public Task<LifecycleSnapshot> ObserveAsync(
         string runtimeRoot,
         CancellationToken cancellationToken = default) =>
-        _lifecycle.ObserveAsync(runtimeRoot, cancellationToken);
+        ObserveAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> ObserveAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default) =>
+        _lifecycle.ObserveAsync(runtimeRoot, serverEnvironment, cancellationToken);
 
     public Task<LifecycleSnapshot> StartServerAsync(
         string runtimeRoot,
         CancellationToken cancellationToken = default) =>
-        _lifecycle.StartServerAsync(runtimeRoot, cancellationToken);
+        StartServerAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> StartServerAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default) =>
+        _lifecycle.StartServerAsync(runtimeRoot, serverEnvironment, cancellationToken);
+
+    public Task<LifecycleSnapshot> StartClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        StartClientAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StartClientAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        await _runtimeProfileGuard.ValidateAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
-        await WriteSelectionAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
-        return await _lifecycle.StartClientAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+        await PrepareSelectionAsync(
+            runtimeRoot, selection, serverEnvironment, cancellationToken).ConfigureAwait(false);
+        return await _lifecycle.StartClientAsync(
+            runtimeRoot, selection, serverEnvironment, cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<LifecycleSnapshot> StartSessionAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        StartSessionAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> StartSessionAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        await _runtimeProfileGuard.ValidateAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
-        await WriteSelectionAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
-        return await _lifecycle.PlayAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+        await PrepareSelectionAsync(
+            runtimeRoot, selection, serverEnvironment, cancellationToken).ConfigureAwait(false);
+        return await _lifecycle.PlayAsync(
+            runtimeRoot, selection, serverEnvironment, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<LifecycleSnapshot> StopClientAsync(
         string runtimeRoot,
         CancellationToken cancellationToken = default) =>
-        _lifecycle.StopClientAsync(runtimeRoot, cancellationToken);
+        StopClientAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> StopClientAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default) =>
+        _lifecycle.StopClientAsync(runtimeRoot, serverEnvironment, cancellationToken);
 
     public Task<LifecycleSnapshot> StopServerAsync(
         string runtimeRoot,
         CancellationToken cancellationToken = default) =>
-        _lifecycle.StopServerAsync(runtimeRoot, cancellationToken);
+        StopServerAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> StopServerAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default) =>
+        _lifecycle.StopServerAsync(runtimeRoot, serverEnvironment, cancellationToken);
 
     public Task<LifecycleSnapshot> StopAllAsync(
         string runtimeRoot,
         CancellationToken cancellationToken = default) =>
-        _lifecycle.StopAllAsync(runtimeRoot, cancellationToken);
+        StopAllAsync(runtimeRoot, ServerEnvironmentKind.Stable, cancellationToken);
+
+    public Task<LifecycleSnapshot> StopAllAsync(
+        string runtimeRoot,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken = default) =>
+        _lifecycle.StopAllAsync(runtimeRoot, serverEnvironment, cancellationToken);
+
+    public Task<LifecycleSnapshot> RepairClientAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        CancellationToken cancellationToken = default) =>
+        RepairClientAsync(runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken);
 
     public async Task<LifecycleSnapshot> RepairClientAsync(
         string runtimeRoot,
         LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
         CancellationToken cancellationToken = default)
     {
-        var state = await _lifecycle.RepairClientAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+        if (serverEnvironment == ServerEnvironmentKind.CombatCanary)
+        {
+            throw new NotSupportedException(
+                "CombatCanary client repair is owned by its sealed initialization and reset workflow.");
+        }
+
+        var state = await _lifecycle.RepairClientAsync(
+            runtimeRoot, selection, serverEnvironment, cancellationToken).ConfigureAwait(false);
         await _runtimeProfileGuard.ValidateAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
         await WriteSelectionAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
         return state;
@@ -135,7 +252,8 @@ public sealed class LauncherCoordinator : IAsyncDisposable
             graphics,
             MonitorOption.PrimaryPhysical,
             LauncherWindowMode.ProfileDefault);
-        var state = await StartSessionAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+        var state = await StartSessionAsync(
+            runtimeRoot, selection, ServerEnvironmentKind.Stable, cancellationToken).ConfigureAwait(false);
         var health = await CheckHealthAsync(manifest, cancellationToken).ConfigureAwait(false);
         if (!state.ClientRunning || health.Count == 0 || health.Any(port => !port.IsHealthy))
         {
@@ -156,6 +274,35 @@ public sealed class LauncherCoordinator : IAsyncDisposable
             selection.ToLaunchProfile(),
             selection,
             cancellationToken);
+
+    private async Task PrepareSelectionAsync(
+        string runtimeRoot,
+        LifecycleSelection selection,
+        ServerEnvironmentKind serverEnvironment,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (serverEnvironment == ServerEnvironmentKind.CombatCanary)
+        {
+            if (selection.Channel != ReleaseChannel.Stable
+                || selection.Profile != GraphicsProfileOption.SafeNative
+                || selection.WindowMode != LauncherWindowMode.ProfileDefault)
+            {
+                throw new InvalidOperationException(
+                    "CombatCanary uses only its sealed Native client with profile-default presentation.");
+            }
+
+            return;
+        }
+
+        if (serverEnvironment != ServerEnvironmentKind.Stable)
+        {
+            throw new ArgumentOutOfRangeException(nameof(serverEnvironment));
+        }
+
+        await _runtimeProfileGuard.ValidateAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+        await WriteSelectionAsync(runtimeRoot, selection, cancellationToken).ConfigureAwait(false);
+    }
 }
 
 public sealed record LaunchResult(

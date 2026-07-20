@@ -60,7 +60,9 @@
         <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,10,0,0" Orientation="Horizontal">
           <Button Command="{Binding LoadManifestCommand}" Content="Load manifest" />
           <Button Command="{Binding VerifyCommand}" Content="Verify files" />
-          <Button Command="{Binding RepairCommand}" Content="Verify / repair client" />
+          <Button Command="{Binding RepairCommand}"
+                  Content="Verify / repair client"
+                  IsEnabled="{Binding StableGraphicsSelectionEnabled}" />
           <TextBlock VerticalAlignment="Center" Foreground="#333" Text="{Binding ManifestSummary}" />
         </StackPanel>
       </Grid>
@@ -69,6 +71,7 @@
     <GroupBox Grid.Row="2" Header="Launch profile" Margin="0,0,0,12" Padding="12">
       <Grid>
         <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -84,16 +87,22 @@
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <TextBlock Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center" Text="Channel" />
-        <ComboBox Grid.Column="1" ItemsSource="{Binding Channels}" SelectedItem="{Binding SelectedChannel}" />
-        <TextBlock Grid.Column="2" Margin="18,0,8,0" VerticalAlignment="Center" Text="Profile" />
-        <ComboBox Grid.Column="3" ItemsSource="{Binding GraphicsProfiles}" SelectedItem="{Binding SelectedGraphicsProfile}" />
-        <TextBlock Grid.Column="4" Margin="18,0,8,0" VerticalAlignment="Center" Text="Monitor" />
-        <ComboBox Grid.Column="5" ItemsSource="{Binding Monitors}" SelectedItem="{Binding SelectedMonitor}" />
-        <TextBlock Grid.Column="6" Margin="18,0,8,0" VerticalAlignment="Center" Text="Window" />
-        <ComboBox Grid.Column="7" ItemsSource="{Binding WindowModes}" SelectedItem="{Binding SelectedWindowMode}" />
-        <CheckBox Grid.Column="8" Margin="18,0,0,0" VerticalAlignment="Center" IsChecked="{Binding SafeMode}" Content="Safe mode" />
-        <CheckBox Grid.Row="1"
+        <TextBlock Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center" Text="Server environment" />
+        <ComboBox Grid.Column="1"
+                  Grid.ColumnSpan="3"
+                  ItemsSource="{Binding ServerEnvironments}"
+                  SelectedItem="{Binding SelectedServerEnvironment}" />
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,10,8,0" VerticalAlignment="Center" Text="Channel" />
+        <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,10,0,0" IsEnabled="{Binding StableGraphicsSelectionEnabled}" ItemsSource="{Binding Channels}" SelectedItem="{Binding SelectedChannel}" />
+        <TextBlock Grid.Row="1" Grid.Column="2" Margin="18,10,8,0" VerticalAlignment="Center" Text="Profile" />
+        <ComboBox Grid.Row="1" Grid.Column="3" Margin="0,10,0,0" IsEnabled="{Binding StableGraphicsSelectionEnabled}" ItemsSource="{Binding GraphicsProfiles}" SelectedItem="{Binding SelectedGraphicsProfile}" />
+        <TextBlock Grid.Row="1" Grid.Column="4" Margin="18,10,8,0" VerticalAlignment="Center" Text="Monitor" />
+        <ComboBox Grid.Row="1" Grid.Column="5" Margin="0,10,0,0" IsEnabled="{Binding StableGraphicsSelectionEnabled}" ItemsSource="{Binding Monitors}" SelectedItem="{Binding SelectedMonitor}" />
+        <TextBlock Grid.Row="1" Grid.Column="6" Margin="18,10,8,0" VerticalAlignment="Center" Text="Window" />
+        <ComboBox Grid.Row="1" Grid.Column="7" Margin="0,10,0,0" IsEnabled="{Binding StableGraphicsSelectionEnabled}" ItemsSource="{Binding WindowModes}" SelectedItem="{Binding SelectedWindowMode}" />
+        <CheckBox Grid.Row="1" Grid.Column="8" Margin="18,10,0,0" VerticalAlignment="Center" IsEnabled="{Binding StableGraphicsSelectionEnabled}" IsChecked="{Binding SafeMode}" Content="Safe mode" />
+        <CheckBox Grid.Row="2"
                   Grid.Column="1"
                   Grid.ColumnSpan="8"
                   Margin="0,10,0,0"

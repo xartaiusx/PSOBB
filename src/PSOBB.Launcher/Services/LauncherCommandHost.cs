@@ -19,17 +19,23 @@ public sealed class LauncherCommandHost
         return options.Operation switch
         {
             LauncherOperation.Play or LauncherOperation.SafePlay =>
-                _coordinator.StartSessionAsync(options.RuntimeRoot, options.Selection, cancellationToken),
+                _coordinator.StartSessionAsync(
+                    options.RuntimeRoot, options.Selection, options.ServerEnvironment, cancellationToken),
             LauncherOperation.StartServer =>
-                _coordinator.StartServerAsync(options.RuntimeRoot, cancellationToken),
+                _coordinator.StartServerAsync(
+                    options.RuntimeRoot, options.ServerEnvironment, cancellationToken),
             LauncherOperation.StopServer =>
-                _coordinator.StopServerAsync(options.RuntimeRoot, cancellationToken),
+                _coordinator.StopServerAsync(
+                    options.RuntimeRoot, options.ServerEnvironment, cancellationToken),
             LauncherOperation.StartClient =>
-                _coordinator.StartClientAsync(options.RuntimeRoot, options.Selection, cancellationToken),
+                _coordinator.StartClientAsync(
+                    options.RuntimeRoot, options.Selection, options.ServerEnvironment, cancellationToken),
             LauncherOperation.StopClient =>
-                _coordinator.StopClientAsync(options.RuntimeRoot, cancellationToken),
+                _coordinator.StopClientAsync(
+                    options.RuntimeRoot, options.ServerEnvironment, cancellationToken),
             LauncherOperation.StopAll =>
-                _coordinator.StopAllAsync(options.RuntimeRoot, cancellationToken),
+                _coordinator.StopAllAsync(
+                    options.RuntimeRoot, options.ServerEnvironment, cancellationToken),
             LauncherOperation.Gui => throw new InvalidOperationException("GUI mode is not a headless lifecycle operation."),
             _ => throw new ArgumentOutOfRangeException(nameof(options)),
         };
@@ -40,10 +46,56 @@ public static class LauncherServices
 {
     public static LauncherCoordinator CreateCoordinator()
     {
+        var layout = new CanonicalLifecycleInstallationResolver().Resolve();
+        LauncherOptions.RequireExactConfiguredRuntimeRoot(
+            layout.RuntimeRoot,
+            Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT"));
+        return CreateCoordinator(layout.RuntimeRoot, layout);
+    }
+
+    public static LauncherCoordinator CreateCoordinator(string runtimeRoot)
+    {
+        var layout = new CanonicalLifecycleInstallationResolver().Resolve();
+        LauncherOptions.RequireExactConfiguredRuntimeRoot(
+            layout.RuntimeRoot,
+            Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT"));
+        return CreateCoordinator(runtimeRoot, layout);
+    }
+
+    internal static LauncherCoordinator CreateCoordinatorFromInstallationOrigin(
+        string runtimeRoot,
+        string installationOrigin,
+        string? configuredRuntimeRoot = null)
+    {
+        var layout = new CanonicalLifecycleInstallationResolver()
+            .ResolveFromOrigin(installationOrigin);
+        LauncherOptions.RequireExactConfiguredRuntimeRoot(
+            layout.RuntimeRoot,
+            configuredRuntimeRoot);
+        return CreateCoordinator(runtimeRoot, layout);
+    }
+
+    private static LauncherCoordinator CreateCoordinator(
+        string runtimeRoot,
+        CanonicalLifecycleLayout canonicalLayout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
+        var rootGuard = new CanonicalLifecycleRepositoryGuard(canonicalLayout.RepositoryRoot);
+        var requestedLayout = rootGuard.Validate(runtimeRoot);
+        if (!requestedLayout.RuntimeRoot.Equals(
+                canonicalLayout.RuntimeRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "The requested runtime does not match the launcher's canonical nested runtime.");
+        }
+
         var healthProbe = new LoopbackHealthProbe();
         var scriptController = new LifecycleScriptController(
-            new RuntimeLifecycleObserver(healthProbe),
-            new PowerShellLifecycleScriptExecutor());
+            new RuntimeLifecycleObserver(
+                new ExactRuntimeIdentityProbe(rootGuard),
+                rootGuard),
+            new PowerShellLifecycleScriptExecutor(rootGuard));
         return new LauncherCoordinator(
             new ArtifactVerifier(),
             healthProbe,

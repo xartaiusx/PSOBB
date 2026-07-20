@@ -37,7 +37,7 @@ public partial class App : Application
                 return;
             }
 
-            await using var coordinator = LauncherServices.CreateCoordinator();
+            await using var coordinator = LauncherServices.CreateCoordinator(options.RuntimeRoot);
             var snapshot = await new LauncherCommandHost(coordinator).ExecuteAsync(options);
             if (snapshot.State == LauncherLifecycleState.Faulted)
             {

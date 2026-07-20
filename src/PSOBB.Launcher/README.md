@@ -67,6 +67,15 @@ exits without starting or stopping either PSOBB process. Headless lifecycle
 commands do not take this UI mutex; their allowlisted PowerShell scripts retain
 the operation locks and remain the sole process authority.
 
+Lifecycle status is accepted only after the selected environment's schema-3
+record matches one live PID, tracked executable size and SHA-256, recorded
+exact FILETIME creation identity, and exactly the three process-owned loopback
+listeners. A live
+client additionally requires its tracked executable identity and materialized
+profile or CombatCanary client binding. Switching environments invalidates the
+displayed status until a fresh observation completes; a late result from the
+previous environment is discarded.
+
 `Install-PSOBBDesktopShortcuts.ps1` resolves the current user's Desktop through
 the Windows special-folder API, stages and verifies all three `.lnk` files
 before an atomic replacement, removes the obsolete Control Center link, and is
@@ -96,7 +105,7 @@ cannot fall back to the generic canary defaults:
   -PlayPreserveForeground
 ```
 
-Profile, monitor, and window-mode selection is written atomically to the schema-v2 `.launcher/active-profile.json` contract. Safe mode selects the stable native 4:3 runtime. Before client startup, the launcher checks the selected channel's materialized `client-profile.json`; a lab, modern, DXVK, or d3d8to9 selection is rejected unless that exact profile ID has actually been built. The private HD profile additionally requires D3D11, exact 2560x1600 true-16:10 output, a disabled watermark, no CAS or ReShade state, the exact local-only AshenbubsHD activation declaration, and exactly one hash-pinned project-owned LargeAssets ASI/INI module. Its **Verify / repair** operation runs activation `Verify`; it never rebuilds or silently reinstalls private assets. The known dgVoodoo clarity profile additionally requires D3D11, 2560x1600 output, the approved 3840x2880 4:3 preset, preserved aspect ratio, and a disabled watermark.
+Profile, monitor, and window-mode selection is written atomically to the schema-v2 `.launcher/active-profile.json` contract for the Stable server environment. Safe mode selects the stable native 4:3 runtime. The explicit CombatCanary server environment uses only its separately sealed Native client and does not read or rewrite the Stable graphics selection. Before Stable client startup, the launcher checks the selected channel's materialized `client-profile.json`; a lab, modern, DXVK, or d3d8to9 selection is rejected unless that exact profile ID has actually been built. The private HD profile additionally requires D3D11, exact 2560x1600 true-16:10 output, a disabled watermark, no CAS or ReShade state, the exact local-only AshenbubsHD activation declaration, and exactly one hash-pinned project-owned LargeAssets ASI/INI module. Its **Verify / repair** operation runs activation `Verify`; it never rebuilds or silently reinstalls private assets. The known dgVoodoo clarity profile additionally requires D3D11, 2560x1600 output, the approved 3840x2880 4:3 preset, preserved aspect ratio, and a disabled watermark.
 
 For the primary display profile, the renderer guard also enforces the
 watermark-free Ultra D3D11 configuration: 3840x2880 4:3 internal rendering,
@@ -112,22 +121,38 @@ Center does not stop either process.
 Exactly one operation may be supplied. Runtime, channel, profile, monitor, and
 window options never accept account or credential data.
 
+The launcher derives its one repository and nested `PSOBB-Runtime` from
+`AppContext.BaseDirectory`. It accepts `--runtime-root` or
+`PSOBB_RUNTIME_ROOT` only as redundant assertions of that exact path; neither
+an override nor the process current directory can select another repository.
+
+`--server-environment` accepts exactly `stable` or `combat-canary` and defaults
+to `stable`. CombatCanary is always explicit, uses its sealed Native client,
+and accepts only the sealed-equivalent `stable`, `safe-native-4x3`, and
+`profile-default` selection values. The three Desktop shortcuts remain
+Stable-default shortcuts; no additional shortcut is created.
+
 ```powershell
-PSOBB.Launcher.exe --play --channel canary --profile clarity-dgvoodoo-4x3 --window-mode borderless --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --runtime-root "C:\path\to\PSOBB-Runtime" --preserve-foreground
-PSOBB.Launcher.exe --safe-play --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --start-server --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --start-client --channel canary --profile clarity-dgvoodoo-4x3 --window-mode resizable --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --stop-client --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --stop-server --runtime-root "C:\path\to\PSOBB-Runtime"
-PSOBB.Launcher.exe --stop-all --runtime-root "C:\path\to\PSOBB-Runtime"
+PSOBB.Launcher.exe --play --channel canary --profile clarity-dgvoodoo-4x3 --window-mode borderless
+PSOBB.Launcher.exe --play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --preserve-foreground
+PSOBB.Launcher.exe --safe-play
+PSOBB.Launcher.exe --start-server
+PSOBB.Launcher.exe --start-client --channel canary --profile clarity-dgvoodoo-4x3 --window-mode resizable
+PSOBB.Launcher.exe --stop-client
+PSOBB.Launcher.exe --stop-server
+PSOBB.Launcher.exe --stop-all
+PSOBB.Launcher.exe --play --server-environment combat-canary --preserve-foreground
+PSOBB.Launcher.exe --start-server --server-environment combat-canary
+PSOBB.Launcher.exe --start-client --server-environment combat-canary
+PSOBB.Launcher.exe --stop-client --server-environment combat-canary
+PSOBB.Launcher.exe --stop-all --server-environment combat-canary
 ```
 
 `--stop-server` refuses while an approved client is active. `--stop-all`
 always requests client shutdown before the authenticated newserv shutdown
-script. The scripts directory is resolved from `PSOBB_SCRIPT_ROOT`, a parent
-repository directory, or the repository that contains the packaged nested
-`PSOBB-Runtime` directory.
+script. The launcher accepts only the nested runtime belonging to its own
+installation-derived repository and rejects missing, incomplete, ambiguous,
+redirected, or reparse-backed lifecycle layouts.
 
 ## Build and test
 

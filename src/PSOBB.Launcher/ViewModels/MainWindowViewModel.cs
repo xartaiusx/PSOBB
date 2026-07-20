@@ -10,9 +10,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly LauncherManifestLoader _manifestLoader;
     private readonly DiagnosticReportBuilder _diagnostics = new();
-    private readonly LauncherCoordinator _coordinator;
+    private readonly ILauncherCoordinator _coordinator;
     private string _manifestPath;
     private string _runtimeRoot;
+    private ServerEnvironmentKind _selectedServerEnvironment;
     private ReleaseChannel _selectedChannel;
     private GraphicsProfileOption _selectedGraphicsProfile;
     private MonitorOption _selectedMonitor;
@@ -26,31 +27,52 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private ReleaseManifest? _manifest;
     private ReleaseVerification? _verification;
     private IReadOnlyList<PortHealth> _portHealth = [];
+    private long _environmentGeneration;
 
     public MainWindowViewModel() : this(LauncherOptions.Defaults())
     {
     }
 
-    public MainWindowViewModel(LauncherOptions options)
+    public MainWindowViewModel(LauncherOptions options) : this(
+        options,
+        new LauncherManifestLoader(new ReleaseManifestService()),
+        LauncherServices.CreateCoordinator(options.RuntimeRoot))
+    {
+    }
+
+    internal MainWindowViewModel(
+        LauncherOptions options,
+        LauncherManifestLoader manifestLoader,
+        ILauncherCoordinator coordinator)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(manifestLoader);
+        ArgumentNullException.ThrowIfNull(coordinator);
         _manifestPath = options.ManifestPath;
         _runtimeRoot = options.RuntimeRoot;
-        _selectedChannel = options.Selection.Channel;
-        _selectedGraphicsProfile = options.Selection.Profile;
+        _selectedServerEnvironment = options.ServerEnvironment;
+        _selectedChannel = options.ServerEnvironment == ServerEnvironmentKind.CombatCanary
+            ? ReleaseChannel.Stable
+            : options.Selection.Channel;
+        _selectedGraphicsProfile = options.ServerEnvironment == ServerEnvironmentKind.CombatCanary
+            ? GraphicsProfileOption.SafeNative
+            : options.Selection.Profile;
         _selectedMonitor = options.Selection.Monitor;
-        _selectedWindowMode = options.Selection.WindowMode;
+        _selectedWindowMode = options.ServerEnvironment == ServerEnvironmentKind.CombatCanary
+            ? LauncherWindowMode.ProfileDefault
+            : options.Selection.WindowMode;
         _preserveForeground = options.Selection.PreserveForeground;
-        _safeMode = options.Selection.Profile.SafeMode;
+        _safeMode = _selectedGraphicsProfile.SafeMode;
 
-        _manifestLoader = new LauncherManifestLoader(new ReleaseManifestService());
-        _coordinator = LauncherServices.CreateCoordinator();
+        _manifestLoader = manifestLoader;
+        _coordinator = coordinator;
 
         BrowseManifestCommand = new RelayCommand(BrowseManifest);
         BrowseRuntimeCommand = new RelayCommand(BrowseRuntime);
         LoadManifestCommand = new AsyncRelayCommand(() => RunGuardedAsync(LoadManifestAsync));
         VerifyCommand = new AsyncRelayCommand(() => RunGuardedAsync(VerifyAsync));
-        RefreshStateCommand = new AsyncRelayCommand(() => RunGuardedAsync(RefreshStateAsync));
+        RefreshStateCommand = new AsyncRelayCommand(
+            () => RunEnvironmentGuardedAsync(RefreshStateAsync));
         StartSessionCommand = new AsyncRelayCommand(
             () => RunLifecycleAsync(LauncherLifecycleState.ServerStarting, StartSessionAsync));
         StartServerCommand = new AsyncRelayCommand(
@@ -70,6 +92,9 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public IReadOnlyList<ReleaseChannel> Channels { get; } = Enum.GetValues<ReleaseChannel>();
 
+    public IReadOnlyList<ServerEnvironmentKind> ServerEnvironments { get; } =
+        Enum.GetValues<ServerEnvironmentKind>();
+
     public IReadOnlyList<GraphicsProfileOption> GraphicsProfiles { get; } = GraphicsProfileOption.Supported;
 
     public IReadOnlyList<MonitorOption> Monitors { get; } = MonitorOption.Supported;
@@ -85,14 +110,50 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public string RuntimeRoot
     {
         get => _runtimeRoot;
-        set => SetProperty(ref _runtimeRoot, value);
+        set
+        {
+            if (SetProperty(ref _runtimeRoot, value))
+            {
+                Interlocked.Increment(ref _environmentGeneration);
+                InvalidateEnvironmentStatus();
+            }
+        }
     }
+
+    public ServerEnvironmentKind SelectedServerEnvironment
+    {
+        get => _selectedServerEnvironment;
+        set
+        {
+            if (!SetProperty(ref _selectedServerEnvironment, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(StableGraphicsSelectionEnabled));
+            if (value == ServerEnvironmentKind.CombatCanary)
+            {
+                SelectedChannel = ReleaseChannel.Stable;
+                SelectedGraphicsProfile = GraphicsProfileOption.SafeNative;
+                SelectedWindowMode = LauncherWindowMode.ProfileDefault;
+            }
+            Interlocked.Increment(ref _environmentGeneration);
+            InvalidateEnvironmentStatus();
+        }
+    }
+
+    public bool StableGraphicsSelectionEnabled =>
+        SelectedServerEnvironment == ServerEnvironmentKind.Stable;
 
     public ReleaseChannel SelectedChannel
     {
         get => _selectedChannel;
         set
         {
+            if (SelectedServerEnvironment == ServerEnvironmentKind.CombatCanary)
+            {
+                value = ReleaseChannel.Stable;
+            }
             if (!SetProperty(ref _selectedChannel, value) || _selectedGraphicsProfile.Channel == value)
             {
                 return;
@@ -114,6 +175,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         set
         {
             ArgumentNullException.ThrowIfNull(value);
+            if (SelectedServerEnvironment == ServerEnvironmentKind.CombatCanary)
+            {
+                value = GraphicsProfileOption.SafeNative;
+            }
             if (!SetProperty(ref _selectedGraphicsProfile, value))
             {
                 return;
@@ -137,7 +202,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public LauncherWindowMode SelectedWindowMode
     {
         get => _selectedWindowMode;
-        set => SetProperty(ref _selectedWindowMode, value);
+        set => SetProperty(
+            ref _selectedWindowMode,
+            SelectedServerEnvironment == ServerEnvironmentKind.CombatCanary
+                ? LauncherWindowMode.ProfileDefault
+                : value);
     }
 
     public bool PreserveForeground
@@ -151,6 +220,12 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         get => _safeMode;
         set
         {
+            if (SelectedServerEnvironment == ServerEnvironmentKind.CombatCanary)
+            {
+                SetProperty(ref _safeMode, true);
+                SelectedGraphicsProfile = GraphicsProfileOption.SafeNative;
+                return;
+            }
             if (!SetProperty(ref _safeMode, value))
             {
                 return;
@@ -176,6 +251,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public string LifecycleStateText => LifecycleState switch
     {
+        LauncherLifecycleState.Unknown => "Not observed",
         LauncherLifecycleState.Stopped => "Stopped",
         LauncherLifecycleState.ServerStarting => "Server starting",
         LauncherLifecycleState.ServerReady => "Server ready",
@@ -232,7 +308,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public ValueTask DisposeAsync() => _coordinator.DisposeAsync();
 
-    public Task InitializeAsync() => RunGuardedAsync(RefreshStateAsync);
+    public Task InitializeAsync() => RunEnvironmentGuardedAsync(RefreshStateAsync);
 
     private void BrowseManifest()
     {
@@ -266,10 +342,25 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private async Task LoadManifestAsync()
     {
         var loaded = await _manifestLoader.LoadAsync(ManifestPath, AppContext.BaseDirectory);
+        ApplyLoadedManifest(loaded);
+    }
+
+    internal void ApplyLoadedManifest(LoadedReleaseManifest loaded)
+    {
+        ArgumentNullException.ThrowIfNull(loaded);
         _manifest = loaded.Manifest;
         _verification = null;
         _portHealth = [];
-        SelectedChannel = _manifest.Channel;
+        if (SelectedServerEnvironment == ServerEnvironmentKind.Stable)
+        {
+            SelectedChannel = _manifest.Channel;
+        }
+        else
+        {
+            SelectedChannel = ReleaseChannel.Stable;
+            SelectedGraphicsProfile = GraphicsProfileOption.SafeNative;
+            SelectedWindowMode = LauncherWindowMode.ProfileDefault;
+        }
         ManifestSummary = FormatManifestSummary(_manifest, loaded.TrustMode);
         VerificationSummary = "Not verified.";
         Status = loaded.TrustMode == ManifestTrustMode.VerifiedDetachedSignature
@@ -287,30 +378,45 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             : "Verification failed. Launch remains blocked.";
     }
 
-    private async Task RefreshStateAsync() => ApplySnapshot(await _coordinator.ObserveAsync(RuntimeRoot));
-
-    private async Task StartSessionAsync() =>
-        ApplySnapshot(await _coordinator.StartSessionAsync(RuntimeRoot, CurrentSelection()));
-
-    private async Task StartServerAsync() =>
-        ApplySnapshot(await _coordinator.StartServerAsync(RuntimeRoot));
-
-    private async Task StartClientAsync() =>
-        ApplySnapshot(await _coordinator.StartClientAsync(RuntimeRoot, CurrentSelection()));
-
-    private async Task StopClientAsync() =>
-        ApplySnapshot(await _coordinator.StopClientAsync(RuntimeRoot));
-
-    private async Task StopServerAsync() =>
-        ApplySnapshot(await _coordinator.StopServerAsync(RuntimeRoot));
-
-    private async Task StopAllAsync() =>
-        ApplySnapshot(await _coordinator.StopAllAsync(RuntimeRoot));
-
-    private async Task RepairAsync()
+    private async Task RefreshStateAsync(EnvironmentRequest request)
     {
-        ApplySnapshot(await _coordinator.RepairClientAsync(RuntimeRoot, CurrentSelection()));
-        Status = $"Profile '{SelectedGraphicsProfile.Id}' was verified or repaired through its approved runtime script.";
+        var snapshot = await _coordinator.ObserveAsync(
+            request.RuntimeRoot, request.ServerEnvironment);
+        TryApplySnapshot(snapshot, request);
+    }
+
+    private async Task StartSessionAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StartSessionAsync(
+            request.RuntimeRoot, request.Selection, request.ServerEnvironment), request);
+
+    private async Task StartServerAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StartServerAsync(
+            request.RuntimeRoot, request.ServerEnvironment), request);
+
+    private async Task StartClientAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StartClientAsync(
+            request.RuntimeRoot, request.Selection, request.ServerEnvironment), request);
+
+    private async Task StopClientAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StopClientAsync(
+            request.RuntimeRoot, request.ServerEnvironment), request);
+
+    private async Task StopServerAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StopServerAsync(
+            request.RuntimeRoot, request.ServerEnvironment), request);
+
+    private async Task StopAllAsync(EnvironmentRequest request) =>
+        TryApplySnapshot(await _coordinator.StopAllAsync(
+            request.RuntimeRoot, request.ServerEnvironment), request);
+
+    private async Task RepairAsync(EnvironmentRequest request)
+    {
+        var applied = TryApplySnapshot(await _coordinator.RepairClientAsync(
+            request.RuntimeRoot, request.Selection, request.ServerEnvironment), request);
+        if (applied)
+        {
+            Status = $"Profile '{request.Selection.Profile.Id}' was verified or repaired through its approved runtime script.";
+        }
     }
 
     private async Task ExportDiagnosticsAsync()
@@ -360,16 +466,54 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectedWindowMode,
         PreserveForeground);
 
-    private void ApplySnapshot(LifecycleSnapshot snapshot)
+    private bool TryApplySnapshot(LifecycleSnapshot snapshot, EnvironmentRequest request)
     {
+        if (!IsCurrent(request))
+        {
+            return false;
+        }
         LifecycleState = snapshot.State;
         Status = snapshot.Detail;
+        return true;
     }
 
-    private async Task RunLifecycleAsync(LauncherLifecycleState transitionalState, Func<Task> operation)
+    private async Task RunLifecycleAsync(
+        LauncherLifecycleState transitionalState,
+        Func<EnvironmentRequest, Task> operation)
     {
+        var request = CaptureEnvironmentRequest();
         LifecycleState = transitionalState;
-        await RunGuardedAsync(operation);
+        Status = "Working...";
+        try
+        {
+            await operation(request);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            if (IsCurrent(request))
+            {
+                LifecycleState = LauncherLifecycleState.Faulted;
+                Status = exception.Message;
+            }
+        }
+    }
+
+    private async Task RunEnvironmentGuardedAsync(Func<EnvironmentRequest, Task> operation)
+    {
+        var request = CaptureEnvironmentRequest();
+        Status = "Working...";
+        try
+        {
+            await operation(request);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            if (IsCurrent(request))
+            {
+                LifecycleState = LauncherLifecycleState.Faulted;
+                Status = exception.Message;
+            }
+        }
     }
 
     private async Task RunGuardedAsync(Func<Task> operation)
@@ -386,6 +530,24 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private EnvironmentRequest CaptureEnvironmentRequest() => new(
+        Interlocked.Read(ref _environmentGeneration),
+        RuntimeRoot,
+        SelectedServerEnvironment,
+        CurrentSelection());
+
+    private bool IsCurrent(EnvironmentRequest request) =>
+        Interlocked.Read(ref _environmentGeneration) == request.Generation
+        && SelectedServerEnvironment == request.ServerEnvironment
+        && RuntimeRoot.Equals(
+            request.RuntimeRoot, StringComparison.OrdinalIgnoreCase);
+
+    private void InvalidateEnvironmentStatus()
+    {
+        LifecycleState = LauncherLifecycleState.Unknown;
+        Status = "Server environment changed; refresh is required before lifecycle status is accepted.";
+    }
+
     private static string FormatVerification(ReleaseVerification verification) => string.Join(
         Environment.NewLine,
         verification.Files.Select(file => $"{file.Status,-12} {file.Id}: {file.Detail}"));
@@ -393,4 +555,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private static string FormatManifestSummary(ReleaseManifest manifest, ManifestTrustMode trustMode) =>
         $"{manifest.ReleaseId} | {manifest.Channel} | protocol {manifest.ProtocolRevision} | {manifest.Artifacts.Count} artifacts | "
         + (trustMode == ManifestTrustMode.VerifiedDetachedSignature ? "signature verified" : "unsigned local");
+
+    private sealed record EnvironmentRequest(
+        long Generation,
+        string RuntimeRoot,
+        ServerEnvironmentKind ServerEnvironment,
+        LifecycleSelection Selection);
 }

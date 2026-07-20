@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using PSOBB.Launcher.Services;
 
 namespace PSOBB.Launcher.Models;
 
@@ -18,6 +19,7 @@ public sealed record LauncherOptions(
     LauncherOperation Operation,
     string RuntimeRoot,
     string ManifestPath,
+    ServerEnvironmentKind ServerEnvironment,
     LifecycleSelection Selection)
 {
     public static LauncherOptions Defaults()
@@ -34,6 +36,7 @@ public sealed record LauncherOptions(
             LauncherOperation.Gui,
             Path.GetFullPath(runtimeRoot),
             Path.Combine(Path.GetFullPath(runtimeRoot), "stable", "release-manifest.json"),
+            ServerEnvironmentKind.Stable,
             LifecycleSelection.Create(
                 ReleaseChannel.Stable,
                 profile,
@@ -41,37 +44,40 @@ public sealed record LauncherOptions(
                 LauncherWindowMode.ProfileDefault));
     }
 
-    internal static string ResolveDefaultRuntimeRoot(
-        string? configured = null,
-        IEnumerable<string>? origins = null)
+    internal static string ResolveDefaultRuntimeRoot()
     {
-        configured ??= Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT");
-        if (!string.IsNullOrWhiteSpace(configured))
+        var layout = new CanonicalLifecycleInstallationResolver().Resolve();
+        return RequireExactConfiguredRuntimeRoot(
+            layout.RuntimeRoot,
+            Environment.GetEnvironmentVariable("PSOBB_RUNTIME_ROOT"));
+    }
+
+    internal static string ResolveDefaultRuntimeRoot(
+        string installationOrigin,
+        string? configuredRuntimeRoot)
+    {
+        var layout = new CanonicalLifecycleInstallationResolver()
+            .ResolveFromOrigin(installationOrigin);
+        return RequireExactConfiguredRuntimeRoot(layout.RuntimeRoot, configuredRuntimeRoot);
+    }
+
+    internal static string RequireExactConfiguredRuntimeRoot(
+        string canonicalRuntimeRoot,
+        string? configuredRuntimeRoot)
+    {
+        if (string.IsNullOrWhiteSpace(configuredRuntimeRoot))
         {
-            return Path.GetFullPath(configured);
+            return canonicalRuntimeRoot;
         }
 
-        origins ??= [AppContext.BaseDirectory, Environment.CurrentDirectory];
-        foreach (var origin in origins)
+        var configured = Path.GetFullPath(configuredRuntimeRoot);
+        if (!configured.Equals(canonicalRuntimeRoot, StringComparison.OrdinalIgnoreCase))
         {
-            var cursor = new DirectoryInfo(Path.GetFullPath(origin));
-            for (var depth = 0; cursor is not null && depth < 12; depth++, cursor = cursor.Parent)
-            {
-                if (string.Equals(cursor.Name, "PSOBB-Runtime", StringComparison.OrdinalIgnoreCase))
-                {
-                    return cursor.FullName;
-                }
-
-                if (File.Exists(Path.Combine(cursor.FullName, "scripts", "Start-PSOBB.ps1")))
-                {
-                    return Path.Combine(cursor.FullName, "PSOBB-Runtime");
-                }
-            }
+            throw new InvalidOperationException(
+                "PSOBB_RUNTIME_ROOT does not exactly match the launcher's canonical nested runtime.");
         }
 
-        throw new InvalidOperationException(
-            "Could not locate the canonical nested PSOBB-Runtime directory. Use --runtime-root " +
-            "or set PSOBB_RUNTIME_ROOT explicitly.");
+        return canonicalRuntimeRoot;
     }
 }
 
@@ -79,16 +85,35 @@ public static partial class LauncherCommandLine
 {
     public static LauncherOptions Parse(IReadOnlyList<string> arguments)
     {
+        return ParseWithCanonicalRuntime(
+            arguments,
+            LauncherOptions.ResolveDefaultRuntimeRoot());
+    }
+
+    internal static LauncherOptions ParseFromInstallationOrigin(
+        IReadOnlyList<string> arguments,
+        string installationOrigin,
+        string? configuredRuntimeRoot = null)
+    {
+        return ParseWithCanonicalRuntime(
+            arguments,
+            LauncherOptions.ResolveDefaultRuntimeRoot(
+                installationOrigin,
+                configuredRuntimeRoot));
+    }
+
+    private static LauncherOptions ParseWithCanonicalRuntime(
+        IReadOnlyList<string> arguments,
+        string canonicalRuntimeRoot)
+    {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var explicitRuntimeRoot = FindExplicitRuntimeRoot(arguments);
-        var defaults = explicitRuntimeRoot is null
-            ? LauncherOptions.Defaults()
-            : LauncherOptions.Defaults(explicitRuntimeRoot);
+        var defaults = LauncherOptions.Defaults(canonicalRuntimeRoot);
         var operation = LauncherOperation.Gui;
         var operationWasSet = false;
         var runtimeRoot = defaults.RuntimeRoot;
         var manifestPath = defaults.ManifestPath;
+        var serverEnvironment = defaults.ServerEnvironment;
         ReleaseChannel? channel = null;
         string? profileId = null;
         string? monitorId = null;
@@ -142,10 +167,16 @@ public static partial class LauncherCommandLine
                     RequireNoValue(option, inlineValue);
                     break;
                 case "--runtime-root":
-                    runtimeRoot = ReadValue(option, inlineValue, arguments, ref index);
+                    runtimeRoot = RequireExactRuntimeRoot(
+                        ReadValue(option, inlineValue, arguments, ref index),
+                        canonicalRuntimeRoot);
                     break;
                 case "--manifest":
                     manifestPath = ReadValue(option, inlineValue, arguments, ref index);
+                    break;
+                case "--server-environment":
+                    serverEnvironment = ParseServerEnvironment(
+                        ReadValue(option, inlineValue, arguments, ref index));
                     break;
                 case "--channel":
                     channel = ParseChannel(ReadValue(option, inlineValue, arguments, ref index));
@@ -170,11 +201,13 @@ public static partial class LauncherCommandLine
 
         if (operation == LauncherOperation.SafePlay)
         {
-            if ((channel is not null && channel != ReleaseChannel.Stable)
+            if (serverEnvironment != ServerEnvironmentKind.Stable
+                || (channel is not null && channel != ReleaseChannel.Stable)
                 || (profileId is not null
                     && !profileId.Equals(GraphicsProfileOption.SafeNative.Id, StringComparison.OrdinalIgnoreCase)))
             {
-                throw new ArgumentException("--safe-play cannot be combined with a non-stable channel or non-safe profile.");
+                throw new ArgumentException(
+                    "--safe-play requires the Stable server environment, Stable channel, and safe native profile.");
             }
 
             channel = ReleaseChannel.Stable;
@@ -193,16 +226,27 @@ public static partial class LauncherCommandLine
             : MonitorOption.Supported.SingleOrDefault(
                 candidate => candidate.Id.Equals(monitorId, StringComparison.OrdinalIgnoreCase))
                 ?? throw new ArgumentException($"Unknown or ineligible monitor target '{monitorId}'.");
+        var selectedWindowMode = windowMode ?? defaults.Selection.WindowMode;
+
+        if (serverEnvironment == ServerEnvironmentKind.CombatCanary
+            && (selectedChannel != ReleaseChannel.Stable
+                || selectedProfile != GraphicsProfileOption.SafeNative
+                || selectedWindowMode != LauncherWindowMode.ProfileDefault))
+        {
+            throw new ArgumentException(
+                "The CombatCanary server environment uses only its sealed Native client with profile-default presentation.");
+        }
 
         return new(
             operation,
             Path.GetFullPath(runtimeRoot),
             Path.GetFullPath(manifestPath),
+            serverEnvironment,
             LifecycleSelection.Create(
                 selectedChannel,
                 selectedProfile,
                 selectedMonitor,
-                windowMode ?? defaults.Selection.WindowMode,
+                selectedWindowMode,
                 preserveForeground));
 
         void SetOperation(LauncherOperation selected)
@@ -233,6 +277,13 @@ public static partial class LauncherCommandLine
         _ => throw new ArgumentException("--channel must be stable, canary, or local-lab."),
     };
 
+    private static ServerEnvironmentKind ParseServerEnvironment(string value) => value.ToLowerInvariant() switch
+    {
+        "stable" => ServerEnvironmentKind.Stable,
+        "combat-canary" => ServerEnvironmentKind.CombatCanary,
+        _ => throw new ArgumentException("--server-environment must be stable or combat-canary."),
+    };
+
     private static LauncherWindowMode ParseWindowMode(string value) => value.ToLowerInvariant() switch
     {
         "profile-default" => LauncherWindowMode.ProfileDefault,
@@ -253,30 +304,18 @@ public static partial class LauncherCommandLine
             : throw new ArgumentException($"{option} must contain only ASCII letters, numbers, periods, underscores, or hyphens.");
     }
 
-    private static string? FindExplicitRuntimeRoot(IReadOnlyList<string> arguments)
+    private static string RequireExactRuntimeRoot(
+        string requestedRuntimeRoot,
+        string canonicalRuntimeRoot)
     {
-        string? value = null;
-        for (var index = 0; index < arguments.Count; index++)
+        var requested = Path.GetFullPath(requestedRuntimeRoot);
+        if (!requested.Equals(canonicalRuntimeRoot, StringComparison.OrdinalIgnoreCase))
         {
-            var argument = arguments[index];
-            if (string.Equals(argument, "--runtime-root", StringComparison.OrdinalIgnoreCase))
-            {
-                if (index + 1 < arguments.Count)
-                {
-                    value = arguments[index + 1];
-                    index++;
-                }
-                continue;
-            }
-
-            const string prefix = "--runtime-root=";
-            if (argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                value = argument[prefix.Length..];
-            }
+            throw new ArgumentException(
+                "--runtime-root must exactly match the launcher's canonical nested runtime.");
         }
 
-        return string.IsNullOrWhiteSpace(value) ? null : value;
+        return canonicalRuntimeRoot;
     }
 
     private static string ReadValue(
