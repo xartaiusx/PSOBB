@@ -77,6 +77,24 @@ Reject promotion for any:
 Do not weaken a gate to accept a candidate. Record the failure, roll back, and
 keep the last accepted profile.
 
+## 2026-07-20 source-only gate
+
+The implementation range from `6f5e78b` through `96bcddc`, inclusive, passed
+the source-only Phase 0 gate. The protected receipt is
+`combat-canary/evidence/source-gate-20260720T064219Z/source-gate.json`
+(SHA-256
+`78b6b71930584677ef99e0418c52771e33bc53790c5f4a840f95e4d80b0cddf5`).
+Its recovery-matrix manifest is
+`combat-canary/evidence/source-gate-20260720T064219Z/recovery-matrix/manifest.json`
+(SHA-256
+`1a74b37efd900782b35b82641b76d1296f3174fd00c5c876b322914c56a7d20c`).
+
+This gate verifies source behavior only. It did not run the canonical
+runtime-marker migration or a real restore drill, materialize CombatCanary, or
+run either five-minute Twills smoke. A verified immutable canary server artifact
+exists in `server-base\release`; no server is selected into `server\release`
+and no client, binding, snapshot, or mutable canary state is installed.
+
 ## Phase 0 acceptance matrix
 
 | Gate | Current status | Required evidence |
@@ -86,10 +104,12 @@ keep the last accepted profile.
 | Canonical path and remnant audit | Accepted; recheck before materialization | Retired paths absent; nested runtime only |
 | Three Desktop shortcuts | Accepted; recheck before materialization | Exact roles, canonical launcher, no credentials |
 | Saved login/graphics and shared RenderDoc | Preserved; recheck before materialization | Metadata/digest-only readback |
-| CombatCanary layout and ACL isolation | Implemented | Isolation and ACL suites |
-| Reproducible canary server | Pending final review | Hermetic two-clean-build equality and source-lock proof |
-| Sealed Twills snapshot/transaction | Pending final review | Strict JSON, exact inventories, rollback fault matrix |
-| CombatCanary lifecycle/launcher | Pending final integration | Environment-specific start/observe/stop tests |
+| CombatCanary layout and ACL isolation | Source verified; canonical migration/recheck pending | Isolation, ACL, and recovery suites |
+| Reproducible canary server | Source verified 2026-07-20; not live accepted | Offline-input deterministic two-clean-build equality, source-lock proof, and Verify; native sockets are not OS-denied |
+| Sealed Twills snapshot/transaction | Source verified 2026-07-20; no canonical snapshot created | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
+| CombatCanary lifecycle/launcher | Source verified 2026-07-20; not live accepted | Environment-specific start/observe/stop and launcher tests |
+| Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
+| Current real Stable restore drill | Not run | Protected schema-v3 drill receipt and clean termination |
 | CombatCanary materialization | Not started | Clean-tree, stopped-state, signed install readback |
 | Five-minute canary and canonical smokes | Not started | Ledger entry plus restored snapshot proof |
 
@@ -99,8 +119,10 @@ keep the last accepted profile.
   environments and clients are stopped.
 - Canary state rollback: use the signed snapshot reset workflow; never copy
   individual account/player files by hand.
-- Server artifact rollback: select only a previously verified canary build;
-  Stable is not replaced by canary promotion.
+- Server artifact rollback: failed replacement publication automatically
+  restores the immediately prior release. No supported post-success
+  release-selection or rollback command exists; Stable is never replaced by
+  canary publication.
 - Lifecycle rollback: graceful Stop All first, then verify the environment's
   authenticated control records, processes, and listeners are absent.
 

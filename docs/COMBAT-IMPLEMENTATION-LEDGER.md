@@ -65,3 +65,89 @@ Each entry records:
 - Evidence location: none promoted
 - Limitation: open build and state review findings prevent materialization
 - Rollback: keep all PSOBB processes stopped and do not initialize CombatCanary
+
+## 2026-07-20 / stable-native-forest-v1-rollback-correction
+
+- Correction target: `stable-native-forest-v1`
+- Reason: the earlier entry named the protected Stable backup/restore workflow
+  but did not record its exact stopped-runtime command sequence
+- Outcome: documentation correction only; the 2026-07-19 Stable Native
+  acceptance result is unchanged
+- Exact rollback procedure:
+
+  ```powershell
+  $runtimeRoot = "C:\Github Repo's\PSOBB\PSOBB-Runtime"
+  $backupPath = '<verified-protected-stable-backup>'
+
+  & .\scripts\Stop-PSOBBSession.ps1 `
+    -RuntimeRoot $runtimeRoot `
+    -ServerEnvironment Stable `
+    -Target All
+  & .\scripts\Restore-PSOBB.ps1 `
+    -RuntimeRoot $runtimeRoot `
+    -BackupPath $backupPath `
+    -ValidateOnly
+  & .\scripts\Restore-PSOBB.ps1 `
+    -RuntimeRoot $runtimeRoot `
+    -BackupPath $backupPath `
+    -Confirm:$false
+  & .\scripts\Set-PSOBBClientPatchProfile.ps1 `
+    -RuntimeRoot $runtimeRoot `
+    -Profile baseline `
+    -Confirm:$false
+  & .\scripts\Test-PSOBB.ps1 `
+    -RuntimeRoot $runtimeRoot `
+    -Suite Baseline
+  ```
+
+- Semantic readback: run `Test-PSOBBCharacterBuild.ps1` against the restored
+  private slot-0 Twills character and `Test-PSOBBTwillsBank.ps1` against the
+  restored private slot-0 bank with the exact tracked build-contract SHA-256;
+  do not record either private path in Git
+- Limitation: this correction supplies a procedure; it does not record a new
+  restore or live gameplay run
+
+## 2026-07-20 / phase0-source-gate-v1
+
+- Feature/profile: Phase 0 deterministic canary build, isolated signed state,
+  environment lifecycle/launcher, ACL, and recovery source implementation
+- Outcome: source-only gate passed; no CombatCanary runtime or combat feature is
+  accepted by this entry
+- Implementation commits: inclusive range `6f5e78b` through `96bcddc`
+- Source and artifact identities: pinned newserv source
+  `d754a34e271a4fb387be63db34ef0c303e49dcf2`; deterministic canary executable
+  SHA-256
+  `3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a`;
+  build contract SHA-256
+  `d2019c44b677ae238c005e38f72c12e9da8cc7af9c7ef20395ea4622b67d6e7a`;
+  Twills FOnewearl contract SHA-256
+  `1582691fe1cb3019e7ee33e303d0d7811a9bf271e505bae22580e094b3ee1fd1`;
+  exact Native 59NL client SHA-256
+  `dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535`;
+  no Gameplay module exists yet
+- Tests: build 50/50 plus successful Verify; independent state 105/105;
+  launcher/lifecycle/graphics 397/397; recovery/client 256/256; recovery
+  transaction fault matrix 138/138
+- Scenario: source-only; live identity not logged in, active scenario not run,
+  duration 0 seconds
+- State result: the immutable canary server artifact was published and verified,
+  but `canonicalStateMaterialized = false`; no canonical snapshot, selected
+  server, base/playable canary client, account, player, team, or binding state
+  was created
+- Evidence location:
+  `combat-canary/evidence/source-gate-20260720T064219Z/source-gate.json`
+  (SHA-256
+  `78b6b71930584677ef99e0418c52771e33bc53790c5f4a840f95e4d80b0cddf5`)
+- Recovery-matrix manifest:
+  `combat-canary/evidence/source-gate-20260720T064219Z/recovery-matrix/manifest.json`
+  (SHA-256
+  `1a74b37efd900782b35b82641b76d1296f3174fd00c5c876b322914c56a7d20c`)
+- Limitation: canonical runtime-marker migration, a current real restore drill,
+  CombatCanary materialization, isolated five-minute Twills smoke, and
+  non-destructive canonical five-minute Twills smoke have not run. Failed
+  server replacement publication can restore the immediately prior release,
+  but no supported post-success release-selection or rollback command exists.
+- Source rollback procedure: with every PSOBB process stopped and the Git tree
+  clean, run `git status --short` and then `git switch psobb-fidelity`. No
+  runtime rollback is required because this source gate materialized no
+  canonical state.

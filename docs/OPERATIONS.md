@@ -2,7 +2,7 @@
 
 1. Run `Initialize-PSOBB.ps1` to verify archives, preserve the clean base,
    generate the loopback configuration, synchronize BB data, and bind the
-   tracked `stable-qol` client-patch profile to the installation record.
+   tracked empty `baseline` client-patch profile to the installation record.
 2. Run `Initialize-PSOBBClientRegistry.ps1`; it installs only the required
    per-user game values and disables the archive's obsolete web links.
 3. Harden the sensitive game-state, secrets, backup, log, private-asset, and
@@ -17,16 +17,42 @@
    contents. Re-run the setter and verifier after creating or restoring runtime
    state because newly created children can inherit their parent DACL.
 
+   The 2026-07-20 source-only gate did not run the canonical runtime-marker
+   migration. If the normal setter reports the one recognized inherited legacy
+   marker DACL, preview and then apply only this explicit migration:
+
    ```powershell
+   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
+     -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
+     -MigrateLegacyRuntimeMarkerAcl `
+     -WhatIf
+
+   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
+     -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
+     -MigrateLegacyRuntimeMarkerAcl `
+     -Confirm:$false
+   ```
+
+   Migration accepts no other ACL shape. It holds the exact native file
+   identity and bytes, revalidates owner, group, DACL, process/listener state,
+   and writes only the DACL. Failure rollback is attempted only while the
+   captured post-write identity and protected DACL still match exactly. Unknown
+   or concurrently changed state remains untouched for investigation.
+
+   After migration, apply the complete target inventory and verify it:
+
+   ```powershell
+   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Confirm:$false
    pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime"
    ```
 
-   The current local target inventory is licenses (including account/license
-   records), players, teams, secrets, backups, logs, graphics evidence, local
-   asset archives, staged asset overlays, Ashenbubs activation state, and
-   supplemental visual-asset activation state. Server configuration and future
+   The current target inventory includes Stable licenses, players, teams,
+   secrets, backups, and logs; graphics evidence; local asset archives; staged
+   asset overlays; Ashenbubs and supplemental visual-asset activation state;
+   and any existing CombatCanary licenses, players, teams, secrets, backups,
+   logs, snapshots, control records, and builds. Server configuration and future
    portal state are not silently treated as covered; add them to the shared
-   policy when those stores are deliberately brought under this ACL boundary.
+   policy only when those stores deliberately enter this ACL boundary.
 4. Generate and provision `Admin` and `Player` credentials with the two-step
    `New-PSOBBAccount.ps1` commands in the root README. Passwords are not
    printed or placed in process arguments. Never run or capture newserv's
@@ -99,6 +125,164 @@
    `Backup-PSOBB.ps1` and `Test-PSOBBRestoreDrill.ps1`.
 9. Back up state before any server, client, map, quest, or save-format change.
 
+## Restore-drill quarantine
+
+The 2026-07-20 source-only gate tested restore-drill behavior with synthetic
+fixtures; it did not run a real drill against the canonical runtime. A real
+successful drill writes a protected schema-v3 `drill-result.json`. Its bounded
+identity and termination fields include `approvedServerExecutableSha256`,
+`serverExecutableSha256`, `processId`, `processStartTimeFileTimeUtc`,
+`processImageVerified`, `quarantineReason`, `quarantinePublicationState`, and
+`quarantineNextAction`.
+
+If process exit or either bounded output reader cannot be confirmed, preserve
+the complete protected drill root. The primary record is
+`.restore-drill-quarantine.json`; if primary publication fails, the fallback is
+`.restore-drill-quarantine-incomplete.json`. If neither record can be confirmed,
+the protected `.work` tree and result remain the cleanup hold. The only accepted
+reasons are `exit-unconfirmed` and `output-reader-unconfirmed`.
+
+Do not remove a quarantine merely because a timeout elapsed. First confirm that
+the recorded PID with its exact start-time identity and executable digest is
+absent and that ports 11000, 12000, and 12001 have no listeners. There is not yet
+an authenticated project command that releases a quarantine after those checks;
+stop for an operator review instead of deleting the tree manually or changing
+its ACL.
+
+## Combat canary materialization runbook
+
+The implementation range from `6f5e78b` through `96bcddc`, inclusive, passed a
+source-only gate. The canonical runtime-marker migration, current real Stable
+restore drill, CombatCanary materialization, and both five-minute Twills smokes
+have not run. Do not start this sequence until the marker and restore-drill
+prerequisites pass, the Git tree is clean, every PSOBB/newserv process is
+stopped, ports 11000, 12000, and 12001 are free, and no `P:` build mapping
+exists. Stable and CombatCanary must never run concurrently.
+
+Establish explicit tracked identities and verify the already built server
+artifact. A new publication, if deliberately required, follows
+[the separate build contract](COMBAT-CANARY-BUILD.md).
+
+```powershell
+$runtimeRoot = "C:\Github Repo's\PSOBB\PSOBB-Runtime"
+$buildContractSha256 = (Get-FileHash `
+  -LiteralPath .\config\combat-canary-build.json `
+  -Algorithm SHA256).Hash.ToLowerInvariant()
+$twillsContractSha256 = (Get-FileHash `
+  -LiteralPath .\config\twills-fonewearl-build.json `
+  -Algorithm SHA256).Hash.ToLowerInvariant()
+$trust = Get-Content -Raw -LiteralPath .\config\release-trust.json |
+  ConvertFrom-Json
+$activeTrustKey = @($trust.keys | Where-Object {
+    $_.id -ceq $trust.activeKeyId
+  })
+if ($activeTrustKey.Count -ne 1) {
+  throw 'The tracked active acceptance key is not unique'
+}
+$signingPublicKeySpkiSha256 = [string]$activeTrustKey[0].spkiSha256
+
+$buildVerification = & .\scripts\Build-PSOBBCombatCanaryServer.ps1 `
+  -Action Verify `
+  -RuntimeRoot $runtimeRoot
+if (-not $buildVerification.Verified) {
+  throw 'CombatCanary server verification did not pass'
+}
+```
+
+Create one fresh Stable backup, then create and verify a signed Twills-only
+snapshot. Keep the returned object in the same trusted PowerShell session; do
+not substitute an account-derived path or copy individual state files.
+
+```powershell
+$stableBackup = & .\scripts\Backup-PSOBB.ps1 `
+  -RuntimeRoot $runtimeRoot
+$snapshot = & .\scripts\New-PSOBBCombatCanarySnapshot.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -StableBackupPath $stableBackup.BackupPath `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
+  -Confirm:$false
+
+& .\scripts\Test-PSOBBCombatCanary.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -Target Snapshot `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
+```
+
+Preview first initialization, apply it only after reviewing the exact target,
+then perform complete installed readback:
+
+```powershell
+& .\scripts\Initialize-PSOBBCombatCanary.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedBuildContractSha256 $buildContractSha256 `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
+  -WhatIf
+
+& .\scripts\Initialize-PSOBBCombatCanary.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedBuildContractSha256 $buildContractSha256 `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
+  -Confirm:$false
+
+& .\scripts\Test-PSOBBCombatCanary.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -Target Both `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedBuildContractSha256 $buildContractSha256 `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
+```
+
+CombatCanary permits only its sealed Native client and profile-default window
+mode. Lifecycle startup may preserve another application's foreground focus;
+normal gameplay input still requires PSOBB to be focused.
+
+```powershell
+& .\scripts\Start-PSOBBSession.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -ServerEnvironment CombatCanary `
+  -Channel Native `
+  -WindowMode ProfileDefault `
+  -PreserveForeground
+
+& .\scripts\Stop-PSOBBSession.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -ServerEnvironment CombatCanary `
+  -Target All
+```
+
+After a stateful isolated scenario, restore only from the same verified signed
+snapshot and repeat complete readback:
+
+```powershell
+& .\scripts\Reset-PSOBBCombatCanaryState.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedBuildContractSha256 $buildContractSha256 `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
+  -Confirm:$false
+
+& .\scripts\Test-PSOBBCombatCanary.ps1 `
+  -RuntimeRoot $runtimeRoot `
+  -Target Both `
+  -SnapshotPath $snapshot.SnapshotPath `
+  -ExpectedBuildContractSha256 $buildContractSha256 `
+  -ExpectedTwillsContractSha256 $twillsContractSha256 `
+  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
+```
+
+Snapshot reset is not server-artifact rollback. Failed replacement publication
+automatically restores the immediately prior release, but there is no supported
+post-success CombatCanary server release-selection or rollback command.
+
 ## Graphics canary
 
 The stable client remains Native as the accepted recovery baseline after the
@@ -144,17 +328,23 @@ implementation passes two-client tests; upstream's multiplier also rewards a
 tagged player on another floor and therefore cannot satisfy that contract by
 configuration alone.
 
-## Stable client auto-patches
+## Client auto-patch reference profile
 
-For an existing runtime, stop newserv normally, then explicitly promote the
-hash-bound `stable-qol` profile:
+The accepted Stable recovery profile is `baseline`, with both patch arrays
+empty. The hash-bound `stable-qol` profile is retained only as a compatibility
+reference for its exact 59NL sources; do not promote it as a group. Each patch
+must pass its own CombatCanary acceptance checkpoint.
+
+To inspect or deliberately exercise that reference in an isolated stopped
+runtime, the underlying reversible command is:
 
 ```powershell
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
 ```
 
-The command refuses to edit configuration while the approved newserv binary is
-running. It changes only `AutoPatches`, keeps `BBRequiredPatches` empty, verifies
+The command refuses to edit configuration while either approved newserv
+environment or any client is running. It changes only `AutoPatches`, keeps
+`BBRequiredPatches` empty, verifies
 that every exact 59NL patch source matches its size and SHA-256 in
 `sources.lock.json`, and records
 the selected profile plus policy hash in `installation.json`. Start newserv only
@@ -163,9 +353,11 @@ after the command succeeds. Roll back with the same stopped-server procedure and
 licenses, players, teams, quests, or patch data.
 
 `stable-qol` contains only `AccurateKillCount`, `FastTekker`,
-`HungryMagSound`, `NoRareSelling`, and `Palette`. Source-canary, protocol, and
-save-migration patches are classified separately in
-`config/client-patch-profiles.json` and cannot enter either stable profile.
+`HungryMagSound`, `NoRareSelling`, and `Palette`. `Palette` is reference-only
+because the planned Modern Gameplay module exclusively owns the number
+hotbar. Source-canary, protocol, and save-migration patches are classified
+separately in `config/client-patch-profiles.json` and cannot enter either stable
+profile.
 
 Backups are schema-v3 exact-file snapshots. They bind `system/config.json` and
 `stable/installation.json` to one verified client-patch profile and policy hash.

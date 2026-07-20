@@ -37,10 +37,22 @@ pwsh -File .\scripts\Start-PSOBB.ps1
 pwsh -File .\scripts\Start-PSOBBClient.ps1
 pwsh -File .\scripts\Test-PSOBB.ps1 -Suite Baseline
 pwsh -File .\scripts\Stop-PSOBB.ps1
-pwsh -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -Profile stable-qol -Confirm:$false
+pwsh -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -Profile baseline -Confirm:$false
 pwsh -File .\scripts\Backup-PSOBB.ps1
 pwsh -File .\scripts\Test-PSOBBRestoreDrill.ps1
 ```
+
+The Phase 0 CombatCanary implementation through `96bcddc` has passed its
+source-only gate. That gate published and verified only the immutable canary
+server artifact; it did not select a playable server, create the canary clients
+or bindings, or materialize mutable canary state. The canonical runtime-marker
+migration, a current real restore drill, CombatCanary materialization, and both
+five-minute Twills smokes have not run. Follow the
+gated sequence in [Operations](docs/OPERATIONS.md), the
+[combat acceptance protocol](docs/COMBAT-ACCEPTANCE.md), and the
+[canary build contract](docs/COMBAT-CANARY-BUILD.md). The build workflow can
+restore a prior release when replacement publication fails, but it has no
+post-success server release-selection or rollback command.
 
 Prepare and validate the separately staged D3D11 graphics canary without
 replacing a running stable client:
@@ -114,11 +126,11 @@ the prior new password was intentionally retained only by newserv.
 shell input. `Stop-PSOBB.ps1` sends the actual newserv `exit` command and does
 not describe console-window closure as a graceful shutdown.
 
-Fresh initialization selects the reversible `stable-qol` client auto-patch
-profile. On an existing installation, apply it only while newserv is stopped;
-use `Set-PSOBBClientPatchProfile.ps1 -Profile baseline` to return both
-`AutoPatches` and `BBRequiredPatches` to empty. The stable profile contains only
-the five pinned non-protocol 59NL patches documented in the QoL matrix.
+Fresh initialization selects the empty `baseline` client-patch profile, the
+accepted Stable Native recovery target. The grouped `stable-qol` profile is a
+compatibility reference, not an accepted operational profile; its patches are
+evaluated one at a time through CombatCanary. Change profiles only while both
+server environments and all clients are stopped.
 
 See [Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md),
 [QoL matrix](docs/QOL-MATRIX.md), and [Production gates](docs/PRODUCTION-GATES.md).

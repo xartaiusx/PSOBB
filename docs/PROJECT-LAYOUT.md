@@ -32,8 +32,19 @@ The runtime owns these major areas:
 
 - `archives` contains immutable acquired artifacts, including private
   author-origin local assets grouped beneath `graphics-lab\local-assets`.
-- `stable`, `canary`, and `local-lab` contain isolated release channels.
-- `secrets`, `licenses`, `players`, and `teams` contain protected live state.
+- `stable`, `canary`, `combat-canary`, and `local-lab` contain isolated
+  environments. `canary` is graphics-only and uses Stable server/state;
+  `combat-canary` owns or reserves a reproducible `server-base\release`, a
+  selected `server\release`, sealed `client` and `runtime\client` trees,
+  control and binding records, state, backups, logs, secrets, builds, evidence,
+  and signed snapshots. The 2026-07-20 source-only gate populated the immutable
+  `server-base\release`, archived build outputs, and protected evidence. It did
+  not populate the selected `server\release`, base/playable clients, bindings,
+  snapshots, or mutable canary state.
+- Stable live account state is beneath
+  `stable\server\release\system\licenses`, `players`, and `teams`.
+  CombatCanary uses the corresponding paths beneath
+  `combat-canary\server\release\system`; these trees never overlap.
 - `graphics-evidence` contains raw private captures and measurements.
 - `sources` contains extracted, pinned source trees and build inputs; downloaded
   archives do not belong there.
@@ -42,9 +53,12 @@ The runtime owns these major areas:
 The runtime ACL policy protects `graphics-evidence`,
 `archives\graphics-lab\local-assets`, `local-lab\asset-overlays`,
 `local-lab\asset-activations`, and `local-lab\visual-asset-activations` along
-with live game state, secrets, backups, and logs. The policy permits only the
-current user, SYSTEM, and Administrators. Reapply and recursively verify it
-after activation, capture, backup, or restore work creates new state.
+with Stable live game state, secrets, backups, and logs. Any existing
+CombatCanary licenses, players, teams, secrets, backups, logs, snapshots,
+control records, and builds enter the same protected target inventory. The
+policy permits only the current user, SYSTEM, and Administrators. Reapply and
+recursively verify it after activation, capture, backup, restore, build, or
+canary initialization creates new state.
 
 The 2026-07-15 relocation retired last-known-good trees, launcher/build output,
 capture-job logs, and diagnostic launch records whose contents were bound to

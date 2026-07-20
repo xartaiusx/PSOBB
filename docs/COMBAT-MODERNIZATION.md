@@ -17,8 +17,16 @@ Current accepted facts:
   bank, save, restart, relog, and shutdown acceptance on 2026-07-19.
 - Stable uses the empty `baseline` patch profile for recovery.
 - Normal games already use private drops; Battle and Challenge remain shared.
-- CombatCanary layout and ACL isolation are present. Reproducible build and
-  sealed-state promotion remain gated until their final reviews pass.
+- The inclusive source implementation range `6f5e78b` through `96bcddc`
+  passed the 2026-07-20 source-only gate for the deterministic server build,
+  sealed-state transaction, environment-aware lifecycle/launcher, ACL, and
+  recovery boundaries.
+- That source result is not CombatCanary acceptance. Canonical marker
+  migration, a current real restore drill, materialization, and both
+  five-minute Twills smokes remain pending.
+- The gate published and verified an immutable canary server artifact only. It
+  did not select a playable server or install clients, bindings, snapshots, or
+  mutable canary state.
 
 ## Locked product boundaries
 
@@ -74,14 +82,16 @@ The public contracts are:
 
 1. Keep the clean Stable Native acceptance and external-state preservation
    evidence current.
-2. Complete a reproducible, hermetic, two-clean-build CombatCanary server
-   artifact from the pinned upstream source and ordered patch series.
-3. Complete signed, exact-inventory Twills snapshot creation, transactional
-   canary initialization/reset, rollback, and read-back verification.
-4. Make lifecycle and launcher controls environment-aware while preserving the
-   three Stable Desktop shortcuts and foreground-preserving Play behavior.
-5. Materialize CombatCanary only after clean-tree and stopped-runtime gates.
-6. Run the isolated and canonical five-minute Twills checks, restore the
+2. Source-verified: reproducible, offline-input deterministic, two-clean-build
+   CombatCanary server workflow from the pinned source and ordered patch series.
+3. Source-verified: signed exact-inventory Twills snapshot creation,
+   transactional initialization/reset, compensation, and read-back verification.
+4. Source-verified: environment-aware lifecycle and launcher controls that
+   preserve the three Stable Desktop shortcuts and foreground-preserving Play.
+5. Pending: preview and apply the exact legacy marker migration if required,
+   complete a current real Stable restore drill, then materialize CombatCanary
+   only from a clean tree with every PSOBB process and listener stopped.
+6. Pending: run the isolated and canonical five-minute Twills checks, restore the
    isolated snapshot, and record exact evidence and rollback commands.
 
 ### Phase 1: existing QoL, one candidate at a time

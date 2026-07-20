@@ -57,6 +57,13 @@ These instructions apply to the entire repository.
 - Keep Stable v2026-02-27 untouched. Build the pinned current-upstream canary
   only through `scripts/Build-PSOBBCombatCanaryServer.ps1` and export every
   server change as an ordered patch under `patches/newserv`.
+- Use `Set-PSOBBRuntimeAcl.ps1 -MigrateLegacyRuntimeMarkerAcl` only for the one
+  exact, previewed legacy marker DACL recognized by the policy. Do not use it
+  to normalize an unknown marker identity, owner, group, ACL, or byte state.
+- Preserve a restore-drill quarantine record and its protected `.work` tree
+  whenever process exit or output-reader completion is unconfirmed. Do not
+  remove that evidence until its recorded process identity is absent and all
+  reserved listeners are clear.
 - Run the narrow unit/static suite, source build checks, rollback checks, and
   the applicable runtime suite before any live test.
 - A live feature checkpoint requires one five-minute active scenario, bounded
@@ -82,4 +89,4 @@ These instructions apply to the entire repository.
   controller.
 - Repository text and commit messages must not contain secrets, private
   identifiers, runtime paths outside the canonical boundary, proprietary
-  bytes, or tool/vendor attribution.
+  bytes, or assistant/code-generation vendor attribution.
