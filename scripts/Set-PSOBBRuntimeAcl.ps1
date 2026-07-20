@@ -1,9 +1,47 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
-param([string]$RuntimeRoot)
+param(
+    [string]$RuntimeRoot,
+    [switch]$MigrateLegacyRuntimeMarkerAcl
+)
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 . (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
+if ($MigrateLegacyRuntimeMarkerAcl) {
+    try {
+        Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+        $protectedMarker = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+        return [pscustomobject]@{
+            Path = $protectedMarker.Path
+            ItemsProtected = 0
+            Principals = 'current-user; BUILTIN\Administrators; SYSTEM'
+            Changed = $false
+            Kind = 'runtime-marker-migration'
+        }
+    } catch {
+        $legacyMarker = Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $layout
+    }
+    if (-not $PSCmdlet.ShouldProcess(
+            $legacyMarker.Path,
+            'Replace the exact known legacy runtime-marker DACL')) {
+        return [pscustomobject]@{
+            Path = $legacyMarker.Path
+            ItemsProtected = 0
+            Principals = 'current-user; BUILTIN\Administrators; SYSTEM'
+            Changed = $false
+            Kind = 'runtime-marker-migration-preview'
+        }
+    }
+    $markerMigration = Repair-PSOBBLegacyRuntimeMarkerAcl -Layout $layout
+    Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+    return [pscustomobject]@{
+        Path = $markerMigration.Path
+        ItemsProtected = if ($markerMigration.Changed) { 1 } else { 0 }
+        Principals = 'current-user; BUILTIN\Administrators; SYSTEM'
+        Changed = [bool]$markerMigration.Changed
+        Kind = 'runtime-marker-migration'
+    }
+}
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $principals = @(Get-PSOBBRuntimeAclPrincipals)
 $targets = @(Get-PSOBBRuntimeAclTargets -Layout $layout)

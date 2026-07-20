@@ -60,6 +60,19 @@ function Test-ExactProtectedAcl([Parameter(Mandatory)][string]$Path) {
         }).Count -eq 0)
 }
 
+function Set-KnownLegacyRuntimeMarkerAcl([Parameter(Mandatory)]$Layout) {
+    Set-PSOBBProtectedAcl -Path $Layout.Root
+    $marker = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Layout.RuntimeMarker -Root $Layout.Root -Kind File `
+        -Label 'runtime ownership marker fixture'
+    $legacy = [System.Security.AccessControl.FileSecurity]::new()
+    $legacy.SetAccessRuleProtection($false, $false)
+    [System.IO.FileSystemAclExtensions]::SetAccessControl(
+        [System.IO.FileInfo](Get-Item -Force -LiteralPath $marker),
+        $legacy)
+    Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $Layout
+}
+
 $setterPath = Join-Path $repositoryRoot 'scripts\Set-PSOBBRuntimeAcl.ps1'
 $setterTokens = $null
 $setterParseErrors = $null
@@ -82,7 +95,6 @@ $usesDaclOnlyWriter =
 Add-Result 'runtime ACL setter uses a fresh DACL-only writer' `
     $usesDaclOnlyWriter `
     'no full on-disk descriptor is read or persisted and owner, group, and audit sections are not requested'
-
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-RuntimeAclTests-' + [Guid]::NewGuid().ToString('N'))
 $outsideRoot = $temporaryRoot + '-outside'
@@ -199,6 +211,376 @@ try {
     [System.IO.File]::WriteAllText($canaryControlFixture, '{"fixture":true}')
     $canaryBuildFixture = Join-Path $combatCanary.Builds 'build-receipt.json'
     [System.IO.File]::WriteAllText($canaryBuildFixture, '{"fixture":true}')
+
+    $markerBefore = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+    $legacySetterRejected = $false
+    try {
+        & $setterPath -RuntimeRoot $layout.Root -Confirm:$false | Out-Null
+    } catch {
+        $legacySetterRejected = $true
+    }
+    $legacyAfterRejection = Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $layout
+    Add-Result 'legacy marker requires the explicit migration switch' `
+        ($legacySetterRejected -and
+         $legacyAfterRejection.Sha256 -ceq $legacyMarker.Sha256 -and
+         $legacyAfterRejection.AccessSddl -ceq $legacyMarker.AccessSddl) `
+        'normal recursive ACL maintenance cannot silently migrate the ownership marker'
+
+    $preview = @(& $setterPath `
+        -RuntimeRoot $layout.Root -MigrateLegacyRuntimeMarkerAcl -WhatIf)
+    $legacyAfterPreview = Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $layout
+    Add-Result 'legacy marker migration honors WhatIf without mutation' `
+        ($preview.Count -eq 1 -and
+         -not $preview[0].Changed -and
+         $preview[0].Kind -ceq 'runtime-marker-migration-preview' -and
+         $legacyAfterPreview.Sha256 -ceq $legacyMarker.Sha256 -and
+         $legacyAfterPreview.AccessSddl -ceq $legacyMarker.AccessSddl) `
+        'preview validates the exact legacy marker but does not replace its DACL'
+
+    $everyoneRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'),
+        [System.Security.AccessControl.FileSystemRights]::ReadAndExecute,
+        [System.Security.AccessControl.InheritanceFlags]::None,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $unknownMarkerAcl = Get-Acl -LiteralPath $layout.RuntimeMarker
+    [void]$unknownMarkerAcl.AddAccessRule($everyoneRule)
+    [System.IO.FileSystemAclExtensions]::SetAccessControl(
+        [System.IO.FileInfo](Get-Item -Force -LiteralPath $layout.RuntimeMarker),
+        [System.Security.AccessControl.FileSecurity]$unknownMarkerAcl)
+    $unknownMarker = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+    $unknownRejected = $false
+    try {
+        & $setterPath `
+            -RuntimeRoot $layout.Root -MigrateLegacyRuntimeMarkerAcl `
+            -Confirm:$false | Out-Null
+    } catch {
+        $unknownRejected = $true
+    }
+    $unknownAfter = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+    Add-Result 'runtime-marker migration rejects an unrecognized ACL' `
+        ($unknownRejected -and
+         $unknownAfter.Sha256 -ceq $unknownMarker.Sha256 -and
+         $unknownAfter.AccessSddl -ceq $unknownMarker.AccessSddl) `
+        'an extra identity cannot be normalized by the one-time migration path'
+
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+    New-Item -ItemType Directory -Path $layout.ControlDirectory -Force |
+        Out-Null
+    [System.IO.File]::WriteAllText(
+        $layout.ControlState,
+        '{"fixture":true}',
+        [System.Text.UTF8Encoding]::new($false))
+    $lifecycleEvidenceRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl -Layout $layout | Out-Null
+    } catch {
+        $lifecycleEvidenceRejected = $true
+    }
+    $markerAfterLifecycleRejection =
+        Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $layout
+    Remove-Item -LiteralPath $layout.ControlState -Force
+    Add-Result 'runtime-marker migration requires a stopped lifecycle boundary' `
+        ($lifecycleEvidenceRejected -and
+         $markerAfterLifecycleRejection.Sha256 -ceq $legacyMarker.Sha256 -and
+         $markerAfterLifecycleRejection.AccessSddl -ceq $legacyMarker.AccessSddl) `
+        'even synthetic lifecycle evidence blocks the DACL write before mutation'
+
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+    $forgedAuthorityRejected = $false
+    $markerIdentityLease = Open-PSOBBRuntimeMarkerIdentityLease -Layout $layout
+    try {
+        $forgedMutationState = [pscustomobject]@{
+            Attempted = $false
+            ProtectedAccessSddl = $null
+        }
+        try {
+            Set-PSOBBRuntimeMarkerProtectedDacl `
+                -Layout $layout -IdentityLease $markerIdentityLease `
+                -StoppedAuthority ([pscustomobject]@{
+                    AuthorityToken = [object]::new()
+                }) -ExpectedLegacyState $legacyMarker `
+                -MutationState $forgedMutationState
+        } catch {
+            $forgedAuthorityRejected = $true
+        }
+    } finally {
+        Close-PSOBBRuntimeMarkerIdentityLease `
+            -IdentityLease $markerIdentityLease
+    }
+    $afterForgedAuthority = Assert-PSOBBLegacyRuntimeMarkerAclState `
+        -Layout $layout
+    Add-Result 'runtime-marker DACL writer rejects missing stopped authority dynamically' `
+        ($forgedAuthorityRejected -and
+         -not $forgedMutationState.Attempted -and
+         $afterForgedAuthority.Sha256 -ceq $legacyMarker.Sha256 -and
+         $afterForgedAuthority.AccessSddl -ceq $legacyMarker.AccessSddl) `
+        'removing or moving the stopped-runtime authority call cannot reach the exact DACL mutation'
+
+    $callSiteRace = [pscustomobject]@{ Injected = $false }
+    $callSiteRaceRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalBeforeWriteAction {
+                [System.IO.File]::WriteAllText(
+                    $layout.ControlState,
+                    '{"fixture":true}',
+                    [System.Text.UTF8Encoding]::new($false))
+                $callSiteRace.Injected = $true
+            } | Out-Null
+    } catch {
+        $callSiteRaceRejected = $true
+    } finally {
+        if (Test-Path -LiteralPath $layout.ControlState) {
+            Remove-Item -LiteralPath $layout.ControlState -Force
+        }
+    }
+    $afterCallSiteRace = Assert-PSOBBLegacyRuntimeMarkerAclState `
+        -Layout $layout
+    Add-Result 'runtime-marker write rechecks stopped state at its call site' `
+        ($callSiteRace.Injected -and $callSiteRaceRejected -and
+         $afterCallSiteRace.Sha256 -ceq $legacyMarker.Sha256 -and
+         $afterCallSiteRace.AccessSddl -ceq $legacyMarker.AccessSddl) `
+        'lifecycle evidence inserted after the first census still blocks mutation'
+
+    $prewriteTamper = [pscustomobject]@{ AccessSddl = $null }
+    $prewriteTamperRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalBeforeWriteAction {
+                $tamperedAcl = Get-Acl -LiteralPath $layout.RuntimeMarker
+                [void]$tamperedAcl.AddAccessRule($everyoneRule)
+                [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                    [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                        $layout.RuntimeMarker),
+                    [System.Security.AccessControl.FileSecurity]$tamperedAcl)
+                $prewriteTamper.AccessSddl = (Get-Acl -LiteralPath `
+                    $layout.RuntimeMarker).GetSecurityDescriptorSddlForm(
+                        [System.Security.AccessControl.AccessControlSections]::Access)
+            } | Out-Null
+    } catch {
+        $prewriteTamperRejected = $true
+    }
+    $afterPrewriteTamper = Get-PSOBBRuntimeMarkerMetadataSnapshot `
+        -Layout $layout
+    Add-Result 'runtime-marker prewrite rejects live legacy-DACL tampering' `
+        ($prewriteTamperRejected -and
+         $null -ne $prewriteTamper.AccessSddl -and
+         $afterPrewriteTamper.AccessSddl -ceq $prewriteTamper.AccessSddl -and
+         $afterPrewriteTamper.Sha256 -ceq $legacyMarker.Sha256) `
+        'an unknown DACL inserted after validation is preserved for review and never normalized'
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+
+    $postWriteLifecycle = [pscustomobject]@{ Injected = $false }
+    $postWriteLifecycleRejected = $false
+    $postWriteLifecycleFailure = $null
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction {
+                [System.IO.File]::WriteAllText(
+                    $layout.ControlState,
+                    '{"fixture":true}',
+                    [System.Text.UTF8Encoding]::new($false))
+                $postWriteLifecycle.Injected = $true
+                throw 'injected post-write lifecycle race'
+            } | Out-Null
+    } catch {
+        $postWriteLifecycleRejected = $true
+        $postWriteLifecycleFailure = $_.Exception.Message
+    } finally {
+        if (Test-Path -LiteralPath $layout.ControlState) {
+            Remove-Item -LiteralPath $layout.ControlState -Force
+        }
+    }
+    $afterPostWriteLifecycle = Get-PSOBBRuntimeMarkerMetadataSnapshot `
+        -Layout $layout
+    Add-Result 'runtime-marker rollback rechecks stopped state after write' `
+        ($postWriteLifecycle.Injected -and
+         $postWriteLifecycleRejected -and
+         $postWriteLifecycleFailure -match 'rollback also failed' -and
+         $afterPostWriteLifecycle.Sha256 -ceq $legacyMarker.Sha256 -and
+         (Test-ExactProtectedAcl -Path $layout.RuntimeMarker)) `
+        'new lifecycle evidence blocks rollback and leaves the exact protected DACL as review evidence'
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+
+    $postWriteDaclTamper = [pscustomobject]@{ AccessSddl = $null }
+    $postWriteDaclRejected = $false
+    $postWriteDaclFailure = $null
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction {
+                $tamperedAcl = Get-Acl -LiteralPath $layout.RuntimeMarker
+                [void]$tamperedAcl.AddAccessRule($everyoneRule)
+                [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                    [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                        $layout.RuntimeMarker),
+                    [System.Security.AccessControl.FileSecurity]$tamperedAcl)
+                $postWriteDaclTamper.AccessSddl = (Get-Acl -LiteralPath `
+                    $layout.RuntimeMarker).GetSecurityDescriptorSddlForm(
+                        [System.Security.AccessControl.AccessControlSections]::Access)
+                throw 'injected post-write DACL substitution'
+            } | Out-Null
+    } catch {
+        $postWriteDaclRejected = $true
+        $postWriteDaclFailure = $_.Exception.Message
+    }
+    $afterPostWriteDaclTamper = Get-PSOBBRuntimeMarkerMetadataSnapshot `
+        -Layout $layout
+    Add-Result 'runtime-marker rollback rejects protected-DACL substitution' `
+        ($postWriteDaclRejected -and
+         $postWriteDaclFailure -match 'rollback also failed' -and
+         $afterPostWriteDaclTamper.AccessSddl -ceq
+            $postWriteDaclTamper.AccessSddl -and
+         $afterPostWriteDaclTamper.Sha256 -ceq $legacyMarker.Sha256 -and
+         -not (Test-ExactProtectedAcl -Path $layout.RuntimeMarker)) `
+        'a changed post-write DACL is preserved exactly and never rewritten as accepted legacy state'
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+
+    $forgedRollbackAuthority = [pscustomobject]@{ Injected = $false }
+    $forgedRollbackRejected = $false
+    $forgedRollbackFailure = $null
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction {
+                param($IdentityLease, $StoppedAuthority)
+                $StoppedAuthority.AuthorityToken = [object]::new()
+                $forgedRollbackAuthority.Injected = $true
+                throw 'injected forged rollback authority'
+            } | Out-Null
+    } catch {
+        $forgedRollbackRejected = $true
+        $forgedRollbackFailure = $_.Exception.Message
+    }
+    $afterForgedRollback = Get-PSOBBRuntimeMarkerMetadataSnapshot `
+        -Layout $layout
+    Add-Result 'runtime-marker rollback rejects stale or forged authority' `
+        ($forgedRollbackAuthority.Injected -and
+         $forgedRollbackRejected -and
+         $forgedRollbackFailure -match 'rollback also failed' -and
+         $afterForgedRollback.Sha256 -ceq $legacyMarker.Sha256 -and
+         (Test-ExactProtectedAcl -Path $layout.RuntimeMarker)) `
+        'rollback requires the live unforgeable stopped-state authority and preserves protected evidence on rejection'
+    $legacyMarker = Set-KnownLegacyRuntimeMarkerAcl -Layout $layout
+
+    $replacementPath = Join-Path $layout.Root `
+        '.psobb-runtime-replacement.json'
+    [System.IO.File]::WriteAllText(
+        $replacementPath,
+        '{"replacement":true}',
+        [System.Text.UTF8Encoding]::new($false))
+    $replacementRaceRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction {
+                param($IdentityLease)
+                [System.IO.File]::Move(
+                    $replacementPath, [string]$IdentityLease.Path, $true)
+            } | Out-Null
+    } catch {
+        $replacementRaceRejected = $true
+    }
+    $afterReplacementRace = Assert-PSOBBLegacyRuntimeMarkerAclState `
+        -Layout $layout
+    Add-Result 'runtime-marker lease blocks path replacement across rollback' `
+        ($replacementRaceRejected -and
+         (Test-Path -LiteralPath $replacementPath -PathType Leaf) -and
+         $afterReplacementRace.Sha256 -ceq $legacyMarker.Sha256 -and
+         $afterReplacementRace.AccessSddl -ceq $legacyMarker.AccessSddl -and
+         $afterReplacementRace.FileIndex -eq $legacyMarker.FileIndex) `
+        'the canonical path cannot be replaced while the original native file identity is retained'
+    Remove-Item -LiteralPath $replacementPath -Force
+
+    $hardLinkPath = Join-Path $layout.Root '.psobb-runtime-hardlink.json'
+    $hardLinkRace = [pscustomobject]@{ Created = $false }
+    $hardLinkRaceRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction {
+                param($IdentityLease)
+                New-Item -ItemType HardLink -Path $hardLinkPath `
+                    -Target $IdentityLease.Path | Out-Null
+                $hardLinkRace.Created = $true
+            } | Out-Null
+    } catch {
+        $hardLinkRaceRejected = $true
+    } finally {
+        if (Test-Path -LiteralPath $hardLinkPath) {
+            Remove-Item -LiteralPath $hardLinkPath -Force
+        }
+    }
+    $afterHardLinkRace = Assert-PSOBBLegacyRuntimeMarkerAclState `
+        -Layout $layout
+    Add-Result 'runtime-marker lease detects a hard-link identity race' `
+        ($hardLinkRace.Created -and $hardLinkRaceRejected -and
+         $afterHardLinkRace.Sha256 -ceq $legacyMarker.Sha256 -and
+         $afterHardLinkRace.AccessSddl -ceq $legacyMarker.AccessSddl -and
+         $afterHardLinkRace.FileIndex -eq $legacyMarker.FileIndex -and
+         $afterHardLinkRace.NumberOfLinks -eq 1) `
+        'link-count drift is rejected and the exact prior DACL is restored through the retained file identity'
+
+    $rollbackRejected = $false
+    try {
+        Repair-PSOBBLegacyRuntimeMarkerAcl `
+            -Layout $layout `
+            -InternalAfterWriteAction { throw 'injected marker readback failure' } |
+            Out-Null
+    } catch {
+        $rollbackRejected = $true
+    }
+    $rolledBackMarker = Assert-PSOBBLegacyRuntimeMarkerAclState -Layout $layout
+    Add-Result 'runtime-marker migration rolls back an interrupted DACL write' `
+        ($rollbackRejected -and
+         $rolledBackMarker.Sha256 -ceq $legacyMarker.Sha256 -and
+         $rolledBackMarker.AccessSddl -ceq $legacyMarker.AccessSddl -and
+         $rolledBackMarker.OwnerSid -ceq $legacyMarker.OwnerSid -and
+         $rolledBackMarker.GroupSid -ceq $legacyMarker.GroupSid) `
+        'post-write failure restores the exact prior access SDDL and preserves file identity metadata'
+
+    $nonMarkerAclBefore = Get-Acl -LiteralPath $logFile
+    $nonMarkerDaclBefore = $nonMarkerAclBefore.GetSecurityDescriptorSddlForm(
+        [System.Security.AccessControl.AccessControlSections]::Access)
+    $migration = @(& $setterPath `
+        -RuntimeRoot $layout.Root -MigrateLegacyRuntimeMarkerAcl `
+        -Confirm:$false)
+    $migratedMarker = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+    $nonMarkerAclAfter = Get-Acl -LiteralPath $logFile
+    $nonMarkerDaclAfter = $nonMarkerAclAfter.GetSecurityDescriptorSddlForm(
+        [System.Security.AccessControl.AccessControlSections]::Access)
+    $markerMigrationRecords = @($migration | Where-Object {
+            $_.PSObject.Properties['Kind'] -and
+            $_.Kind -ceq 'runtime-marker-migration'
+        })
+    Add-Result 'known legacy runtime marker migrates exactly once' `
+        ($markerMigrationRecords.Count -eq 1 -and
+         $markerMigrationRecords[0].Changed -and
+         $migratedMarker.Sha256 -ceq $markerBefore.Sha256 -and
+         $migratedMarker.OwnerSid -ceq $markerBefore.OwnerSid -and
+         $migratedMarker.GroupSid -ceq $markerBefore.GroupSid -and
+         $nonMarkerDaclAfter -ceq $nonMarkerDaclBefore -and
+         (Test-ExactProtectedAcl -Path $layout.RuntimeMarker)) `
+        'exact bytes, owner, group, and every non-marker DACL survive the exact-file migration'
+    $migratedAccessSddl = $migratedMarker.AccessSddl
+    $idempotentResults = @(& $setterPath `
+        -RuntimeRoot $layout.Root -MigrateLegacyRuntimeMarkerAcl `
+        -Confirm:$false)
+    $markerAfterIdempotence = Get-PSOBBRuntimeMarkerMetadataSnapshot -Layout $layout
+    Add-Result 'runtime-marker migration is idempotent after protection' `
+        ($idempotentResults.Count -eq 1 -and
+         -not $idempotentResults[0].Changed -and
+         $idempotentResults[0].Kind -ceq 'runtime-marker-migration' -and
+         $markerAfterIdempotence.Sha256 -ceq $migratedMarker.Sha256 -and
+         $markerAfterIdempotence.AccessSddl -ceq $migratedAccessSddl -and
+         $markerAfterIdempotence.OwnerSid -ceq $migratedMarker.OwnerSid -and
+         $markerAfterIdempotence.GroupSid -ceq $migratedMarker.GroupSid) `
+        'a protected exact marker is only read and returned unchanged'
 
     $logAclBefore = Get-Acl -LiteralPath $layout.Logs
     $logOwnerBefore = $logAclBefore.GetOwner(

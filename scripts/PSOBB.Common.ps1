@@ -3,45 +3,332 @@ $ErrorActionPreference = 'Stop'
 $script:PSOBBRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:PSOBBCanonicalRuntimeRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $script:PSOBBRepositoryRoot 'PSOBB-Runtime')).TrimEnd('\')
+$script:PSOBBTrustedGitAuthorityToken = [object]::new()
+$script:PSOBBGitBoundaryQuarantine = [System.Collections.Generic.List[object]]::new()
+
+function Get-PSOBBLeasedFileDigest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.IO.FileStream]$Lease,
+        [Parameter(Mandatory)][ValidateRange(1, 1073741824)]
+        [long]$MaximumBytes,
+        [string]$Label = 'leased executable'
+    )
+
+    if (-not $Lease.CanRead -or -not $Lease.CanSeek) {
+        throw "The $Label lease is not readable and seekable"
+    }
+    $length = [long]$Lease.Length
+    if ($length -le 0 -or $length -gt $MaximumBytes) {
+        throw "The $Label length is outside its exact bound"
+    }
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hash = $null
+    try {
+        $Lease.Position = 0
+        $hash = $sha256.ComputeHash($Lease)
+        $Lease.Position = 0
+        [pscustomobject]@{
+            Length = $length
+            Sha256 = [Convert]::ToHexString($hash).ToLowerInvariant()
+        }
+    } finally {
+        if ($hash) {
+            [Array]::Clear($hash, 0, $hash.Length)
+        }
+        $sha256.Dispose()
+    }
+}
+
+function Open-PSOBBTrustedExecutableLease {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 1073741824)]
+        [long]$MaximumBytes,
+        [string]$Label = 'trusted executable',
+        [switch]$RequireProtectedAcl
+    )
+
+    $safeRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $safePath = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Path -Root $safeRoot -Kind File -Label $Label
+    if ($RequireProtectedAcl -and
+        -not (Test-PSOBBProtectedAcl -Path $safePath)) {
+        throw "The $Label ACL is invalid"
+    }
+    $lease = $null
+    try {
+        # FileShare.Read denies write, delete, rename, and replacement while
+        # still allowing CreateProcess and signature verification to read.
+        $lease = [System.IO.FileStream]::new(
+            $safePath, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read,
+            65536, [System.IO.FileOptions]::SequentialScan)
+        [void](Assert-PSOBBOrdinaryContainedPath `
+                -Path $safePath -Root $safeRoot -Kind File -Label $Label)
+        if ($RequireProtectedAcl -and
+            -not (Test-PSOBBProtectedAcl -Path $safePath)) {
+            throw "The $Label ACL changed while its lease was acquired"
+        }
+        $digest = Get-PSOBBLeasedFileDigest `
+            -Lease $lease -MaximumBytes $MaximumBytes -Label $Label
+        [pscustomobject]@{
+            Path = $safePath
+            Root = $safeRoot
+            MaximumBytes = [long]$MaximumBytes
+            Length = [long]$digest.Length
+            Sha256 = [string]$digest.Sha256
+            Lease = $lease
+        }
+        $lease = $null
+    } finally {
+        if ($lease) {
+            $lease.Dispose()
+        }
+    }
+}
+
+function Test-PSOBBGitLeaseQuarantined {
+    [CmdletBinding()]
+    param($Identity)
+
+    foreach ($entry in @($script:PSOBBGitBoundaryQuarantine)) {
+        if ([object]::ReferenceEquals($entry.GitIdentity, $Identity)) {
+            return $true
+        }
+    }
+    $false
+}
+
+function Close-PSOBBTrustedExecutableLease {
+    [CmdletBinding()]
+    param($Identity)
+
+    if ($Identity -and (Test-PSOBBGitLeaseQuarantined -Identity $Identity)) {
+        return
+    }
+    if ($Identity -and $Identity.PSObject.Properties['Lease'] -and
+        $Identity.Lease -is [System.IO.FileStream]) {
+        $safeHandle = $Identity.Lease.SafeFileHandle
+        $Identity.Lease.Dispose()
+        if (-not $safeHandle.IsClosed -or $Identity.Lease.CanRead) {
+            throw 'The trusted executable lease did not close deterministically'
+        }
+    }
+}
+
+function Test-PSOBBTrustedExecutableLeaseClosed {
+    [CmdletBinding()]
+    param($Identity)
+
+    if (-not $Identity -or -not $Identity.PSObject.Properties['Lease'] -or
+        $Identity.Lease -isnot [System.IO.FileStream]) {
+        return $false
+    }
+    -not $Identity.Lease.CanRead -and
+        $Identity.Lease.SafeFileHandle.IsClosed
+}
+
+function Get-PSOBBTrustedGitIdentity {
+    [CmdletBinding()]
+    param()
+
+    $programFiles = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles)
+    if ([string]::IsNullOrWhiteSpace($programFiles)) {
+        throw 'The trusted Program Files location is unavailable'
+    }
+    $trustedRoot = [System.IO.Path]::GetFullPath($programFiles).TrimEnd('\')
+    $path = Join-Path $trustedRoot 'Git\mingw64\bin\git.exe'
+    [void](Assert-PSOBBOrdinaryContainedPath `
+            -Path $path -Root $trustedRoot -Kind File `
+            -Label 'trusted Git executable')
+    $identity = Open-PSOBBTrustedExecutableLease `
+        -Path $path -Root $trustedRoot -MaximumBytes 64MB `
+        -Label 'trusted Git executable'
+    try {
+        # The lease prevents path replacement while the path-based Windows
+        # Authenticode and version-resource APIs inspect the same file whose
+        # bytes were hashed through the retained handle.
+        $item = Get-Item -Force -LiteralPath $identity.Path
+        $version = $item.VersionInfo
+        $signature = Get-AuthenticodeSignature -LiteralPath $identity.Path
+        $afterIdentity = Get-PSOBBLeasedFileDigest `
+            -Lease $identity.Lease -MaximumBytes 64MB `
+            -Label 'trusted Git executable identity'
+        if ($signature.Status -ne
+                [System.Management.Automation.SignatureStatus]::Valid -or
+            $version.ProductName -cne 'Git' -or
+            $version.FileDescription -cne 'Git for Windows' -or
+            $version.OriginalFilename -cne 'git.exe' -or
+            $afterIdentity.Length -ne $identity.Length -or
+            $afterIdentity.Sha256 -cne $identity.Sha256) {
+            throw 'The trusted Git executable identity is invalid'
+        }
+        $identity | Add-Member -NotePropertyName AuthorityToken `
+            -NotePropertyValue $script:PSOBBTrustedGitAuthorityToken
+        $identity | Add-Member -NotePropertyName QuarantineRetained `
+            -NotePropertyValue $false
+        $result = $identity
+        $identity = $null
+        $result
+    } finally {
+        if ($identity) {
+            Close-PSOBBTrustedExecutableLease -Identity $identity
+        }
+    }
+}
+
+function Assert-PSOBBTrustedGitLease {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Identity)
+
+    $programFiles = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles)
+    $expectedRoot = [System.IO.Path]::GetFullPath($programFiles).TrimEnd('\')
+    $expectedPath = Join-Path $expectedRoot 'Git\mingw64\bin\git.exe'
+    if (-not $Identity.PSObject.Properties['AuthorityToken'] -or
+        -not [object]::ReferenceEquals(
+            $Identity.AuthorityToken, $script:PSOBBTrustedGitAuthorityToken) -or
+        [string]$Identity.Path -cne $expectedPath -or
+        [string]$Identity.Root -cne $expectedRoot -or
+        $Identity.Lease -isnot [System.IO.FileStream]) {
+        throw 'The trusted Git executable lease identity is invalid'
+    }
+    if (Test-PSOBBGitLeaseQuarantined -Identity $Identity) {
+        throw 'The trusted Git executable lease is retained by a quarantined process'
+    }
+    [void](Assert-PSOBBOrdinaryContainedPath `
+            -Path $Identity.Path -Root $expectedRoot -Kind File `
+            -Label 'trusted Git executable lease')
+    $digest = Get-PSOBBLeasedFileDigest `
+        -Lease $Identity.Lease -MaximumBytes 64MB `
+        -Label 'trusted Git executable lease'
+    if ($digest.Length -ne [long]$Identity.Length -or
+        $digest.Sha256 -cne [string]$Identity.Sha256) {
+        throw 'The trusted Git executable changed while leased'
+    }
+    $true
+}
 
 function Invoke-PSOBBGitBoundaryCommand {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
-        [Parameter(Mandatory)][string[]]$Arguments
+        [Parameter(Mandatory)][string[]]$Arguments,
+        $GitIdentity
     )
 
-    $git = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $git) {
-        throw 'Git is required to verify the canonical nested runtime boundary'
-    }
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $git.Source
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    foreach ($argument in @('-C', $RepositoryRoot) + $Arguments) {
-        [void]$startInfo.ArgumentList.Add($argument)
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
+    $ownsIdentity = $null -eq $GitIdentity
+    $git = $null
+    $process = $null
+    $processStarted = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    $retainLease = $false
     try {
+        $git = if ($ownsIdentity) {
+            Get-PSOBBTrustedGitIdentity
+        } else {
+            $GitIdentity
+        }
+        [void](Assert-PSOBBTrustedGitLease -Identity $git)
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $git.Path
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        foreach ($argument in @('-C', $RepositoryRoot) + $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        $beforeStart = Get-PSOBBLeasedFileDigest `
+            -Lease $git.Lease -MaximumBytes 64MB `
+            -Label 'trusted Git executable immediately before process start'
+        if ($beforeStart.Length -ne $git.Length -or
+            $beforeStart.Sha256 -cne $git.Sha256) {
+            throw 'The trusted Git executable changed before process start'
+        }
         if (-not $process.Start()) {
             throw 'Windows did not start Git for the runtime boundary check'
         }
+        $processStarted = $true
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        if (-not $process.WaitForExit(30000)) {
+            try {
+                $process.Kill($true)
+            } catch {
+            }
+            if (-not $process.WaitForExit(5000)) {
+                $retainLease = $true
+                throw 'Git did not stop within the bounded termination window; its executable lease remains retained'
+            }
+            [void]$stdoutTask.GetAwaiter().GetResult()
+            [void]$stderrTask.GetAwaiter().GetResult()
+            throw 'Git timed out during the runtime boundary check'
+        }
+        $afterExit = Get-PSOBBLeasedFileDigest `
+            -Lease $git.Lease -MaximumBytes 64MB `
+            -Label 'trusted Git executable after process exit'
+        if ($afterExit.Length -ne $git.Length -or
+            $afterExit.Sha256 -cne $git.Sha256) {
+            throw 'The trusted Git executable changed during process execution'
+        }
         [pscustomobject]@{
             ExitCode = $process.ExitCode
             StandardOutput = $stdoutTask.GetAwaiter().GetResult()
             StandardError = $stderrTask.GetAwaiter().GetResult()
         }
     } finally {
-        $process.Dispose()
+        if ($processStarted -and -not $process.HasExited -and
+            -not $retainLease) {
+            try {
+                $process.Kill($true)
+            } catch {
+            }
+            if (-not $process.WaitForExit(5000)) {
+                $retainLease = $true
+            }
+        }
+        if ($retainLease) {
+            if (-not $git.PSObject.Properties['QuarantineRetained']) {
+                $git | Add-Member -NotePropertyName QuarantineRetained `
+                    -NotePropertyValue $true
+            } else {
+                $git.QuarantineRetained = $true
+            }
+            $script:PSOBBGitBoundaryQuarantine.Add([pscustomobject]@{
+                    Process = $process
+                    GitIdentity = $git
+                    RetainedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+                })
+        } elseif ($stdoutTask) {
+            try {
+                [void]$stdoutTask.GetAwaiter().GetResult()
+            } catch {
+            }
+        }
+        if (-not $retainLease -and $stderrTask) {
+            try {
+                [void]$stderrTask.GetAwaiter().GetResult()
+            } catch {
+            }
+        }
+        if (-not $retainLease -and $process) {
+            $process.Dispose()
+        }
+        if ($ownsIdentity -and $git -and -not $retainLease) {
+            Close-PSOBBTrustedExecutableLease -Identity $git
+        }
+        if ($retainLease) {
+            throw 'Git did not stop within the bounded termination window; its executable lease remains retained'
+        }
     }
 }
 
@@ -61,65 +348,76 @@ function Assert-PSOBBGitRuntimeBoundary {
         throw 'The repository .gitignore must contain exactly one anchored /PSOBB-Runtime/ rule'
     }
 
-    $topLevel = Invoke-PSOBBGitBoundaryCommand `
-        -RepositoryRoot $repositoryFull `
-        -Arguments @('rev-parse', '--show-toplevel')
-    if ($topLevel.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel.StandardOutput)) {
-        throw 'The canonical nested PSOBB runtime requires a valid Git worktree'
-    }
-    $reportedTopLevel = [System.IO.Path]::GetFullPath(
-        $topLevel.StandardOutput.Trim()).TrimEnd('\')
-    if (-not $reportedTopLevel.Equals(
-            $repositoryFull,
-            [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The PSOBB repository root does not match the effective Git worktree root'
-    }
+    $trustedGit = Get-PSOBBTrustedGitIdentity
+    try {
+        $topLevel = Invoke-PSOBBGitBoundaryCommand `
+            -RepositoryRoot $repositoryFull `
+            -Arguments @('rev-parse', '--show-toplevel') `
+            -GitIdentity $trustedGit
+        if ($topLevel.ExitCode -ne 0 -or
+            [string]::IsNullOrWhiteSpace($topLevel.StandardOutput)) {
+            throw 'The canonical nested PSOBB runtime requires a valid Git worktree'
+        }
+        $reportedTopLevel = [System.IO.Path]::GetFullPath(
+            $topLevel.StandardOutput.Trim()).TrimEnd('\')
+        if (-not $reportedTopLevel.Equals(
+                $repositoryFull,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The PSOBB repository root does not match the effective Git worktree root'
+        }
 
-    # Verify the directory boundary itself plus representative paths from each
-    # sensitive runtime class. A later rule sequence can reopen one child tree
-    # while leaving an unrelated marker ignored, so one marker probe is not a
-    # sufficient repository-boundary check.
-    $ignoreProbePaths = @(
-        'PSOBB-Runtime',
-        'PSOBB-Runtime/.psobb-runtime.json',
-        'PSOBB-Runtime/archives/.psobb-ignore-probe',
-        'PSOBB-Runtime/backups/.psobb-ignore-probe',
-        'PSOBB-Runtime/graphics-evidence/.psobb-ignore-probe',
-        'PSOBB-Runtime/local-lab/runtime/client/Psobb.exe',
-        'PSOBB-Runtime/logs/.psobb-ignore-probe',
-        'PSOBB-Runtime/secrets/.psobb-ignore-probe',
-        'PSOBB-Runtime/stable/runtime/client/Psobb.exe')
-    $ignoreProbe = Invoke-PSOBBGitBoundaryCommand `
-        -RepositoryRoot $repositoryFull `
-        -Arguments (@('check-ignore', '--no-index', '--') + $ignoreProbePaths)
-    $ignoredPaths = @($ignoreProbe.StandardOutput -split "`r?`n" | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    $ignoredPathSet = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::Ordinal)
-    foreach ($ignoredPath in $ignoredPaths) {
-        [void]$ignoredPathSet.Add($ignoredPath)
-    }
-    $missingIgnoreProbes = @($ignoreProbePaths | Where-Object {
-        -not $ignoredPathSet.Contains($_)
-    })
-    if ($ignoreProbe.ExitCode -ne 0 -or
-        $ignoredPaths.Count -ne $ignoreProbePaths.Count -or
-        $missingIgnoreProbes.Count -ne 0) {
-        throw 'Git does not effectively ignore the complete canonical PSOBB-Runtime boundary'
-    }
+        # Verify the directory boundary itself plus representative paths from
+        # each sensitive runtime class while one direct-payload lease remains
+        # held across all three Git process exits.
+        $ignoreProbePaths = @(
+            'PSOBB-Runtime',
+            'PSOBB-Runtime/.psobb-runtime.json',
+            'PSOBB-Runtime/archives/.psobb-ignore-probe',
+            'PSOBB-Runtime/backups/.psobb-ignore-probe',
+            'PSOBB-Runtime/graphics-evidence/.psobb-ignore-probe',
+            'PSOBB-Runtime/local-lab/runtime/client/Psobb.exe',
+            'PSOBB-Runtime/logs/.psobb-ignore-probe',
+            'PSOBB-Runtime/secrets/.psobb-ignore-probe',
+            'PSOBB-Runtime/stable/runtime/client/Psobb.exe')
+        $ignoreProbe = Invoke-PSOBBGitBoundaryCommand `
+            -RepositoryRoot $repositoryFull `
+            -Arguments (@('check-ignore', '--no-index', '--') +
+                $ignoreProbePaths) `
+            -GitIdentity $trustedGit
+        $ignoredPaths = @(
+            $ignoreProbe.StandardOutput -split "`r?`n" | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })
+        $ignoredPathSet = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal)
+        foreach ($ignoredPath in $ignoredPaths) {
+            [void]$ignoredPathSet.Add($ignoredPath)
+        }
+        $missingIgnoreProbes = @($ignoreProbePaths | Where-Object {
+            -not $ignoredPathSet.Contains($_)
+        })
+        if ($ignoreProbe.ExitCode -ne 0 -or
+            $ignoredPaths.Count -ne $ignoreProbePaths.Count -or
+            $missingIgnoreProbes.Count -ne 0) {
+            throw 'Git does not effectively ignore the complete canonical PSOBB-Runtime boundary'
+        }
 
-    $trackedRuntime = Invoke-PSOBBGitBoundaryCommand `
-        -RepositoryRoot $repositoryFull `
-        -Arguments @('ls-files', '--', 'PSOBB-Runtime')
-    if ($trackedRuntime.ExitCode -ne 0) {
-        throw 'Git could not verify whether canonical PSOBB runtime files are tracked'
-    }
-    $trackedPaths = @($trackedRuntime.StandardOutput -split "`r?`n" | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    if ($trackedPaths.Count -ne 0) {
-        throw "Git already tracks $($trackedPaths.Count) path(s) inside PSOBB-Runtime"
+        $trackedRuntime = Invoke-PSOBBGitBoundaryCommand `
+            -RepositoryRoot $repositoryFull `
+            -Arguments @('ls-files', '--', 'PSOBB-Runtime') `
+            -GitIdentity $trustedGit
+        if ($trackedRuntime.ExitCode -ne 0) {
+            throw 'Git could not verify whether canonical PSOBB runtime files are tracked'
+        }
+        $trackedPaths = @(
+            $trackedRuntime.StandardOutput -split "`r?`n" | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })
+        if ($trackedPaths.Count -ne 0) {
+            throw "Git already tracks $($trackedPaths.Count) path(s) inside PSOBB-Runtime"
+        }
+    } finally {
+        Close-PSOBBTrustedExecutableLease -Identity $trustedGit
     }
 }
 
@@ -431,6 +729,1640 @@ function Assert-PSOBBServerEnvironmentIsolation {
     }
 }
 
+function Get-PSOBBServerComponentId {
+    [CmdletBinding()]
+    param([string]$ServerEnvironment = 'Stable')
+
+    $environmentName = Resolve-PSOBBServerEnvironmentName `
+        -Environment $ServerEnvironment
+    if ($environmentName -ceq 'Stable') {
+        'newserv-stable-release'
+    } else {
+        'newserv-combat-canary-build'
+    }
+}
+
+function Get-PSOBBApprovedNewservExecutableIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [string]$ServerEnvironment = 'Stable',
+        [string]$SourcesLockPath = (Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json'),
+        [string]$CombatCanaryBuildContractPath = (
+            Join-Path $script:PSOBBRepositoryRoot 'config\combat-canary-build.json')
+    )
+
+    $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+        -Layout $Layout -Environment $ServerEnvironment
+    $componentId = Get-PSOBBServerComponentId `
+        -ServerEnvironment $environmentLayout.Environment
+    if (-not (Test-Path -LiteralPath $SourcesLockPath -PathType Leaf)) {
+        throw "The source lock is missing: $SourcesLockPath"
+    }
+    $sourceLock = Get-Content -Raw -LiteralPath $SourcesLockPath |
+        ConvertFrom-Json -Depth 30 -DateKind String
+    $components = @($sourceLock.components | Where-Object {
+            [string]$_.id -ceq $componentId
+        })
+    $members = if ($components.Count -eq 1) {
+        @($components[0].members | Where-Object {
+                [string]$_.path -ceq 'release/newserv-windows.exe'
+            })
+    } else {
+        @()
+    }
+    if ($components.Count -ne 1 -or $members.Count -ne 1 -or
+        [long]$members[0].size -le 0 -or
+        [string]$members[0].sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw "sources.lock.json does not contain one valid $componentId executable member"
+    }
+
+    if ($environmentLayout.Environment -ceq 'CombatCanary') {
+        if (-not (Test-Path -LiteralPath $CombatCanaryBuildContractPath -PathType Leaf)) {
+            throw 'The tracked combat-canary build contract is missing'
+        }
+        $buildContract = Get-Content -Raw -LiteralPath $CombatCanaryBuildContractPath |
+            ConvertFrom-Json -Depth 20 -DateKind String
+        if ([string]$buildContract.output.rootRelative -cne
+                'combat-canary/server-base/release' -or
+            [string]$buildContract.output.executable.path -cne
+                'newserv-windows.exe' -or
+            [long]$buildContract.output.executable.size -ne
+                [long]$members[0].size -or
+            [string]$buildContract.output.executable.sha256 -cne
+                [string]$members[0].sha256) {
+            throw 'The combat-canary build contract does not match its exact source-lock executable member'
+        }
+    }
+
+    [pscustomobject]@{
+        ServerEnvironment = [string]$environmentLayout.Environment
+        EnvironmentId = [string]$environmentLayout.EnvironmentId
+        ComponentId = $componentId
+        RelativePath = 'newserv-windows.exe'
+        ExecutablePath = Join-Path $environmentLayout.Server 'newserv-windows.exe'
+        Size = [long]$members[0].size
+        Sha256 = [string]$members[0].sha256
+        Authenticode = [string]$members[0].authenticode
+    }
+}
+
+function Get-PSOBBCombatCanaryInstalledBinding {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $verificationScript = Join-Path $script:PSOBBRepositoryRoot `
+        'scripts\Test-PSOBBCombatCanary.ps1'
+    if (-not (Test-Path -LiteralPath $verificationScript -PathType Leaf)) {
+        throw 'The combat-canary installation verifier is missing'
+    }
+    $verification = & $verificationScript `
+        -RuntimeRoot $Layout.Root -Target Installed
+    if ($null -eq $verification -or -not [bool]$verification.Valid -or
+        [string]$verification.Target -cne 'Installed' -or
+        [string]$verification.Environment -cne 'CombatCanary') {
+        throw 'The combat-canary installation did not pass complete installed-state verification'
+    }
+    foreach ($propertyName in @(
+            'BuildContractSha256',
+            'ServerReleaseManifestSha256',
+            'BaseClientManifestSha256',
+            'ClientBindingSha256',
+            'ConfigurationSha256',
+            'StateBindingSha256',
+            'TwillsContractSha256',
+            'SigningPublicKeySpkiSha256')) {
+        if ([string]$verification.$propertyName -cnotmatch '^[a-f0-9]{64}$') {
+            throw "The combat-canary installed-state verifier returned an invalid $propertyName"
+        }
+    }
+    $verification
+}
+
+function Get-PSOBBCombatCanaryClientLaunchContract {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $verification = Get-PSOBBCombatCanaryInstalledBinding -Layout $Layout
+    $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+        -Layout $Layout -Environment CombatCanary
+    $bindingPath = Assert-PathWithinRoot `
+        -Path (Join-Path $environmentLayout.EnvironmentRoot 'client-binding.json') `
+        -Root $Layout.Root
+    if (-not (Test-Path -LiteralPath $bindingPath -PathType Leaf) -or
+        (Get-LowerSha256 $bindingPath) -cne [string]$verification.ClientBindingSha256) {
+        throw 'The combat-canary client binding changed after installed-state verification'
+    }
+    $binding = Get-Content -Raw -LiteralPath $bindingPath |
+        ConvertFrom-Json -Depth 10 -DateKind String
+    $expectedProperties = @(
+        'schemaVersion', 'environment', 'environmentId', 'profile', 'renderer',
+        'serverAddress', 'patchPort', 'gamePorts', 'clientExecutablePath',
+        'clientExecutableSize', 'clientExecutableSha256', 'clientProfileSha256',
+        'baseClientManifestSha256', 'createdAtUtc')
+    $actualProperties = @($binding.PSObject.Properties.Name | Sort-Object)
+    if (Compare-Object -ReferenceObject @($expectedProperties | Sort-Object) `
+            -DifferenceObject $actualProperties) {
+        throw 'The combat-canary client binding does not have its exact schema-1 property set'
+    }
+    $clientExecutable = Join-Path $environmentLayout.Client 'Psobb.exe'
+    $profilePath = Join-Path $environmentLayout.Client 'client-profile.json'
+    if ([int]$binding.schemaVersion -ne 1 -or
+        [string]$binding.environment -cne 'CombatCanary' -or
+        [string]$binding.environmentId -cne 'combat-canary' -or
+        [string]$binding.profile -cne 'baseline' -or
+        [string]$binding.renderer -cne 'Native' -or
+        [string]$binding.serverAddress -cne '127.0.0.1' -or
+        [int]$binding.patchPort -ne 11000 -or
+        @($binding.gamePorts).Count -ne 2 -or
+        [int]$binding.gamePorts[0] -ne 12000 -or
+        [int]$binding.gamePorts[1] -ne 12001 -or
+        [string]$binding.clientExecutablePath -cne 'runtime/client/Psobb.exe' -or
+        [string]$binding.clientExecutableSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]$binding.clientProfileSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]$binding.baseClientManifestSha256 -cne
+            [string]$verification.BaseClientManifestSha256 -or
+        -not (Test-Path -LiteralPath $clientExecutable -PathType Leaf) -or
+        (Get-Item -LiteralPath $clientExecutable).Length -ne
+            [long]$binding.clientExecutableSize -or
+        (Get-LowerSha256 $clientExecutable) -cne
+            [string]$binding.clientExecutableSha256 -or
+        -not (Test-Path -LiteralPath $profilePath -PathType Leaf) -or
+        (Get-LowerSha256 $profilePath) -cne [string]$binding.clientProfileSha256) {
+        throw 'The combat-canary native client binding is invalid or changed after verification'
+    }
+    $profile = Get-Content -Raw -LiteralPath $profilePath |
+        ConvertFrom-Json -Depth 15 -DateKind String
+    if ([int]$profile.schemaVersion -ne 5 -or
+        [string]$profile.channel -cne 'combat-canary' -or
+        [string]$profile.profileId -cne 'safe-native-4x3' -or
+        [string]$profile.renderer -cne 'Native' -or
+        [string]$profile.graphicsPreset -cne 'Native' -or
+        [string]$profile.baseExecutableSha256 -cne
+            [string]$binding.clientExecutableSha256 -or
+        $null -eq $profile.nativeGraphics) {
+        throw 'The combat-canary native client profile is invalid'
+    }
+
+    [pscustomobject]@{
+        Verification = $verification
+        Binding = $binding
+        Profile = $profile
+        BindingPath = $bindingPath
+        ProfilePath = $profilePath
+        ClientExecutable = $clientExecutable
+    }
+}
+
+function Get-PSOBBServerControlIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')]
+        [string]$InstallationId,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')]
+        [string]$EnvironmentId,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')]
+        [string]$ComponentId,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')]
+        [string]$StartupRequestId,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')]
+        [string]$ExecutableSha256
+    )
+
+    $canonical = @(
+        'psobb-newserv-control-v2',
+        $InstallationId.ToLowerInvariant(),
+        $EnvironmentId,
+        $ComponentId,
+        $StartupRequestId,
+        $ExecutableSha256
+    ) -join "`n"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonical)
+    try {
+        [Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    } finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Test-PSOBBFixedTimeTextEquals {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][Parameter(Mandatory)][string]$Expected,
+        [AllowEmptyString()][Parameter(Mandatory)][string]$Actual
+    )
+
+    $expectedBytes = [System.Text.Encoding]::UTF8.GetBytes($Expected)
+    $actualBytes = [System.Text.Encoding]::UTF8.GetBytes($Actual)
+    try {
+        $expectedBytes.Length -eq $actualBytes.Length -and
+            [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                $expectedBytes, $actualBytes)
+    } finally {
+        [Array]::Clear($expectedBytes, 0, $expectedBytes.Length)
+        [Array]::Clear($actualBytes, 0, $actualBytes.Length)
+    }
+}
+
+function Test-PSOBBStrictJsonPropertyUniqueness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Text.Json.JsonElement]$Element,
+        [string]$Path = '$'
+    )
+
+    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        $names = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $names.Add($property.Name)) {
+                throw "Lifecycle JSON contains a duplicate decoded property at $Path.$($property.Name)"
+            }
+            Test-PSOBBStrictJsonPropertyUniqueness `
+                -Element $property.Value -Path "$Path.$($property.Name)"
+        }
+    } elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        $index = 0
+        foreach ($item in $Element.EnumerateArray()) {
+            Test-PSOBBStrictJsonPropertyUniqueness `
+                -Element $item -Path "$Path[$index]"
+            $index++
+        }
+    }
+    $true
+}
+
+function Assert-PSOBBStrictJsonExactProperties {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Text.Json.JsonElement]$Element,
+        [Parameter(Mandatory)][string[]]$Expected,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    if ($Element.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+        throw "The $Label lifecycle JSON root is not an object"
+    }
+    $actual = @($Element.EnumerateObject() | ForEach-Object Name)
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($propertyName in $actual) {
+        [void]$actualSet.Add($propertyName)
+    }
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($propertyName in $Expected) {
+        [void]$expectedSet.Add($propertyName)
+    }
+    if ($actual.Count -ne $Expected.Count -or
+        -not $actualSet.SetEquals($expectedSet)) {
+        throw "The $Label lifecycle JSON does not have its exact property set"
+    }
+    $true
+}
+
+function ConvertFrom-PSOBBStrictJsonElement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Text.Json.JsonElement]$Element
+    )
+
+    switch ($Element.ValueKind) {
+        ([System.Text.Json.JsonValueKind]::Object) {
+            $value = [ordered]@{}
+            foreach ($property in $Element.EnumerateObject()) {
+                $value[$property.Name] = ConvertFrom-PSOBBStrictJsonElement `
+                    -Element $property.Value
+            }
+            return [pscustomobject]$value
+        }
+        ([System.Text.Json.JsonValueKind]::Array) {
+            $values = [System.Collections.Generic.List[object]]::new()
+            foreach ($item in $Element.EnumerateArray()) {
+                $values.Add((ConvertFrom-PSOBBStrictJsonElement -Element $item))
+            }
+            return ,$values.ToArray()
+        }
+        ([System.Text.Json.JsonValueKind]::String) {
+            return $Element.GetString()
+        }
+        ([System.Text.Json.JsonValueKind]::Number) {
+            [long]$integer = 0
+            if ($Element.TryGetInt64([ref]$integer)) {
+                return $integer
+            }
+            return $Element.GetDouble()
+        }
+        ([System.Text.Json.JsonValueKind]::True) { return $true }
+        ([System.Text.Json.JsonValueKind]::False) { return $false }
+        ([System.Text.Json.JsonValueKind]::Null) { return $null }
+        default { throw 'Lifecycle JSON contains an unsupported value kind' }
+    }
+}
+
+function Read-PSOBBStrictLifecycleJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)]
+        [ValidateSet('ServerProcessRecord', 'ServerControlState', 'ServerControlRequest',
+            'ClientStartupReceipt')]
+        [string]$Contract
+    )
+
+    $safePath = Assert-PathWithinRoot -Path $Path -Root $Root
+    if (-not (Test-Path -LiteralPath $safePath -PathType Leaf)) {
+        throw "The required $Contract lifecycle JSON is missing"
+    }
+    $item = Get-Item -LiteralPath $safePath -Force -ErrorAction Stop
+    $maximumBytes = if ($Contract -ceq 'ServerControlRequest') { 16KB } else { 64KB }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt $maximumBytes) {
+        throw "The $Contract lifecycle JSON has an invalid filesystem type or size"
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($safePath)
+    $document = $null
+    try {
+        if ($bytes.Length -ne $item.Length -or $bytes.Length -gt $maximumBytes) {
+            throw "The $Contract lifecycle JSON changed size while it was read"
+        }
+        $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        $text = $utf8.GetString($bytes)
+        $options = [System.Text.Json.JsonDocumentOptions]::new()
+        $options.AllowTrailingCommas = $false
+        $options.CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+        $options.MaxDepth = 16
+        $document = [System.Text.Json.JsonDocument]::Parse($text, $options)
+        $rootElement = $document.RootElement
+        Test-PSOBBStrictJsonPropertyUniqueness -Element $rootElement | Out-Null
+
+        $variant = $Contract
+        if ($Contract -ceq 'ServerControlState') {
+            [System.Text.Json.JsonElement]$stateElement = [System.Text.Json.JsonElement]::new()
+            if ($rootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object -or
+                -not $rootElement.TryGetProperty('state', [ref]$stateElement) -or
+                $stateElement.ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
+                throw 'The ServerControlState lifecycle JSON has no state discriminator'
+            }
+            $variant = 'ServerControlState:' + $stateElement.GetString()
+        } elseif ($Contract -ceq 'ServerControlRequest') {
+            [System.Text.Json.JsonElement]$actionElement = [System.Text.Json.JsonElement]::new()
+            if ($rootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object -or
+                -not $rootElement.TryGetProperty('action', [ref]$actionElement) -or
+                $actionElement.ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
+                throw 'The ServerControlRequest lifecycle JSON has no action discriminator'
+            }
+            $variant = 'ServerControlRequest:' + $actionElement.GetString()
+        }
+
+        $definition = switch -CaseSensitive ($variant) {
+            'ServerProcessRecord' {
+                @{
+                    Properties = @('schemaVersion', 'serverEnvironment', 'environmentId',
+                        'componentId', 'controlIdentity', 'pid', 'executablePath',
+                        'executableSha256', 'startTimeUtc', 'startTimeFileTimeUtc',
+                        'hostPid', 'hostStartTimeUtc', 'hostStartTimeFileTimeUtc',
+                        'hostExecutablePath', 'startupRequestId', 'controlToken',
+                        'controlProtocol', 'buildContractSha256', 'clientBindingSha256',
+                        'stateBindingSha256', 'stdoutLog', 'stderrLog')
+                    Strings = @('serverEnvironment', 'environmentId', 'componentId',
+                        'controlIdentity', 'executablePath', 'executableSha256',
+                        'startTimeUtc', 'hostStartTimeUtc', 'hostExecutablePath',
+                        'startupRequestId', 'controlToken', 'controlProtocol', 'stdoutLog',
+                        'stderrLog')
+                    Integers = @('schemaVersion', 'pid', 'startTimeFileTimeUtc', 'hostPid',
+                        'hostStartTimeFileTimeUtc')
+                    NullableStrings = @('buildContractSha256', 'clientBindingSha256',
+                        'stateBindingSha256')
+                    Booleans = @()
+                }
+            }
+            'ServerControlState:starting' {
+                @{
+                    Properties = @('schemaVersion', 'state', 'installationId',
+                        'serverEnvironment', 'environmentId', 'componentId', 'controlIdentity',
+                        'executablePath', 'executableSha256', 'buildContractSha256',
+                        'clientBindingSha256', 'stateBindingSha256', 'startupRequestId',
+                        'controlToken', 'requestedAtUtc')
+                    Strings = @('state', 'installationId', 'serverEnvironment', 'environmentId',
+                        'componentId', 'controlIdentity', 'executablePath', 'executableSha256',
+                        'startupRequestId', 'controlToken', 'requestedAtUtc')
+                    Integers = @('schemaVersion')
+                    NullableStrings = @('buildContractSha256', 'clientBindingSha256',
+                        'stateBindingSha256')
+                    Booleans = @()
+                }
+            }
+            'ServerControlState:child-started' {
+                @{
+                    Properties = @('schemaVersion', 'state', 'installationId',
+                        'serverEnvironment', 'environmentId', 'componentId', 'controlIdentity',
+                        'pid', 'startTimeFileTimeUtc', 'hostPid',
+                        'hostStartTimeFileTimeUtc', 'startupRequestId', 'startTimeUtc',
+                        'updatedAtUtc')
+                    Strings = @('state', 'installationId', 'serverEnvironment', 'environmentId',
+                        'componentId', 'controlIdentity', 'startupRequestId', 'startTimeUtc',
+                        'updatedAtUtc')
+                    Integers = @('schemaVersion', 'pid', 'startTimeFileTimeUtc', 'hostPid',
+                        'hostStartTimeFileTimeUtc')
+                    NullableStrings = @()
+                    Booleans = @()
+                }
+            }
+            'ServerControlState:shell-exit-requested' {
+                @{
+                    Properties = @('schemaVersion', 'state', 'installationId',
+                        'serverEnvironment', 'environmentId', 'componentId', 'controlIdentity',
+                        'pid', 'startTimeFileTimeUtc', 'hostPid',
+                        'hostStartTimeFileTimeUtc', 'updatedAtUtc')
+                    Strings = @('state', 'installationId', 'serverEnvironment', 'environmentId',
+                        'componentId', 'controlIdentity', 'updatedAtUtc')
+                    Integers = @('schemaVersion', 'pid', 'startTimeFileTimeUtc', 'hostPid',
+                        'hostStartTimeFileTimeUtc')
+                    NullableStrings = @()
+                    Booleans = @()
+                }
+            }
+            { $_ -in @('ServerControlState:stopped', 'ServerControlState:exited') } {
+                @{
+                    Properties = @('schemaVersion', 'state', 'installationId',
+                        'serverEnvironment', 'environmentId', 'componentId', 'controlIdentity',
+                        'pid', 'startTimeFileTimeUtc', 'exitCode',
+                        'gracefulShellExitRequested', 'updatedAtUtc')
+                    Strings = @('state', 'installationId', 'serverEnvironment', 'environmentId',
+                        'componentId', 'controlIdentity', 'updatedAtUtc')
+                    Integers = @('schemaVersion', 'pid', 'startTimeFileTimeUtc', 'exitCode')
+                    NullableStrings = @()
+                    Booleans = @('gracefulShellExitRequested')
+                }
+            }
+            'ServerControlState:failed' {
+                @{
+                    Properties = @('schemaVersion', 'state', 'serverEnvironment',
+                        'environmentId', 'componentId', 'controlIdentity', 'message',
+                        'updatedAtUtc')
+                    Strings = @('state', 'serverEnvironment', 'environmentId', 'componentId',
+                        'message', 'updatedAtUtc')
+                    Integers = @('schemaVersion')
+                    NullableStrings = @('controlIdentity')
+                    Booleans = @()
+                }
+            }
+            'ServerControlRequest:exit' {
+                @{
+                    Properties = @('schemaVersion', 'action', 'serverEnvironment',
+                        'environmentId', 'componentId', 'controlIdentity', 'startupRequestId',
+                        'pid', 'startTimeUtc', 'startTimeFileTimeUtc', 'controlToken',
+                        'requestedAtUtc')
+                    Strings = @('action', 'serverEnvironment', 'environmentId', 'componentId',
+                        'controlIdentity', 'startupRequestId', 'startTimeUtc', 'controlToken',
+                        'requestedAtUtc')
+                    Integers = @('schemaVersion', 'pid', 'startTimeFileTimeUtc')
+                    NullableStrings = @()
+                    Booleans = @()
+                }
+            }
+            'ServerControlRequest:cancel-start' {
+                @{
+                    Properties = @('schemaVersion', 'action', 'serverEnvironment',
+                        'environmentId', 'componentId', 'controlIdentity', 'hostPid',
+                        'hostStartTimeFileTimeUtc', 'startupRequestId', 'controlToken',
+                        'requestedAtUtc')
+                    Strings = @('action', 'serverEnvironment', 'environmentId', 'componentId',
+                        'controlIdentity', 'startupRequestId', 'controlToken', 'requestedAtUtc')
+                    Integers = @('schemaVersion', 'hostPid', 'hostStartTimeFileTimeUtc')
+                    NullableStrings = @()
+                    Booleans = @()
+                }
+            }
+            'ClientStartupReceipt' {
+                @{
+                    Properties = @('schemaVersion', 'completedAtUtc', 'serverEnvironment',
+                        'environmentId', 'channel', 'profileId', 'materializedProfileSha256',
+                        'configurationSha256', 'processId', 'processStartTimeUtc',
+                        'processStartTimeFileTimeUtc', 'executableSize', 'executableSha256',
+                        'clientBindingSha256', 'startupElapsedMilliseconds',
+                        'foregroundPreserved', 'windowMode', 'window',
+                        'nativeGraphicsPresetId', 'graphicCtrlSha256')
+                    Strings = @('completedAtUtc', 'serverEnvironment', 'environmentId',
+                        'channel', 'materializedProfileSha256', 'processStartTimeUtc',
+                        'executableSha256', 'windowMode', 'nativeGraphicsPresetId',
+                        'graphicCtrlSha256')
+                    Integers = @('schemaVersion', 'processId',
+                        'processStartTimeFileTimeUtc', 'executableSize')
+                    NullableStrings = @('profileId', 'configurationSha256',
+                        'clientBindingSha256')
+                    Booleans = @('foregroundPreserved')
+                    Numbers = @('startupElapsedMilliseconds')
+                    Objects = @('window')
+                }
+            }
+            default { throw "The $Contract lifecycle JSON discriminator is unsupported" }
+        }
+
+        Assert-PSOBBStrictJsonExactProperties `
+            -Element $rootElement -Expected $definition.Properties -Label $variant | Out-Null
+        foreach ($propertyName in $definition.Strings) {
+            if ($rootElement.GetProperty($propertyName).ValueKind -ne
+                [System.Text.Json.JsonValueKind]::String) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not a string"
+            }
+        }
+        foreach ($propertyName in $definition.Integers) {
+            $propertyValue = $rootElement.GetProperty($propertyName)
+            [long]$integer = 0
+            if ($propertyValue.ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or
+                -not $propertyValue.TryGetInt64([ref]$integer)) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not an Int64"
+            }
+        }
+        foreach ($propertyName in $definition.NullableStrings) {
+            $kind = $rootElement.GetProperty($propertyName).ValueKind
+            if ($kind -notin @(
+                    [System.Text.Json.JsonValueKind]::Null,
+                    [System.Text.Json.JsonValueKind]::String)) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not nullable text"
+            }
+        }
+        foreach ($propertyName in $definition.Booleans) {
+            if ($rootElement.GetProperty($propertyName).ValueKind -notin @(
+                    [System.Text.Json.JsonValueKind]::True,
+                    [System.Text.Json.JsonValueKind]::False)) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not Boolean"
+            }
+        }
+        $numberProperties = if ($definition.ContainsKey('Numbers')) {
+            @($definition.Numbers)
+        } else { @() }
+        foreach ($propertyName in $numberProperties) {
+            if ($rootElement.GetProperty($propertyName).ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Number) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not numeric"
+            }
+        }
+        $objectProperties = if ($definition.ContainsKey('Objects')) {
+            @($definition.Objects)
+        } else { @() }
+        foreach ($propertyName in $objectProperties) {
+            if ($rootElement.GetProperty($propertyName).ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "The $variant lifecycle JSON property '$propertyName' is not an object"
+            }
+        }
+        if ($variant -ceq 'ClientStartupReceipt') {
+            $window = $rootElement.GetProperty('window')
+            Assert-PSOBBStrictJsonExactProperties `
+                -Element $window `
+                -Expected @('x', 'y', 'width', 'height', 'clientWidth', 'clientHeight') `
+                -Label 'ClientStartupReceipt.window' | Out-Null
+            foreach ($property in $window.EnumerateObject()) {
+                [long]$integer = 0
+                if ($property.Value.ValueKind -ne [System.Text.Json.JsonValueKind]::Null -and
+                    ($property.Value.ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or
+                        -not $property.Value.TryGetInt64([ref]$integer))) {
+                    throw "The ClientStartupReceipt.window '$($property.Name)' property is not a nullable integer"
+                }
+            }
+        }
+        if ($rootElement.GetProperty('schemaVersion').GetInt64() -ne 3) {
+            throw "The $variant lifecycle JSON schema version is unsupported"
+        }
+        ConvertFrom-PSOBBStrictJsonElement -Element $rootElement
+    } finally {
+        if ($document) { $document.Dispose() }
+        if ($bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+}
+
+function Assert-PSOBBStrictDataObjectProperties {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Value,
+        [Parameter(Mandatory)][string[]]$Expected,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    if ($null -eq $Value -or $Value -isnot [pscustomobject]) {
+        throw "The $Label JSON value is not an object"
+    }
+    $actual = @($Value.PSObject.Properties.Name)
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($name in $actual) { [void]$actualSet.Add($name) }
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($name in $Expected) { [void]$expectedSet.Add($name) }
+    if ($actual.Count -ne $Expected.Count -or
+        -not $actualSet.SetEquals($expectedSet)) {
+        throw "The $Label JSON object does not have its exact property set"
+    }
+    $true
+}
+
+function ConvertFrom-PSOBBStrictDataJsonElement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.Text.Json.JsonElement]$Element,
+        [string]$Label = 'trusted data'
+    )
+
+    switch ($Element.ValueKind) {
+        ([System.Text.Json.JsonValueKind]::Object) {
+            $objectValue = [ordered]@{}
+            foreach ($property in $Element.EnumerateObject()) {
+                $objectValue[$property.Name] = ConvertFrom-PSOBBStrictDataJsonElement `
+                    -Element $property.Value -Label $Label
+            }
+            return [pscustomobject]$objectValue
+        }
+        ([System.Text.Json.JsonValueKind]::Array) {
+            $arrayValue = [System.Collections.Generic.List[object]]::new()
+            foreach ($item in $Element.EnumerateArray()) {
+                $arrayValue.Add((ConvertFrom-PSOBBStrictDataJsonElement `
+                            -Element $item -Label $Label))
+            }
+            return ,$arrayValue.ToArray()
+        }
+        ([System.Text.Json.JsonValueKind]::String) {
+            return $Element.GetString()
+        }
+        ([System.Text.Json.JsonValueKind]::Number) {
+            [long]$integerValue = 0
+            if (-not $Element.TryGetInt64([ref]$integerValue)) {
+                throw "The $Label JSON contains a fractional or out-of-range number"
+            }
+            return $integerValue
+        }
+        ([System.Text.Json.JsonValueKind]::True) { return $true }
+        ([System.Text.Json.JsonValueKind]::False) { return $false }
+        ([System.Text.Json.JsonValueKind]::Null) { return $null }
+        default { throw "The $Label JSON contains an unsupported value kind" }
+    }
+}
+
+function Assert-PSOBBOrdinaryContainedPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateSet('File', 'Directory')]
+        [string]$Kind,
+        [string]$Label = 'trusted path'
+    )
+
+    $safeRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $safePath = Assert-PathWithinRoot -Path $Path -Root $safeRoot
+    $relative = [System.IO.Path]::GetRelativePath($safeRoot, $safePath)
+    if ($relative -eq '..' -or $relative.StartsWith(
+            '..\', [System.StringComparison]::Ordinal)) {
+        throw "The $Label is outside its approved root"
+    }
+
+    $current = $safeRoot
+    $segments = if ($relative -eq '.') { @() } else { @($relative.Split('\')) }
+    $paths = @($safeRoot)
+    foreach ($segment in $segments) {
+        $current = Join-Path $current $segment
+        $paths += $current
+    }
+    for ($index = 0; $index -lt $paths.Count; $index++) {
+        $item = Get-Item -Force -LiteralPath $paths[$index] -ErrorAction Stop
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "The $Label has a reparse point in its contained path"
+        }
+        $isFinal = $index -eq ($paths.Count - 1)
+        if (-not $isFinal -and -not $item.PSIsContainer) {
+            throw "The $Label has a non-directory path ancestor"
+        }
+        if ($isFinal -and
+            (($Kind -ceq 'File' -and $item.PSIsContainer) -or
+                ($Kind -ceq 'Directory' -and -not $item.PSIsContainer))) {
+            throw "The $Label has an unexpected filesystem type"
+        }
+    }
+    $safePath
+}
+
+function Read-PSOBBBoundedOrdinaryFileSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 1073741824)]
+        [long]$MaximumBytes,
+        [string]$Label = 'trusted file',
+        [switch]$AllowEmpty,
+        [switch]$IncludeBytes
+    )
+
+    $safePath = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Path -Root $Root -Kind File -Label $Label
+    $stream = [System.IO.FileStream]::new(
+        $safePath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read,
+        65536,
+        [System.IO.FileOptions]::SequentialScan)
+    $bytes = $null
+    try {
+        if ((-not $AllowEmpty -and $stream.Length -le 0) -or
+            $stream.Length -lt 0 -or $stream.Length -gt $MaximumBytes -or
+            $stream.Length -gt [int]::MaxValue) {
+            throw "The $Label has an invalid bounded size"
+        }
+        $bytes = [byte[]]::new([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) {
+                throw "The $Label changed or ended while its locked bytes were read"
+            }
+            $offset += $read
+        }
+        if ($stream.ReadByte() -ne -1) {
+            throw "The $Label grew while its locked bytes were read"
+        }
+        $digest = [Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        [pscustomobject]@{
+            Path = $safePath
+            Length = [long]$bytes.Length
+            Sha256 = $digest
+            Bytes = if ($IncludeBytes) { $bytes } else { $null }
+        }
+        if (-not $IncludeBytes) {
+            [Array]::Clear($bytes, 0, $bytes.Length)
+            $bytes = $null
+        }
+    } finally {
+        $stream.Dispose()
+        if ($bytes -and -not $IncludeBytes) {
+            [Array]::Clear($bytes, 0, $bytes.Length)
+        }
+    }
+}
+
+function Read-PSOBBStrictJsonSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 67108864)]
+        [long]$MaximumBytes,
+        [ValidateRange(1, 64)][int]$MaximumDepth = 32,
+        [string]$Label = 'trusted data'
+    )
+
+    $fileSnapshot = Read-PSOBBBoundedOrdinaryFileSnapshot `
+        -Path $Path -Root $Root -MaximumBytes $MaximumBytes `
+        -Label $Label -IncludeBytes
+    $document = $null
+    try {
+        $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        $jsonText = $utf8.GetString([byte[]]$fileSnapshot.Bytes)
+        $options = [System.Text.Json.JsonDocumentOptions]::new()
+        $options.AllowTrailingCommas = $false
+        $options.CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+        $options.MaxDepth = $MaximumDepth
+        $document = [System.Text.Json.JsonDocument]::Parse($jsonText, $options)
+        Test-PSOBBStrictJsonPropertyUniqueness `
+            -Element $document.RootElement -Path '$' | Out-Null
+        $value = ConvertFrom-PSOBBStrictDataJsonElement `
+            -Element $document.RootElement -Label $Label
+        [pscustomobject]@{
+            Value = $value
+            Sha256 = [string]$fileSnapshot.Sha256
+            Length = [long]$fileSnapshot.Length
+            Path = [string]$fileSnapshot.Path
+        }
+    } catch {
+        throw "The $Label is not valid strict bounded UTF-8 JSON: $($_.Exception.Message)"
+    } finally {
+        if ($document) { $document.Dispose() }
+        if ($fileSnapshot.Bytes) {
+            [Array]::Clear(
+                [byte[]]$fileSnapshot.Bytes, 0, ([byte[]]$fileSnapshot.Bytes).Length)
+        }
+    }
+}
+
+function Assert-PSOBBStrictStringArray {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][Parameter(Mandatory)]$Value,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    if ($Value -isnot [System.Array]) {
+        throw "The $Label JSON value is not an array"
+    }
+    foreach ($entry in $Value) {
+        if ($entry -isnot [string]) {
+            throw "The $Label JSON array contains a non-string value"
+        }
+    }
+    @($Value)
+}
+
+function Read-PSOBBClientPatchPolicySnapshot {
+    [CmdletBinding()]
+    param(
+        [string]$Path = (Join-Path $script:PSOBBRepositoryRoot 'config\client-patch-profiles.json')
+    )
+
+    $snapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $Path -Root $script:PSOBBRepositoryRoot -MaximumBytes 1MB `
+        -MaximumDepth 12 -Label 'client-patch policy'
+    $policyValue = $snapshot.Value
+    Assert-PSOBBStrictDataObjectProperties -Value $policyValue -Expected @(
+        'schemaVersion', 'defaultProfile', 'profiles', 'gated') `
+        -Label 'client-patch policy root' | Out-Null
+    if ($policyValue.schemaVersion -isnot [long] -or
+        $policyValue.schemaVersion -ne 1 -or
+        $policyValue.defaultProfile -isnot [string] -or
+        $policyValue.profiles -isnot [System.Array]) {
+        throw 'Client-patch policy header types are invalid'
+    }
+    foreach ($profileValue in $policyValue.profiles) {
+        Assert-PSOBBStrictDataObjectProperties -Value $profileValue -Expected @(
+            'id', 'channel', 'description', 'autoPatches', 'bbRequiredPatches') `
+            -Label 'client-patch policy profile' | Out-Null
+        foreach ($propertyName in @('id', 'channel', 'description')) {
+            if ($profileValue.$propertyName -isnot [string]) {
+                throw "Client-patch policy profile '$propertyName' has an invalid type"
+            }
+        }
+        [void](Assert-PSOBBStrictStringArray `
+                -Value $profileValue.autoPatches `
+                -Label 'client-patch profile autoPatches')
+        [void](Assert-PSOBBStrictStringArray `
+                -Value $profileValue.bbRequiredPatches `
+                -Label 'client-patch profile bbRequiredPatches')
+    }
+    Assert-PSOBBStrictDataObjectProperties -Value $policyValue.gated -Expected @(
+        'sourceCanaryOnly', 'protocolRequired', 'migrationRequired') `
+        -Label 'client-patch policy gated' | Out-Null
+    foreach ($gateName in @('sourceCanaryOnly', 'protocolRequired', 'migrationRequired')) {
+        [void](Assert-PSOBBStrictStringArray `
+                -Value $policyValue.gated.$gateName `
+                -Label "client-patch policy gated.$gateName")
+    }
+    $snapshot
+}
+
+function Read-PSOBBInstallationRecordSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$ExpectedInstallationId,
+        [string]$ExpectedRuntimeRoot
+    )
+
+    $snapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $Path -Root $Root -MaximumBytes 256KB -MaximumDepth 8 `
+        -Label 'Stable installation record'
+    $recordValue = $snapshot.Value
+    $properties = @(
+        'schemaVersion', 'installationId', 'initializedAtUtc', 'runtimeRoot',
+        'serverVersion', 'serverArchiveSha256', 'serverExecutableSha256',
+        'serverBaseManifestSha256', 'clientVersion', 'clientArchiveSha256',
+        'baseClientExecutableSha256', 'baseClientManifestSha256',
+        'clientExecutableSha256', 'rendererVersion', 'rendererArchiveSha256',
+        'rendererWrapperSha256', 'rendererConfigurationSha256',
+        'patchManifestSha256', 'synchronizedPatchFiles', 'clientPatchProfile',
+        'clientPatchPolicySha256', 'networkScope')
+    Assert-PSOBBStrictDataObjectProperties `
+        -Value $recordValue -Expected $properties -Label 'Stable installation record' |
+        Out-Null
+    foreach ($propertyName in @($properties | Where-Object {
+                $_ -notin @('schemaVersion', 'synchronizedPatchFiles')
+            })) {
+        if ($recordValue.$propertyName -isnot [string]) {
+            throw "Stable installation record property '$propertyName' is not text"
+        }
+    }
+    if ($recordValue.schemaVersion -isnot [long] -or
+        $recordValue.schemaVersion -ne 2 -or
+        $recordValue.synchronizedPatchFiles -isnot [long] -or
+        $recordValue.synchronizedPatchFiles -lt 0) {
+        throw 'Stable installation record integer fields are invalid'
+    }
+    foreach ($hashName in @(
+            'serverArchiveSha256', 'serverExecutableSha256',
+            'serverBaseManifestSha256', 'clientArchiveSha256',
+            'baseClientExecutableSha256', 'baseClientManifestSha256',
+            'clientExecutableSha256', 'rendererArchiveSha256',
+            'rendererWrapperSha256', 'rendererConfigurationSha256',
+            'patchManifestSha256', 'clientPatchPolicySha256')) {
+        if ([string]$recordValue.$hashName -cnotmatch '^[a-f0-9]{64}$') {
+            throw "Stable installation record property '$hashName' is not a lowercase SHA-256"
+        }
+    }
+    $parsedInstallationId = [Guid]::Empty
+    $parsedInitializedAt = [DateTimeOffset]::MinValue
+    if (-not [Guid]::TryParseExact(
+            [string]$recordValue.installationId, 'D', [ref]$parsedInstallationId) -or
+        -not [DateTimeOffset]::TryParse(
+            [string]$recordValue.initializedAtUtc, [ref]$parsedInitializedAt) -or
+        [string]$recordValue.clientPatchProfile -cnotmatch
+            '^[a-z0-9]+(?:-[a-z0-9]+)*$' -or
+        [string]$recordValue.networkScope -cne 'loopback-only') {
+        throw 'Stable installation record identity or fixed fields are invalid'
+    }
+    if ($ExpectedInstallationId -and
+        [string]$recordValue.installationId -cne $ExpectedInstallationId) {
+        throw 'Stable installation record belongs to another installation'
+    }
+    if ($ExpectedRuntimeRoot) {
+        $recordedRoot = [System.IO.Path]::GetFullPath(
+            [string]$recordValue.runtimeRoot).TrimEnd('\')
+        $expectedRoot = [System.IO.Path]::GetFullPath(
+            $ExpectedRuntimeRoot).TrimEnd('\')
+        if (-not $recordedRoot.Equals(
+                $expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Stable installation record belongs to another runtime root'
+        }
+    }
+    $snapshot
+}
+
+function Get-PSOBBStableServerSourceLockIdentity {
+    [CmdletBinding()]
+    param(
+        [string]$Path = (Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json')
+    )
+
+    $snapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $Path -Root $script:PSOBBRepositoryRoot -MaximumBytes 8MB `
+        -MaximumDepth 24 -Label 'source lock'
+    $sourceLockValue = $snapshot.Value
+    Assert-PSOBBStrictDataObjectProperties -Value $sourceLockValue -Expected @(
+        'schemaVersion', 'generatedAtUtc', 'components', 'behaviorReferences') `
+        -Label 'source lock root' | Out-Null
+    if ($sourceLockValue.schemaVersion -isnot [long] -or
+        $sourceLockValue.schemaVersion -ne 1 -or
+        $sourceLockValue.generatedAtUtc -isnot [string] -or
+        $sourceLockValue.components -isnot [System.Array] -or
+        $sourceLockValue.behaviorReferences -isnot [System.Array]) {
+        throw 'Source lock root field types are invalid'
+    }
+    $stableComponents = @($sourceLockValue.components | Where-Object {
+            $_ -is [pscustomobject] -and $_.PSObject.Properties['id'] -and
+            $_.id -is [string] -and $_.id -ceq 'newserv-stable-release'
+        })
+    if ($stableComponents.Count -ne 1) {
+        throw 'Source lock must contain exactly one Stable release component'
+    }
+    $componentValue = $stableComponents[0]
+    Assert-PSOBBStrictDataObjectProperties -Value $componentValue -Expected @(
+        'id', 'role', 'sourceUrl', 'releaseUrl', 'version', 'commit',
+        'retrievedAtUtc', 'size', 'sha256', 'signatureState', 'license',
+        'redistribution', 'compatibility', 'rollbackTarget', 'members') `
+        -Label 'Stable release source-lock component' | Out-Null
+    foreach ($propertyName in @(
+            'id', 'role', 'sourceUrl', 'releaseUrl', 'version', 'commit',
+            'retrievedAtUtc', 'sha256', 'signatureState', 'license',
+            'redistribution', 'compatibility', 'rollbackTarget')) {
+        if ($componentValue.$propertyName -isnot [string]) {
+            throw "Stable release source-lock property '$propertyName' is not text"
+        }
+    }
+    if ($componentValue.size -isnot [long] -or $componentValue.size -le 0 -or
+        $componentValue.members -isnot [System.Array] -or
+        [string]$componentValue.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'Stable release source-lock size, hash, or members are invalid'
+    }
+    foreach ($memberValue in $componentValue.members) {
+        Assert-PSOBBStrictDataObjectProperties -Value $memberValue -Expected @(
+            'path', 'size', 'sha256', 'authenticode') `
+            -Label 'Stable release source-lock member' | Out-Null
+        if ($memberValue.path -isnot [string] -or
+            $memberValue.size -isnot [long] -or $memberValue.size -le 0 -or
+            $memberValue.sha256 -isnot [string] -or
+            [string]$memberValue.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+            $memberValue.authenticode -isnot [string]) {
+            throw 'Stable release source-lock member field types are invalid'
+        }
+    }
+    $serverMembers = @($componentValue.members | Where-Object {
+            $_.path -ceq 'release/newserv-windows.exe'
+        })
+    if ($serverMembers.Count -ne 1) {
+        throw 'Source lock has no unique approved Stable server executable member'
+    }
+    [pscustomobject]@{
+        ComponentId = [string]$componentValue.id
+        Size = [long]$serverMembers[0].size
+        Sha256 = [string]$serverMembers[0].sha256
+        Authenticode = [string]$serverMembers[0].authenticode
+        Component = $componentValue
+        SourceLock = $sourceLockValue
+        SourceLockSha256 = [string]$snapshot.Sha256
+    }
+}
+
+function Read-PSOBBRecoveryManifestSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $snapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $Path -Root $Root -MaximumBytes 16MB -MaximumDepth 16 `
+        -Label 'recovery manifest'
+    $manifestValue = $snapshot.Value
+    Assert-PSOBBStrictDataObjectProperties -Value $manifestValue -Expected @(
+        'schemaVersion', 'backupId', 'backupKind', 'createdAtUtc',
+        'serverExecutable', 'clientPatchState', 'stateRoots', 'files') `
+        -Label 'recovery manifest root' | Out-Null
+    if ($manifestValue.schemaVersion -isnot [long] -or
+        $manifestValue.backupId -isnot [string] -or
+        $manifestValue.backupKind -isnot [string] -or
+        $manifestValue.createdAtUtc -isnot [string] -or
+        $manifestValue.stateRoots -isnot [System.Array] -or
+        $manifestValue.files -isnot [System.Array]) {
+        throw 'Recovery manifest root field types are invalid'
+    }
+    Assert-PSOBBStrictDataObjectProperties `
+        -Value $manifestValue.serverExecutable `
+        -Expected @('path', 'sourceLockComponent', 'size', 'sha256') `
+        -Label 'recovery manifest serverExecutable' | Out-Null
+    if ($manifestValue.serverExecutable.path -isnot [string] -or
+        $manifestValue.serverExecutable.sourceLockComponent -isnot [string] -or
+        $manifestValue.serverExecutable.size -isnot [long] -or
+        $manifestValue.serverExecutable.sha256 -isnot [string]) {
+        throw 'Recovery manifest serverExecutable field types are invalid'
+    }
+    Assert-PSOBBStrictDataObjectProperties `
+        -Value $manifestValue.clientPatchState -Expected @(
+            'profile', 'policySha256', 'configPath', 'configSha256',
+            'installationPath', 'installationSha256', 'installationId') `
+        -Label 'recovery manifest clientPatchState' | Out-Null
+    foreach ($propertyName in @(
+            'profile', 'policySha256', 'configPath', 'configSha256',
+            'installationPath', 'installationSha256', 'installationId')) {
+        if ($manifestValue.clientPatchState.$propertyName -isnot [string]) {
+            throw "Recovery manifest clientPatchState '$propertyName' is not text"
+        }
+    }
+    foreach ($stateRootValue in $manifestValue.stateRoots) {
+        Assert-PSOBBStrictDataObjectProperties -Value $stateRootValue `
+            -Expected @('path', 'kind') -Label 'recovery manifest stateRoots entry' |
+            Out-Null
+        if ($stateRootValue.path -isnot [string] -or
+            $stateRootValue.kind -isnot [string]) {
+            throw 'Recovery manifest stateRoots entry field types are invalid'
+        }
+    }
+    foreach ($fileValue in $manifestValue.files) {
+        Assert-PSOBBStrictDataObjectProperties -Value $fileValue `
+            -Expected @('path', 'size', 'sha256') `
+            -Label 'recovery manifest files entry' | Out-Null
+        if ($fileValue.path -isnot [string] -or
+            $fileValue.size -isnot [long] -or
+            $fileValue.sha256 -isnot [string]) {
+            throw 'Recovery manifest files entry field types are invalid'
+        }
+    }
+    $snapshot
+}
+
+function Get-PSOBBRecordedSupervisorHostState {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Record)
+
+    $expectedHostPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $PSHOME 'pwsh.exe'))
+    if ([string]$Record.hostPid -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Record.hostStartTimeFileTimeUtc -cnotmatch '^[1-9][0-9]*$' -or
+        [string]::IsNullOrWhiteSpace([string]$Record.hostExecutablePath)) {
+        return [pscustomobject]@{
+            State = 'InvalidRecord'
+            Process = $null
+            Detail = 'The supervisor host identity fields are incomplete.'
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    }
+    try {
+        $recordedHostPath = [System.IO.Path]::GetFullPath(
+            [string]$Record.hostExecutablePath)
+    } catch {
+        return [pscustomobject]@{
+            State = 'InvalidRecord'
+            Process = $null
+            Detail = 'The recorded supervisor host executable path is invalid.'
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    }
+    if (-not $recordedHostPath.Equals(
+            $expectedHostPath,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        return [pscustomobject]@{
+            State = 'InvalidRecord'
+            Process = $null
+            Detail = 'The recorded supervisor host executable is not the exact expected pwsh image.'
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    }
+
+    $hostProcess = Get-Process -Id ([int]$Record.hostPid) `
+        -ErrorAction SilentlyContinue
+    if (-not $hostProcess) {
+        return [pscustomobject]@{
+            State = 'Absent'
+            Process = $null
+            Detail = 'The recorded supervisor host PID is absent.'
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    }
+    try {
+        $actualPath = [System.IO.Path]::GetFullPath($hostProcess.Path)
+        $actualStartFileTimeUtc = [long](
+            $hostProcess.StartTime.ToUniversalTime().ToFileTimeUtc())
+        if (-not $actualPath.Equals(
+                $expectedHostPath,
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+            $actualStartFileTimeUtc -ne
+                [long]$Record.hostStartTimeFileTimeUtc) {
+            $hostProcess.Dispose()
+            return [pscustomobject]@{
+                State = 'Reused'
+                Process = $null
+                Detail = 'The recorded supervisor host PID now belongs to a different process identity.'
+                ExpectedExecutablePath = $expectedHostPath
+            }
+        }
+        [pscustomobject]@{
+            State = 'ExactActive'
+            Process = $hostProcess
+            Detail = 'The recorded supervisor host PID, image, and creation time match.'
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    } catch {
+        $inspectionFailure = $_.Exception.Message
+        try {
+            $hostProcess.Refresh()
+            if ($hostProcess.HasExited) {
+                $hostProcess.Dispose()
+                return [pscustomobject]@{
+                    State = 'Absent'
+                    Process = $null
+                    Detail = 'The recorded supervisor host exited during identity inspection.'
+                    ExpectedExecutablePath = $expectedHostPath
+                }
+            }
+        } catch {
+            # Preserve the original inspection failure below.
+        }
+        $hostProcess.Dispose()
+        [pscustomobject]@{
+            State = 'Uninspectable'
+            Process = $null
+            Detail = $inspectionFailure
+            ExpectedExecutablePath = $expectedHostPath
+        }
+    }
+}
+
+function Wait-PSOBBRecordedSupervisorHostQuiescence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [ValidateRange(0, 10000)][int]$TimeoutMilliseconds = 5000
+    )
+
+    $lifecyclePaths = @(
+        $Layout.PidFile,
+        $Layout.LegacyPidFile,
+        $Layout.HostPidFile,
+        $Layout.ControlState,
+        $Layout.ControlRequest)
+    $presentPaths = @($lifecyclePaths | Where-Object {
+            Test-Path -LiteralPath $_
+        })
+    if ($presentPaths.Count -eq 0) {
+        return [pscustomobject]@{
+            Quiescent = $true
+            InitialState = 'NoLifecycleState'
+            HostWasActive = $false
+        }
+    }
+    if (-not (Test-Path -LiteralPath $Layout.PidFile -PathType Leaf)) {
+        throw 'Lifecycle state exists without an exact supervisor process record; preserving it instead of racing an unidentified host'
+    }
+
+    $safePidFile = Assert-PathWithinRoot `
+        -Path $Layout.PidFile -Root $Layout.Root
+    try {
+        $record = Read-PSOBBStrictLifecycleJson `
+            -Path $safePidFile -Root $Layout.Root -Contract ServerProcessRecord
+    } catch {
+        throw 'The existing supervisor process record cannot prove host quiescence'
+    }
+    $environmentName = Resolve-PSOBBServerEnvironmentName `
+        -Environment ([string]$Layout.Environment)
+    $componentId = Get-PSOBBServerComponentId `
+        -ServerEnvironment $environmentName
+    $rootLayout = Get-PSOBBLayout -RuntimeRoot ([string]$Layout.Root)
+    $approved = Get-PSOBBApprovedNewservExecutableIdentity `
+        -Layout $rootLayout -ServerEnvironment $environmentName
+    $marker = Assert-PSOBBRuntimeMarker -Layout $rootLayout
+    try {
+        $expectedControlIdentity = Get-PSOBBServerControlIdentity `
+            -InstallationId ([string]$marker.installationId) `
+            -EnvironmentId ([string]$Layout.EnvironmentId) `
+            -ComponentId $componentId `
+            -StartupRequestId ([string]$record.startupRequestId) `
+            -ExecutableSha256 ([string]$record.executableSha256)
+    } catch {
+        throw 'The existing supervisor process record cannot reconstruct its exact control identity'
+    }
+    if ([int]$record.schemaVersion -ne 3 -or
+        [string]$record.serverEnvironment -cne $environmentName -or
+        [string]$record.environmentId -cne [string]$Layout.EnvironmentId -or
+        [string]$record.componentId -cne $componentId -or
+        [string]$record.executablePath -cne [string]$approved.ExecutablePath -or
+        [string]$record.executableSha256 -cne [string]$approved.Sha256 -or
+        -not (Test-PSOBBFixedTimeTextEquals `
+            -Expected $expectedControlIdentity `
+            -Actual ([string]$record.controlIdentity))) {
+        throw 'The existing supervisor process record cannot prove an exact environment-bound host identity'
+    }
+
+    $hostState = Get-PSOBBRecordedSupervisorHostState -Record $record
+    $initialState = [string]$hostState.State
+    if ($initialState -in @('InvalidRecord', 'Uninspectable')) {
+        throw "The existing supervisor host is $initialState; lifecycle evidence was preserved"
+    }
+    if ($initialState -eq 'ExactActive') {
+        try {
+            if (-not $hostState.Process.WaitForExit($TimeoutMilliseconds)) {
+                throw 'The exact prior supervisor host is still active; lifecycle evidence was preserved'
+            }
+        } finally {
+            $hostState.Process.Dispose()
+        }
+        $hostState = Get-PSOBBRecordedSupervisorHostState -Record $record
+        if ($hostState.State -eq 'ExactActive') {
+            $hostState.Process.Dispose()
+            throw 'The exact prior supervisor host remained active after the quiescence wait'
+        }
+        if ($hostState.State -in @('InvalidRecord', 'Uninspectable')) {
+            throw "The prior supervisor host became $($hostState.State) after waiting; lifecycle evidence was preserved"
+        }
+    }
+
+    [pscustomobject]@{
+        Quiescent = $true
+        InitialState = $initialState
+        HostWasActive = $initialState -eq 'ExactActive'
+    }
+}
+
+function Get-PSOBBServerLifecycleEvidenceRecords {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $marker = Assert-PSOBBRuntimeMarker -Layout $Layout
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($environmentName in @('Stable', 'CombatCanary')) {
+        $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+            -Layout $Layout -Environment $environmentName
+        $paths = @(
+            $environmentLayout.PidFile,
+            $environmentLayout.LegacyPidFile,
+            $environmentLayout.HostPidFile,
+            $environmentLayout.ControlState,
+            $environmentLayout.ControlRequest)
+        $presentPaths = @($paths | Where-Object {
+                Test-Path -LiteralPath $_
+            })
+        if ($presentPaths.Count -eq 0) {
+            continue
+        }
+        $classification = 'InvalidOrIncomplete'
+        $detail = 'Lifecycle files exist without a valid exact process record.'
+        try {
+            if (-not (Test-Path `
+                    -LiteralPath $environmentLayout.PidFile -PathType Leaf)) {
+                throw 'The exact process record is missing or not a file.'
+            }
+            $record = Read-PSOBBStrictLifecycleJson `
+                -Path $environmentLayout.PidFile `
+                -Root $environmentLayout.Root `
+                -Contract ServerProcessRecord
+            $approved = Get-PSOBBApprovedNewservExecutableIdentity `
+                -Layout $Layout -ServerEnvironment $environmentName
+            $expectedControlIdentity = Get-PSOBBServerControlIdentity `
+                -InstallationId ([string]$marker.installationId) `
+                -EnvironmentId ([string]$environmentLayout.EnvironmentId) `
+                -ComponentId ([string]$approved.ComponentId) `
+                -StartupRequestId ([string]$record.startupRequestId) `
+                -ExecutableSha256 ([string]$record.executableSha256)
+            if ([int]$record.schemaVersion -ne 3 -or
+                [string]$record.serverEnvironment -cne $environmentName -or
+                [string]$record.environmentId -cne
+                    [string]$environmentLayout.EnvironmentId -or
+                [string]$record.componentId -cne
+                    [string]$approved.ComponentId -or
+                [string]$record.executablePath -cne
+                    [string]$approved.ExecutablePath -or
+                [string]$record.executableSha256 -cne
+                    [string]$approved.Sha256 -or
+                -not (Test-PSOBBFixedTimeTextEquals `
+                    -Expected $expectedControlIdentity `
+                    -Actual ([string]$record.controlIdentity))) {
+                throw 'The process record is not exact and environment-bound.'
+            }
+            $classification = 'ExactEnvironmentBound'
+            $detail = 'The process record exactly identifies this server environment.'
+        } catch {
+            $detail = $_.Exception.Message
+        }
+        $records.Add([pscustomobject]@{
+            ServerEnvironment = $environmentName
+            EnvironmentId = [string]$environmentLayout.EnvironmentId
+            Classification = $classification
+            PresentPaths = $presentPaths
+            Detail = $detail
+        })
+    }
+    @($records)
+}
+
+function Remove-PSOBBLifecycleFilesVerified {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    # Preflight every path before deleting anything. The process record is the
+    # strongest host/control proof and is deliberately removed last.
+    $paths = @(
+        $Layout.LegacyPidFile,
+        $Layout.HostPidFile,
+        $Layout.ControlRequest,
+        $Layout.ControlState,
+        $Layout.PidFile)
+    $normalizedPaths = @($paths | ForEach-Object {
+            [System.IO.Path]::GetFullPath([string]$_)
+        })
+    if (@($normalizedPaths | Sort-Object -Unique).Count -ne $paths.Count) {
+        throw 'Lifecycle layout contains duplicate evidence paths'
+    }
+    $existingPaths = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in $paths) {
+        $safePath = Assert-PathWithinRoot -Path $path -Root $Layout.Root
+        if (-not (Test-Path -LiteralPath $safePath)) {
+            continue
+        }
+        $item = Get-Item -LiteralPath $safePath -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Lifecycle path has an unsafe filesystem type: $safePath"
+        }
+        $existingPaths.Add($safePath)
+    }
+    $pidPath = [System.IO.Path]::GetFullPath([string]$Layout.PidFile)
+    foreach ($preflightPath in $existingPaths) {
+        $safePath = Assert-PathWithinRoot `
+            -Path $preflightPath -Root $Layout.Root
+        $currentItem = Get-Item -LiteralPath $safePath -Force -ErrorAction Stop
+        if ($currentItem.PSIsContainer -or
+            ($currentItem.Attributes -band
+                [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Lifecycle path changed to an unsafe filesystem type before deletion: $safePath"
+        }
+        if ($safePath.Equals(
+                $pidPath,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            $reappearedEvidence = @($paths[0..($paths.Count - 2)] | Where-Object {
+                    Test-Path -LiteralPath $_
+                })
+            if ($reappearedEvidence.Count -gt 0) {
+                throw "Lifecycle evidence reappeared before process-record deletion: $($reappearedEvidence -join ', ')"
+            }
+        }
+        Remove-Item -LiteralPath $safePath -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $safePath) {
+            throw "Lifecycle file deletion did not reach absence: $safePath"
+        }
+    }
+    $remaining = @($paths | Where-Object {
+            Test-Path -LiteralPath $_
+        })
+    if ($remaining.Count -gt 0) {
+        throw "Lifecycle file removal could not be verified: $($remaining -join ', ')"
+    }
+    $true
+}
+
+function Get-PSOBBNamedProcessIdentityCensus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProcessName,
+        [AllowEmptyCollection()][Parameter(Mandatory)][object[]]$ApprovedPaths
+    )
+
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($process in @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
+        $imagePath = $null
+        $classification = 'Uninspectable'
+        $matched = $null
+        try {
+            $native = Get-PSOBBNativeProcessInfo -ProcessId ([int]$process.Id)
+            if (-not $native.IsRunning) {
+                continue
+            }
+            $imagePath = [System.IO.Path]::GetFullPath([string]$native.ImagePath)
+            $matched = @($ApprovedPaths | Where-Object {
+                    $imagePath.Equals(
+                        [System.IO.Path]::GetFullPath([string]$_.ExecutablePath),
+                        [System.StringComparison]::OrdinalIgnoreCase)
+                })
+            if ($matched.Count -eq 1) {
+                $matched = $matched[0]
+                $classification = 'ApprovedExactPath'
+            } elseif ($matched.Count -gt 1) {
+                $matched = $null
+                $classification = 'AmbiguousApprovedPath'
+            } else {
+                $matched = $null
+                $classification = 'UnexpectedPath'
+            }
+        } catch {
+            if (-not (Get-Process -Id ([int]$process.Id) -ErrorAction SilentlyContinue)) {
+                continue
+            }
+        }
+        $records.Add([pscustomobject]@{
+            Process = $process
+            ProcessId = [int]$process.Id
+            ExecutablePath = $imagePath
+            Classification = $classification
+            ApprovedIdentity = $matched
+        })
+    }
+    @($records)
+}
+
+function Get-PSOBBServerEnvironmentProcessRecords {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $approvedPaths = [System.Collections.Generic.List[object]]::new()
+    foreach ($environmentName in @('Stable', 'CombatCanary')) {
+        $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+            -Layout $Layout -Environment $environmentName
+        $approvedPaths.Add([pscustomobject]@{
+            ServerEnvironment = $environmentLayout.Environment
+            EnvironmentId = $environmentLayout.EnvironmentId
+            ComponentId = Get-PSOBBServerComponentId `
+                -ServerEnvironment $environmentLayout.Environment
+            ExecutablePath = Join-Path $environmentLayout.Server 'newserv-windows.exe'
+        })
+    }
+    @(Get-PSOBBNamedProcessIdentityCensus `
+        -ProcessName 'newserv-windows' `
+        -ApprovedPaths @($approvedPaths) | ForEach-Object {
+        $identity = $_.ApprovedIdentity
+        $classification = [string]$_.Classification
+        if ($identity -and $classification -ceq 'ApprovedExactPath') {
+            try {
+                $approved = Get-PSOBBApprovedNewservExecutableIdentity `
+                    -Layout $Layout `
+                    -ServerEnvironment ([string]$identity.ServerEnvironment)
+                if (-not (Test-Path -LiteralPath $approved.ExecutablePath -PathType Leaf) -or
+                    (Get-Item -LiteralPath $approved.ExecutablePath).Length -ne
+                        $approved.Size -or
+                    (Get-LowerSha256 $approved.ExecutablePath) -cne $approved.Sha256) {
+                    $classification = 'UnapprovedExecutableIdentity'
+                }
+            } catch {
+                $classification = 'UnapprovedExecutableIdentity'
+            }
+        }
+        $startTimeUtc = $null
+        $startTimeFileTimeUtc = $null
+        try {
+            $startTimeUtc = $_.Process.StartTime.ToUniversalTime()
+            $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
+        } catch {
+            $classification = 'Uninspectable'
+        }
+        [pscustomobject]@{
+            ServerEnvironment = if ($identity) {
+                [string]$identity.ServerEnvironment
+            } else { 'Unknown' }
+            EnvironmentId = if ($identity) {
+                [string]$identity.EnvironmentId
+            } else { $null }
+            ComponentId = if ($identity) {
+                [string]$identity.ComponentId
+            } else { $null }
+            Process = $_.Process
+            ProcessId = [int]$_.ProcessId
+            StartTimeUtc = $startTimeUtc
+            StartTimeFileTimeUtc = $startTimeFileTimeUtc
+            ExecutablePath = $_.ExecutablePath
+            Classification = $classification
+        }
+    })
+}
+
+function Get-PSOBBReservedServerPortListeners {
+    [CmdletBinding()]
+    param()
+
+    $reservedPorts = @(11000, 12000, 12001)
+    @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {
+            [int]$_.LocalPort -in $reservedPorts
+        } | Sort-Object LocalPort, LocalAddress, OwningProcess)
+}
+
+function Assert-PSOBBExclusiveServerStartBoundary {
+    [CmdletBinding()]
+    param(
+        [string]$ServerEnvironment = 'Stable',
+        [AllowEmptyCollection()][Parameter(Mandatory)][object[]]$ServerProcesses,
+        [AllowEmptyCollection()][Parameter(Mandatory)][object[]]$ReservedPortListeners
+    )
+
+    $target = Resolve-PSOBBServerEnvironmentName -Environment $ServerEnvironment
+    if ($ServerProcesses.Count -gt 0) {
+        $identities = @($ServerProcesses | ForEach-Object {
+                '{0} PID {1} ({2})' -f $_.ServerEnvironment, $_.ProcessId,
+                    $_.Classification
+            })
+        throw "Cannot start $target while a named newserv process exists ($($identities -join ', '))"
+    }
+    if ($ReservedPortListeners.Count -gt 0) {
+        $identities = @($ReservedPortListeners | ForEach-Object {
+                '{0}:{1} PID {2}' -f $_.LocalAddress, $_.LocalPort, $_.OwningProcess
+            })
+        throw "Cannot start $target because a reserved PSOBB listener is already active ($($identities -join ', '))"
+    }
+    $true
+}
+
+function Test-PSOBBExactLoopbackServerListeners {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateRange(1, [int]::MaxValue)][int]$ProcessId,
+        [object[]]$ListenerRecords
+    )
+
+    if ($null -eq $ListenerRecords) {
+        $ListenerRecords = @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    }
+    $reservedPorts = @(11000, 12000, 12001)
+    $reserved = @($ListenerRecords | Where-Object {
+            [int]$_.LocalPort -in $reservedPorts
+        })
+    $owned = @($ListenerRecords | Where-Object {
+            [int]$_.OwningProcess -eq $ProcessId
+        })
+    $actual = @($owned | ForEach-Object {
+            '{0}:{1}' -f $_.LocalAddress, $_.LocalPort
+        } | Sort-Object -Unique)
+    $expected = @('127.0.0.1:11000', '127.0.0.1:12000', '127.0.0.1:12001')
+    $actual.Count -eq $expected.Count -and
+        -not (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) -and
+        $reserved.Count -eq $expected.Count -and
+        @($reserved | Where-Object {
+                [int]$_.OwningProcess -ne $ProcessId -or
+                [string]$_.LocalAddress -cne '127.0.0.1'
+            }).Count -eq 0
+}
+
+function Test-PSOBBServerListenerSubsetForStop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateRange(1, [int]::MaxValue)][int]$ProcessId,
+        [AllowEmptyCollection()][Parameter(Mandatory)][object[]]$ReservedPortListeners
+    )
+
+    $expectedPorts = @(11000, 12000, 12001)
+    $seenPorts = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($listener in $ReservedPortListeners) {
+        if ([int]$listener.OwningProcess -ne $ProcessId -or
+            [string]$listener.LocalAddress -cne '127.0.0.1' -or
+            [int]$listener.LocalPort -notin $expectedPorts -or
+            -not $seenPorts.Add([int]$listener.LocalPort)) {
+            return $false
+        }
+    }
+    $true
+}
+
 function New-PSOBBProtectedSecurityDescriptor {
     [CmdletBinding()]
     param([Parameter(Mandatory)][bool]$IsContainer)
@@ -590,6 +2522,363 @@ function Set-PSOBBProtectedTreeAcl {
     }
 }
 
+function Get-PSOBBOrdinaryTreeSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$Label = 'recovery tree',
+        [switch]$RequireProtectedAcl
+    )
+
+    $safeTreeRoot = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Path -Root $Root -Kind Directory -Label $Label
+    $items = [System.Collections.Generic.List[object]]::new()
+    $pending = [System.Collections.Generic.Queue[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $pending.Enqueue($safeTreeRoot)
+    while ($pending.Count -gt 0) {
+        $directoryPath = Assert-PathWithinRoot `
+            -Path $pending.Dequeue() -Root $safeTreeRoot
+        $directoryItem = Get-Item -Force -LiteralPath $directoryPath `
+            -ErrorAction Stop
+        if (-not $directoryItem.PSIsContainer -or
+            ($directoryItem.Attributes -band
+                [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($RequireProtectedAcl -and
+                -not (Test-PSOBBProtectedAcl -Path $directoryPath))) {
+            throw "The $Label contains an unsafe or incorrectly protected directory"
+        }
+        if (-not $seen.Add($directoryItem.FullName)) {
+            throw "The $Label contains a repeated directory identity"
+        }
+        $items.Add([pscustomobject]@{
+                Path = $directoryItem.FullName
+                IsDirectory = $true
+            })
+        foreach ($child in @(Get-ChildItem -Force -LiteralPath $directoryPath |
+                Sort-Object -Property FullName)) {
+            $safeChild = Assert-PathWithinRoot `
+                -Path $child.FullName -Root $safeTreeRoot
+            if (($child.Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                ($RequireProtectedAcl -and
+                    -not (Test-PSOBBProtectedAcl -Path $safeChild))) {
+                throw "The $Label contains an unsafe or incorrectly protected item"
+            }
+            if ($child.PSIsContainer) {
+                $pending.Enqueue($safeChild)
+            } else {
+                if (-not $seen.Add($child.FullName)) {
+                    throw "The $Label contains a repeated file identity"
+                }
+                $items.Add([pscustomobject]@{
+                        Path = $child.FullName
+                        IsDirectory = $false
+                    })
+            }
+        }
+    }
+    [pscustomobject]@{
+        Root = $safeTreeRoot
+        Items = @($items)
+    }
+}
+
+function Remove-PSOBBValidatedRecoveryTree {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$Label = 'recovery tree',
+        [switch]$RequireProtectedAcl
+    )
+
+    $tree = Get-PSOBBOrdinaryTreeSnapshot `
+        -Path $Path -Root $Root -Label $Label `
+        -RequireProtectedAcl:$RequireProtectedAcl
+    $files = @($tree.Items | Where-Object { -not $_.IsDirectory } |
+        Sort-Object { $_.Path.Length } -Descending)
+    foreach ($file in $files) {
+        $safeFile = Assert-PathWithinRoot -Path $file.Path -Root $tree.Root
+        $current = Get-Item -Force -LiteralPath $safeFile -ErrorAction Stop
+        if ($current.PSIsContainer -or
+            ($current.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($RequireProtectedAcl -and
+                -not (Test-PSOBBProtectedAcl -Path $safeFile))) {
+            throw "The $Label changed before constrained file removal"
+        }
+        Remove-Item -LiteralPath $safeFile -Force -ErrorAction Stop
+    }
+    $directories = @($tree.Items | Where-Object IsDirectory |
+        Sort-Object { $_.Path.Length } -Descending)
+    foreach ($directory in $directories) {
+        $safeDirectory = Assert-PathWithinRoot `
+            -Path $directory.Path -Root $tree.Root
+        $current = Get-Item -Force -LiteralPath $safeDirectory -ErrorAction Stop
+        if (-not $current.PSIsContainer -or
+            ($current.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($RequireProtectedAcl -and
+                -not (Test-PSOBBProtectedAcl -Path $safeDirectory)) -or
+            @(Get-ChildItem -Force -LiteralPath $safeDirectory).Count -ne 0) {
+            throw "The $Label changed before constrained directory removal"
+        }
+        Remove-Item -LiteralPath $safeDirectory -Force -ErrorAction Stop
+    }
+}
+
+function Write-PSOBBDurableFileBytes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][Parameter(Mandatory)][byte[]]$Bytes,
+        [switch]$Overwrite,
+        [string]$Label = 'transaction file'
+    )
+
+    $safePath = Assert-PathWithinRoot -Path $Path -Root $Root
+    $parent = Split-Path -Parent $safePath
+    [void](Assert-PSOBBOrdinaryContainedPath `
+            -Path $parent -Root $Root -Kind Directory -Label "$Label parent")
+    $mode = if ($Overwrite) {
+        [System.IO.FileMode]::Create
+    } else {
+        [System.IO.FileMode]::CreateNew
+    }
+    $stream = [System.IO.FileStream]::new(
+        $safePath,
+        $mode,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::None,
+        65536,
+        [System.IO.FileOptions]::WriteThrough)
+    try {
+        $stream.Write($Bytes, 0, $Bytes.Length)
+        $stream.Flush($true)
+    } finally {
+        $stream.Dispose()
+    }
+    $safePath
+}
+
+function Copy-PSOBBVerifiedOrdinaryFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$SourceRoot,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$DestinationRoot,
+        [Parameter(Mandatory)][ValidateRange(0, 1073741824)]
+        [long]$ExpectedLength,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')]
+        [string]$ExpectedSha256,
+        [string]$Label = 'recovery item'
+    )
+
+    $maximumBytes = [Math]::Max(1L, $ExpectedLength)
+    $sourceSnapshot = Read-PSOBBBoundedOrdinaryFileSnapshot `
+        -Path $Source -Root $SourceRoot -MaximumBytes $maximumBytes `
+        -Label $Label -AllowEmpty -IncludeBytes
+    try {
+        if ($sourceSnapshot.Length -ne $ExpectedLength -or
+            $sourceSnapshot.Sha256 -cne $ExpectedSha256) {
+            throw "The $Label does not match its sealed length and digest"
+        }
+        $safeDestination = Write-PSOBBDurableFileBytes `
+            -Path $Destination -Root $DestinationRoot `
+            -Bytes ([byte[]]$sourceSnapshot.Bytes) -Label $Label
+        $destinationSnapshot = Read-PSOBBBoundedOrdinaryFileSnapshot `
+            -Path $safeDestination -Root $DestinationRoot `
+            -MaximumBytes $maximumBytes -Label $Label -AllowEmpty
+        if ($destinationSnapshot.Length -ne $ExpectedLength -or
+            $destinationSnapshot.Sha256 -cne $ExpectedSha256) {
+            throw "The $Label destination failed exact readback"
+        }
+        $safeDestination
+    } finally {
+        if ($sourceSnapshot.Bytes) {
+            [Array]::Clear(
+                [byte[]]$sourceSnapshot.Bytes, 0,
+                ([byte[]]$sourceSnapshot.Bytes).Length)
+        }
+    }
+}
+
+function Get-PSOBBRedactedRecoveryTreeSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$Label = 'recovery tree',
+        [switch]$RequireProtectedAcl
+    )
+
+    try {
+        Get-PSOBBOrdinaryTreeSnapshot `
+            -Path $Path -Root $Root -Label $Label `
+            -RequireProtectedAcl:$RequireProtectedAcl
+    } catch {
+        throw "The $Label failed contained-tree safety validation"
+    }
+}
+
+function Set-PSOBBRedactedRecoveryTreeAcl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$Label = 'recovery tree'
+    )
+
+    try {
+        Set-PSOBBProtectedTreeAcl -Path $Path -Root $Root
+    } catch {
+        throw "The $Label failed protected-tree publication"
+    }
+}
+
+function Remove-PSOBBRedactedRecoveryTree {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [string]$Label = 'recovery tree',
+        [switch]$RequireProtectedAcl
+    )
+
+    try {
+        Remove-PSOBBValidatedRecoveryTree `
+            -Path $Path -Root $Root -Label $Label `
+            -RequireProtectedAcl:$RequireProtectedAcl
+    } catch {
+        throw "The $Label failed constrained removal"
+    }
+}
+
+function Read-PSOBBRedactedRecoveryFileSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 1073741824)]
+        [long]$MaximumBytes,
+        [string]$Label = 'recovery item',
+        [switch]$AllowEmpty,
+        [switch]$IncludeBytes
+    )
+
+    try {
+        Read-PSOBBBoundedOrdinaryFileSnapshot `
+            -Path $Path -Root $Root -MaximumBytes $MaximumBytes `
+            -Label $Label -AllowEmpty:$AllowEmpty -IncludeBytes:$IncludeBytes
+    } catch {
+        throw "The $Label failed bounded ordinary-file validation"
+    }
+}
+
+function Read-PSOBBRedactedRecoveryStrictJsonSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 1073741824)]
+        [long]$MaximumBytes,
+        [ValidateRange(1, 128)][int]$MaximumDepth = 32,
+        [string]$Label = 'recovery JSON'
+    )
+
+    try {
+        Read-PSOBBStrictJsonSnapshot `
+            -Path $Path -Root $Root -MaximumBytes $MaximumBytes `
+            -MaximumDepth $MaximumDepth -Label $Label
+    } catch {
+        throw "The $Label failed strict JSON validation"
+    }
+}
+
+function Copy-PSOBBRedactedRecoveryFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$SourceRoot,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$DestinationRoot,
+        [Parameter(Mandatory)][ValidateRange(0, 1073741824)]
+        [long]$ExpectedLength,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')]
+        [string]$ExpectedSha256,
+        [string]$Label = 'recovery item'
+    )
+
+    try {
+        Copy-PSOBBVerifiedOrdinaryFile `
+            -Source $Source -SourceRoot $SourceRoot `
+            -Destination $Destination -DestinationRoot $DestinationRoot `
+            -ExpectedLength $ExpectedLength -ExpectedSha256 $ExpectedSha256 `
+            -Label $Label
+    } catch {
+        throw "The $Label failed verified recovery copy"
+    }
+}
+
+function Add-PSOBBRecoveryBBLicenseRedactionTerms {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, int]]$UserNameCounts,
+        [AllowEmptyCollection()][Parameter(Mandatory)]
+        [System.Collections.Generic.List[string]]$Passwords,
+        [string]$Label = 'licenses item'
+    )
+
+    try {
+        $snapshot = Read-PSOBBRedactedRecoveryStrictJsonSnapshot `
+            -Path $Path -Root $Root -MaximumBytes 16MB `
+            -MaximumDepth 20 -Label $Label
+        $value = $snapshot.Value
+        if ($value -isnot [pscustomobject]) {
+            throw 'not an object'
+        }
+        $licensesProperty = $value.PSObject.Properties['BBLicenses']
+        if ($null -eq $licensesProperty -or
+            $licensesProperty.Value -isnot [System.Array]) {
+            throw 'missing BBLicenses array'
+        }
+        $count = 0
+        foreach ($license in @($licensesProperty.Value)) {
+            if ($license -isnot [pscustomobject]) {
+                throw 'invalid BBLicense record'
+            }
+            Assert-PSOBBStrictDataObjectProperties `
+                -Value $license -Expected @('UserName', 'Password') `
+                -Label $Label | Out-Null
+            $userName = $license.PSObject.Properties['UserName'].Value
+            $password = $license.PSObject.Properties['Password'].Value
+            if ($userName -isnot [string] -or $password -isnot [string] -or
+                [string]::IsNullOrWhiteSpace([string]$userName) -or
+                ([string]$userName).Length -gt 16 -or
+                [string]::IsNullOrEmpty([string]$password) -or
+                ([string]$password).Length -gt 16) {
+                throw 'invalid BBLicense identity'
+            }
+            if ($UserNameCounts.ContainsKey([string]$userName)) {
+                $UserNameCounts[[string]$userName]++
+            } else {
+                $UserNameCounts.Add([string]$userName, 1)
+            }
+            $Passwords.Add([string]$password)
+            $count++
+        }
+        $count
+    } catch {
+        throw "The $Label cannot be inspected for recovery redaction"
+    }
+}
+
 function Initialize-PSOBBRuntimeMarker {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
@@ -605,12 +2894,31 @@ function Initialize-PSOBBRuntimeMarker {
         createdAtUtc = [DateTime]::UtcNow.ToString('o')
     }
     $temporary = $Layout.RuntimeMarker + '.new'
-    [System.IO.File]::WriteAllText(
-        $temporary,
-        ($marker | ConvertTo-Json -Depth 3),
-        [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $Layout.RuntimeMarker
-    $marker
+    if (Test-Path -LiteralPath $temporary) {
+        throw 'PSOBB runtime ownership marker staging is not clean'
+    }
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        ($marker | ConvertTo-Json -Depth 3))
+    try {
+        [void](Write-PSOBBDurableFileBytes `
+                -Path $temporary -Root $Layout.Root -Bytes $bytes `
+                -Label 'runtime ownership marker staging')
+        Set-PSOBBProtectedAcl -Path $temporary
+        $staged = Read-PSOBBStrictJsonSnapshot `
+            -Path $temporary -Root $Layout.Root -MaximumBytes 64KB `
+            -MaximumDepth 4 -Label 'runtime ownership marker staging'
+        [System.IO.File]::Move($temporary, $Layout.RuntimeMarker)
+        Set-PSOBBProtectedAcl -Path $Layout.RuntimeMarker
+        $published = Read-PSOBBStrictJsonSnapshot `
+            -Path $Layout.RuntimeMarker -Root $Layout.Root -MaximumBytes 64KB `
+            -MaximumDepth 4 -Label 'runtime ownership marker'
+        if ($published.Sha256 -cne $staged.Sha256) {
+            throw 'PSOBB runtime ownership marker changed during publication'
+        }
+    } finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+    Assert-PSOBBRuntimeMarker -Layout $Layout
 }
 
 function Assert-PSOBBRuntimeMarker {
@@ -619,12 +2927,39 @@ function Assert-PSOBBRuntimeMarker {
 
     Assert-PathWithinRoot -Path $Layout.RuntimeMarker -Root $Layout.Root | Out-Null
     if (-not (Test-Path -LiteralPath $Layout.RuntimeMarker -PathType Leaf)) {
-        throw "PSOBB runtime ownership marker is missing: $($Layout.RuntimeMarker)"
+        throw 'PSOBB runtime ownership marker is missing'
     }
-    $marker = Get-Content -Raw -LiteralPath $Layout.RuntimeMarker | ConvertFrom-Json
-    if (($marker.schemaVersion -ne 1) -or
-        ([string]$marker.installationId -notmatch '^[0-9a-fA-F-]{36}$') -or
-        -not ([System.IO.Path]::GetFullPath([string]$marker.runtimeRoot).TrimEnd('\')).Equals(
+    [void](Assert-PSOBBOrdinaryContainedPath `
+            -Path $Layout.RuntimeMarker -Root $Layout.Root -Kind File `
+            -Label 'runtime ownership marker')
+    if (-not (Test-PSOBBProtectedAcl -Path $Layout.RuntimeMarker)) {
+        throw 'PSOBB runtime ownership marker ACL is invalid'
+    }
+    $markerSnapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $Layout.RuntimeMarker -Root $Layout.Root -MaximumBytes 64KB `
+        -MaximumDepth 4 -Label 'runtime ownership marker'
+    $marker = $markerSnapshot.Value
+    [void](Assert-PSOBBOrdinaryContainedPath `
+            -Path $Layout.RuntimeMarker -Root $Layout.Root -Kind File `
+            -Label 'runtime ownership marker')
+    if (-not (Test-PSOBBProtectedAcl -Path $Layout.RuntimeMarker)) {
+        throw 'PSOBB runtime ownership marker ACL changed while it was read'
+    }
+    Assert-PSOBBStrictDataObjectProperties -Value $marker -Expected @(
+        'schemaVersion', 'installationId', 'runtimeRoot', 'createdAtUtc') `
+        -Label 'runtime ownership marker' | Out-Null
+    $parsedInstallationId = [Guid]::Empty
+    $parsedCreatedAt = [DateTimeOffset]::MinValue
+    if ($marker.schemaVersion -isnot [long] -or $marker.schemaVersion -ne 1 -or
+        $marker.installationId -isnot [string] -or
+        -not [Guid]::TryParseExact(
+            [string]$marker.installationId, 'D', [ref]$parsedInstallationId) -or
+        $marker.runtimeRoot -isnot [string] -or
+        $marker.createdAtUtc -isnot [string] -or
+        -not [DateTimeOffset]::TryParse(
+            [string]$marker.createdAtUtc, [ref]$parsedCreatedAt) -or
+        -not ([System.IO.Path]::GetFullPath(
+                [string]$marker.runtimeRoot).TrimEnd('\')).Equals(
             $Layout.Root.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'PSOBB runtime ownership marker is invalid or belongs to another root'
     }
@@ -937,10 +3272,7 @@ function Get-PSOBBClientPatchPolicy {
         [string]$Path = (Join-Path $script:PSOBBRepositoryRoot 'config\client-patch-profiles.json')
     )
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Client-patch policy is missing: $Path"
-    }
-    $policy = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -Depth 10
+    $policy = (Read-PSOBBClientPatchPolicySnapshot -Path $Path).Value
     if (($policy.schemaVersion -ne 1) -or
         ([string]$policy.defaultProfile -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') -or
         (@($policy.profiles).Count -lt 2)) {
@@ -1117,17 +3449,16 @@ function Assert-NewservClientPatchProfileAvailable {
     if (-not (Test-Path -LiteralPath $clientFunctionsRoot -PathType Container)) {
         throw "newserv client-functions directory is missing: $clientFunctionsRoot"
     }
-    $lock = Get-Content -Raw -LiteralPath $SourcesLockPath | ConvertFrom-Json -Depth 20
-    $serverComponents = @($lock.components | Where-Object id -CEQ 'newserv-stable-release')
-    if ($serverComponents.Count -ne 1) {
-        throw 'sources.lock.json must contain exactly one newserv-stable-release component'
-    }
+    $stableIdentity = Get-PSOBBStableServerSourceLockIdentity `
+        -Path $SourcesLockPath
     foreach ($patchName in @($profiles[0].autoPatches) + @($profiles[0].bbRequiredPatches)) {
         $patchPath = Join-Path $clientFunctionsRoot (
             $patchName + '\' + $patchName + '.59NL.patch.s')
         $memberPath = 'release/system/client-functions/' + $patchName + '/' +
             $patchName + '.59NL.patch.s'
-        $members = @($serverComponents[0].members | Where-Object path -CEQ $memberPath)
+        $members = @($stableIdentity.Component.members | Where-Object {
+                $_.path -ceq $memberPath
+            })
         if ($members.Count -ne 1 -or
             [long]$members[0].size -le 0 -or
             [string]$members[0].sha256 -notmatch '^[0-9a-f]{64}$' -or
@@ -1149,6 +3480,7 @@ function Assert-PSOBBClientPatchStateCoherent {
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][string]$InstallRecordPath,
         [Parameter(Mandatory)][string]$InstallationId,
+        [string]$RuntimeRoot,
         [string]$PolicyPath = (Join-Path $script:PSOBBRepositoryRoot 'config\client-patch-profiles.json')
     )
 
@@ -1158,33 +3490,28 @@ function Assert-PSOBBClientPatchStateCoherent {
         }
     }
 
-    try {
-        $installRecord = Get-Content -Raw -LiteralPath $InstallRecordPath |
-            ConvertFrom-Json -Depth 20 -ErrorAction Stop
-    } catch {
-        throw "Runtime installation record is not valid JSON: $($_.Exception.Message)"
+    $installRoot = if ($RuntimeRoot) {
+        $RuntimeRoot
+    } else {
+        Split-Path -Parent $InstallRecordPath
     }
-    foreach ($propertyName in @(
-            'schemaVersion', 'installationId', 'clientPatchProfile', 'clientPatchPolicySha256')) {
-        if (-not $installRecord.PSObject.Properties[$propertyName]) {
-            throw "Runtime installation record is missing client-patch property: $propertyName"
-        }
-    }
-    if (($installRecord.schemaVersion -ne 2) -or
-        ([string]$installRecord.installationId -cne $InstallationId)) {
-        throw 'Runtime installation record is not valid for this installation'
-    }
+    $installSnapshot = Read-PSOBBInstallationRecordSnapshot `
+        -Path $InstallRecordPath -Root $installRoot `
+        -ExpectedInstallationId $InstallationId `
+        -ExpectedRuntimeRoot $RuntimeRoot
+    $installRecord = $installSnapshot.Value
 
     $profile = [string]$installRecord.clientPatchProfile
     if ($profile -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') {
         throw 'Runtime installation record has an invalid client-patch profile'
     }
-    $policySha256 = Get-LowerSha256 $PolicyPath
+    $policySnapshot = Read-PSOBBClientPatchPolicySnapshot -Path $PolicyPath
+    $policySha256 = [string]$policySnapshot.Sha256
     if ([string]$installRecord.clientPatchPolicySha256 -cne $policySha256) {
         throw 'Runtime installation record client-patch policy hash does not match the current pinned policy'
     }
 
-    $policy = Get-PSOBBClientPatchPolicy -Path $PolicyPath
+    $policy = $policySnapshot.Value
     $profiles = @($policy.profiles | Where-Object id -CEQ $profile)
     if ($profiles.Count -ne 1 -or [string]$profiles[0].channel -cne 'stable') {
         throw "Runtime installation record selects an unapproved client-patch profile: $profile"
@@ -1201,7 +3528,7 @@ function Assert-PSOBBClientPatchStateCoherent {
         Profile = $profile
         PolicySha256 = $policySha256
         ConfigSha256 = Get-LowerSha256 $ConfigPath
-        InstallationSha256 = Get-LowerSha256 $InstallRecordPath
+        InstallationSha256 = [string]$installSnapshot.Sha256
         InstallationId = $InstallationId
     }
 }
@@ -1822,7 +4149,7 @@ function Set-NewservLocalConfiguration {
         [Parameter(Mandatory)][string]$ConfigPath,
         [string]$ServerName = 'PSOBB Local',
         [ValidateSet('stable-qol', 'baseline')]
-        [string]$ClientPatchProfile = 'stable-qol'
+        [string]$ClientPatchProfile = 'baseline'
     )
 
     if ($ServerName.Length -gt 16) {
@@ -1882,38 +4209,121 @@ function Set-NewservLocalConfiguration {
 
 function Get-NewservProcess {
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Layout)
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [switch]$PassThruIdentity
+    )
 
     if (-not (Test-Path -LiteralPath $Layout.PidFile)) {
         return $null
     }
     try {
-        $record = Get-Content -Raw -LiteralPath $Layout.PidFile | ConvertFrom-Json
+        [void](Assert-PSOBBOrdinaryContainedPath `
+                -Path $Layout.PidFile -Root $Layout.Root -Kind File `
+                -Label 'server process record')
+        if (-not (Test-PSOBBProtectedAcl -Path $Layout.PidFile)) {
+            return $null
+        }
+        $record = Read-PSOBBStrictLifecycleJson `
+            -Path $Layout.PidFile -Root $Layout.Root -Contract ServerProcessRecord
+        [void](Assert-PSOBBOrdinaryContainedPath `
+                -Path $Layout.PidFile -Root $Layout.Root -Kind File `
+                -Label 'server process record')
+        if (-not (Test-PSOBBProtectedAcl -Path $Layout.PidFile)) {
+            return $null
+        }
     } catch {
         return $null
     }
-    if (($record.schemaVersion -ne 1) -or ([string]$record.pid -notmatch '^\d+$')) {
+    $environmentName = if ($Layout.PSObject.Properties['Environment']) {
+        Resolve-PSOBBServerEnvironmentName `
+            -Environment ([string]$Layout.Environment)
+    } else {
+        'Stable'
+    }
+    $environmentId = if ($Layout.PSObject.Properties['EnvironmentId']) {
+        [string]$Layout.EnvironmentId
+    } else {
+        'stable'
+    }
+    $componentId = Get-PSOBBServerComponentId `
+        -ServerEnvironment $environmentName
+    try {
+        $rootLayout = if ($Layout.PSObject.Properties['Environment']) {
+            Get-PSOBBLayout -RuntimeRoot ([string]$Layout.Root)
+        } else {
+            $Layout
+        }
+        $approvedIdentity = Get-PSOBBApprovedNewservExecutableIdentity `
+            -Layout $rootLayout -ServerEnvironment $environmentName
+    } catch {
+        return $null
+    }
+    if (($record.schemaVersion -ne 3) -or
+        ([string]$record.pid -notmatch '^\d+$') -or
+        ([string]$record.startTimeFileTimeUtc -notmatch '^[1-9][0-9]*$') -or
+        [string]$record.serverEnvironment -cne $environmentName -or
+        [string]$record.environmentId -cne $environmentId -or
+        [string]$record.componentId -cne $componentId -or
+        [string]$record.executablePath -cne [string]$approvedIdentity.ExecutablePath -or
+        [string]$record.executableSha256 -cne [string]$approvedIdentity.Sha256 -or
+        [string]$record.startupRequestId -cnotmatch '^[a-f0-9]{32}$' -or
+        [string]$record.executableSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]$record.controlIdentity -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]$record.controlProtocol -cne 'protected-filesystem-exit-v2') {
+        return $null
+    }
+    try {
+        $marker = Assert-PSOBBRuntimeMarker -Layout $Layout
+        $expectedControlIdentity = Get-PSOBBServerControlIdentity `
+            -InstallationId ([string]$marker.installationId) `
+            -EnvironmentId $environmentId `
+            -ComponentId $componentId `
+            -StartupRequestId ([string]$record.startupRequestId) `
+            -ExecutableSha256 ([string]$record.executableSha256)
+        if (-not (Test-PSOBBFixedTimeTextEquals `
+                -Expected $expectedControlIdentity `
+                -Actual ([string]$record.controlIdentity))) {
+            return $null
+        }
+    } catch {
         return $null
     }
     $process = Get-Process -Id ([int]$record.pid) -ErrorAction SilentlyContinue
     if (-not $process -or $process.ProcessName -notlike 'newserv*') {
+        if ($process) { $process.Dispose() }
         return $null
     }
     try {
         $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $Layout.Server 'newserv-windows.exe'))
         if (-not ([System.IO.Path]::GetFullPath($process.Path)).Equals(
             $expectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $process.Dispose()
             return $null
         }
         if ((Get-LowerSha256 $expectedPath) -ne [string]$record.executableSha256) {
+            $process.Dispose()
             return $null
         }
-        $recordedStart = [DateTimeOffset]::Parse([string]$record.startTimeUtc).UtcDateTime
-        if ([Math]::Abs(($process.StartTime.ToUniversalTime() - $recordedStart).TotalSeconds) -gt 2) {
+        [DateTimeOffset]::Parse(
+            [string]$record.startTimeUtc,
+            [System.Globalization.CultureInfo]::InvariantCulture) | Out-Null
+        $actualStartTimeFileTimeUtc = [long](
+            $process.StartTime.ToUniversalTime().ToFileTimeUtc())
+        if ($actualStartTimeFileTimeUtc -ne [long]$record.startTimeFileTimeUtc) {
+            $process.Dispose()
             return $null
+        }
+        if ($PassThruIdentity) {
+            return [pscustomobject]@{
+                Process = $process
+                Record = $record
+                StartTimeFileTimeUtc = $actualStartTimeFileTimeUtc
+            }
         }
         return $process
     } catch {
+        if ($process) { $process.Dispose() }
         return $null
     }
 }
@@ -1940,17 +4350,20 @@ namespace PSOBB.Runtime
         public int ProcessId { get; private set; }
         public string ImagePath { get; private set; }
         public DateTime CreationTimeUtc { get; private set; }
+        public long CreationTimeFileTimeUtc { get; private set; }
         public bool IsRunning { get; private set; }
 
         public NativeProcessInfo(
             int processId,
             string imagePath,
             DateTime creationTimeUtc,
+            long creationTimeFileTimeUtc,
             bool isRunning)
         {
             ProcessId = processId;
             ImagePath = imagePath;
             CreationTimeUtc = creationTimeUtc;
+            CreationTimeFileTimeUtc = creationTimeFileTimeUtc;
             IsRunning = isRunning;
         }
     }
@@ -2056,6 +4469,7 @@ namespace PSOBB.Runtime
                     processId,
                     imagePath.ToString(),
                     DateTime.FromFileTimeUtc(creationTime.ToInt64()),
+                    creationTime.ToInt64(),
                     true);
             }
         }
@@ -2086,6 +4500,7 @@ function Test-PSOBBProcessAtExactPath {
     $candidateId = 'unknown'
     $candidateIdNumber = $null
     $candidateStartTimeUtc = $null
+    $candidateStartTimeFileTimeUtc = $null
     try {
         $candidateId = [string]$Process.Id
         $candidateIdNumber = [int]$Process.Id
@@ -2094,6 +4509,7 @@ function Test-PSOBBProcessAtExactPath {
     }
     try {
         $candidateStartTimeUtc = $Process.StartTime.ToUniversalTime()
+        $candidateStartTimeFileTimeUtc = [long]$candidateStartTimeUtc.ToFileTimeUtc()
     } catch {
         # Path verification can still succeed, but PID-reacquisition below
         # remains fail-closed if the process identity cannot be compared.
@@ -2108,9 +4524,11 @@ function Test-PSOBBProcessAtExactPath {
             if (-not $current) {
                 return $false
             }
-            if ($null -ne $candidateStartTimeUtc) {
+            if ($null -ne $candidateStartTimeFileTimeUtc) {
                 try {
-                    if ([Math]::Abs(($current.StartTime.ToUniversalTime() - $candidateStartTimeUtc).TotalSeconds) -gt 0.5) {
+                    $currentStartTimeFileTimeUtc = [long](
+                        $current.StartTime.ToUniversalTime().ToFileTimeUtc())
+                    if ($currentStartTimeFileTimeUtc -ne $candidateStartTimeFileTimeUtc) {
                         return $false
                     }
                 } catch {
@@ -2134,11 +4552,14 @@ function Test-PSOBBProcessAtExactPath {
                         if (-not $nativeInfo.IsRunning) {
                             return $false
                         }
-                        if ($null -ne $candidateStartTimeUtc -and
-                            [Math]::Abs(($nativeInfo.CreationTimeUtc - $candidateStartTimeUtc).TotalSeconds) -gt 0.5) {
+                        if ($null -ne $candidateStartTimeFileTimeUtc -and
+                            [long]$nativeInfo.CreationTimeFileTimeUtc -ne
+                                [long]$candidateStartTimeFileTimeUtc) {
                             return $false
                         }
                         $candidateStartTimeUtc = $nativeInfo.CreationTimeUtc
+                        $candidateStartTimeFileTimeUtc =
+                            [long]$nativeInfo.CreationTimeFileTimeUtc
                         if (-not [string]::IsNullOrWhiteSpace([string]$nativeInfo.ImagePath)) {
                             return ([System.IO.Path]::GetFullPath([string]$nativeInfo.ImagePath)).Equals(
                                 $expected, [System.StringComparison]::OrdinalIgnoreCase)
@@ -2225,16 +4646,59 @@ function Get-PSOBBApprovedClientIdentity {
     }
 }
 
+function Resolve-PSOBBClientChannelForServerEnvironment {
+    [CmdletBinding()]
+    param(
+        [string]$ServerEnvironment = 'Stable',
+        [AllowNull()][AllowEmptyString()][string]$Channel,
+        [ValidateSet('Stable', 'Canary')][string]$DefaultStableChannel = 'Stable',
+        [switch]$AllowAll
+    )
+
+    $environmentName = Resolve-PSOBBServerEnvironmentName `
+        -Environment $ServerEnvironment
+    $resolvedChannel = if ([string]::IsNullOrWhiteSpace($Channel)) {
+        if ($environmentName -ceq 'CombatCanary') { 'Native' } else { $DefaultStableChannel }
+    } else {
+        $Channel
+    }
+    $allowed = if ($environmentName -ceq 'CombatCanary') {
+        if ($AllowAll) { @('Native', 'All') } else { @('Native') }
+    } else {
+        if ($AllowAll) {
+            @('Stable', 'Canary', 'LocalLab', 'All')
+        } else {
+            @('Stable', 'Canary', 'LocalLab')
+        }
+    }
+    if ($resolvedChannel -notin $allowed) {
+        throw "Client channel '$resolvedChannel' is not valid for the $environmentName server environment"
+    }
+    $resolvedChannel
+}
+
 function Get-PSOBBClientExecutablePath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Layout,
-        [Parameter(Mandatory)][ValidateSet('Stable', 'Canary', 'LocalLab')][string]$Channel
+        [Parameter(Mandatory)]
+        [ValidateSet('Stable', 'Canary', 'LocalLab', 'Native')][string]$Channel,
+        [string]$ServerEnvironment = 'Stable'
     )
 
-    $clientRoot = if ($Channel -eq 'Stable') {
+    $environmentName = Resolve-PSOBBServerEnvironmentName `
+        -Environment $ServerEnvironment
+    $resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
+        -ServerEnvironment $environmentName -Channel $Channel
+    if ($environmentName -ceq 'CombatCanary') {
+        $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+            -Layout $Layout -Environment $environmentName
+        return Join-Path $environmentLayout.Client 'Psobb.exe'
+    }
+
+    $clientRoot = if ($resolvedChannel -eq 'Stable') {
         $Layout.Client
-    } elseif ($Channel -eq 'Canary') {
+    } elseif ($resolvedChannel -eq 'Canary') {
         Join-Path $Layout.Canary 'runtime\client'
     } else {
         Join-Path $Layout.LocalLab 'runtime\client'
@@ -4113,13 +6577,30 @@ function Get-PSOBBClientProcessRecords {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Layout,
-        [ValidateSet('All', 'Stable', 'Canary', 'LocalLab')][string]$Channel = 'All'
+        [ValidateSet('All', 'Stable', 'Canary', 'LocalLab', 'Native')]
+        [string]$Channel = 'All',
+        [string]$ServerEnvironment = 'Stable'
     )
 
-    $channels = if ($Channel -eq 'All') { @('Stable', 'Canary', 'LocalLab') } else { @($Channel) }
+    $environmentName = Resolve-PSOBBServerEnvironmentName `
+        -Environment $ServerEnvironment
+    $resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
+        -ServerEnvironment $environmentName -Channel $Channel -AllowAll
+    $channels = if ($resolvedChannel -eq 'All') {
+        if ($environmentName -ceq 'CombatCanary') {
+            @('Native')
+        } else {
+            @('Stable', 'Canary', 'LocalLab')
+        }
+    } else {
+        @($resolvedChannel)
+    }
     $records = [System.Collections.Generic.List[object]]::new()
     foreach ($candidateChannel in $channels) {
-        $expectedPath = Get-PSOBBClientExecutablePath -Layout $Layout -Channel $candidateChannel
+        $expectedPath = Get-PSOBBClientExecutablePath `
+            -Layout $Layout `
+            -Channel $candidateChannel `
+            -ServerEnvironment $environmentName
         $processes = @(Get-PSOBBProcessesAtExactPath -Name 'Psobb' -ExpectedPath $expectedPath)
         if ($processes.Count -eq 0) {
             continue
@@ -4129,14 +6610,17 @@ function Get-PSOBBClientProcessRecords {
         foreach ($process in $processes) {
             try {
                 $startTimeUtc = $process.StartTime.ToUniversalTime()
+                $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
             } catch {
                 throw "Cannot verify the creation time for approved PSOBB client PID $($process.Id)"
             }
             $records.Add([pscustomobject]@{
+                ServerEnvironment = $environmentName
                 Channel = $candidateChannel
                 Process = $process
                 ProcessId = [int]$process.Id
                 StartTimeUtc = $startTimeUtc
+                StartTimeFileTimeUtc = $startTimeFileTimeUtc
                 ExecutablePath = $expectedPath
                 ExecutableSha256 = $identity.Sha256
             })
@@ -4145,18 +6629,129 @@ function Get-PSOBBClientProcessRecords {
     @($records)
 }
 
+function Get-PSOBBAllClientProcessRecords {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $approvedPaths = [System.Collections.Generic.List[object]]::new()
+    foreach ($channel in @('Stable', 'Canary', 'LocalLab')) {
+        $approvedPaths.Add([pscustomobject]@{
+            ServerEnvironment = 'Stable'
+            Channel = $channel
+            ExecutablePath = Get-PSOBBClientExecutablePath `
+                -Layout $Layout -ServerEnvironment Stable -Channel $channel
+        })
+    }
+    $approvedPaths.Add([pscustomobject]@{
+        ServerEnvironment = 'CombatCanary'
+        Channel = 'Native'
+        ExecutablePath = Get-PSOBBClientExecutablePath `
+            -Layout $Layout -ServerEnvironment CombatCanary -Channel Native
+    })
+
+    @(Get-PSOBBNamedProcessIdentityCensus `
+        -ProcessName 'Psobb' -ApprovedPaths @($approvedPaths) | ForEach-Object {
+        $identity = $_.ApprovedIdentity
+        $classification = [string]$_.Classification
+        if ($identity -and $classification -ceq 'ApprovedExactPath') {
+            try {
+                Assert-PSOBBApprovedClientExecutable `
+                    -Path ([string]$identity.ExecutablePath) | Out-Null
+            } catch {
+                $classification = 'UnapprovedExecutableIdentity'
+            }
+        }
+        $startTimeUtc = $null
+        $startTimeFileTimeUtc = $null
+        try {
+            $startTimeUtc = $_.Process.StartTime.ToUniversalTime()
+            $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
+        } catch { }
+        [pscustomobject]@{
+            ServerEnvironment = if ($identity) {
+                [string]$identity.ServerEnvironment
+            } else { 'Unknown' }
+            Channel = if ($identity) { [string]$identity.Channel } else { 'Unknown' }
+            Process = $_.Process
+            ProcessId = [int]$_.ProcessId
+            StartTimeUtc = $startTimeUtc
+            StartTimeFileTimeUtc = $startTimeFileTimeUtc
+            ExecutablePath = $_.ExecutablePath
+            Classification = $classification
+        }
+    })
+}
+
 function Assert-PSOBBNoRunningClients {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
 
-    $running = @(Get-PSOBBClientProcessRecords -Layout $Layout -Channel All)
+    $running = @(Get-PSOBBAllClientProcessRecords -Layout $Layout)
     if ($running.Count -gt 0) {
         $identities = $running | ForEach-Object {
-            '{0} PID {1}' -f $_.Channel, $_.ProcessId
+            '{0}/{1} PID {2} ({3})' -f $_.ServerEnvironment, $_.Channel,
+                $_.ProcessId, $_.Classification
         }
-        throw "Refusing to stop newserv while an approved PSOBB client is running ($($identities -join ', ')). Stop the client first or use Stop-PSOBBSession.ps1 -Target All."
+        throw "Refusing server lifecycle work while a named Psobb process is running ($($identities -join ', ')). Stop the exact approved client first; close an unknown or uninspectable process manually."
     }
     $true
+}
+
+function Assert-PSOBBGlobalStoppedRuntime {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [string]$Operation = 'Client runtime replacement'
+    )
+
+    $lifecycleEvidence = @(Get-PSOBBServerLifecycleEvidenceRecords `
+            -Layout $Layout)
+    $servers = @(Get-PSOBBServerEnvironmentProcessRecords -Layout $Layout)
+    $clients = @(Get-PSOBBAllClientProcessRecords -Layout $Layout)
+    $clientHelpers = @(Get-Process -Name 'online', 'option' `
+            -ErrorAction SilentlyContinue)
+    $listeners = @(Get-PSOBBReservedServerPortListeners)
+    if ($lifecycleEvidence.Count -eq 0 -and
+        $servers.Count -eq 0 -and
+        $clients.Count -eq 0 -and
+        $clientHelpers.Count -eq 0 -and
+        $listeners.Count -eq 0) {
+        return $true
+    }
+
+    $evidence = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $lifecycleEvidence) {
+        $evidence.Add(('{0} lifecycle evidence ({1})' -f
+                [string]$record.ServerEnvironment,
+                [string]$record.Classification))
+    }
+    foreach ($server in $servers) {
+        $evidence.Add(('{0} server PID {1} ({2})' -f
+                [string]$server.ServerEnvironment,
+                [int]$server.ProcessId,
+                [string]$server.Classification))
+    }
+    foreach ($client in $clients) {
+        $evidence.Add(('{0}/{1} client PID {2} ({3})' -f
+                [string]$client.ServerEnvironment,
+                [string]$client.Channel,
+                [int]$client.ProcessId,
+                [string]$client.Classification))
+    }
+    foreach ($helper in $clientHelpers) {
+        $evidence.Add(('{0} client helper PID {1}' -f
+                [string]$helper.ProcessName,
+                [int]$helper.Id))
+    }
+    foreach ($listener in $listeners) {
+        $evidence.Add(('{0}:{1} listener PID {2}' -f
+                [string]$listener.LocalAddress,
+                [int]$listener.LocalPort,
+                [int]$listener.OwningProcess))
+    }
+    throw ("$Operation requires both server environments, " +
+        'all named clients/helpers, and all reserved listeners to be stopped ' +
+        "($($evidence -join ', '))")
 }
 
 function Assert-PSOBBNoNamedClientProcesses {
