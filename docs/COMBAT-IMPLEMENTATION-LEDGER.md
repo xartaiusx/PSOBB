@@ -423,3 +423,42 @@ Each entry records:
   command. Keep CombatCanary stopped and retain the protected frozen
   CurrentUpstream receipt; do not manually swap its trees. Snapshot reset is
   only for isolated Twills state and is not a server-artifact rollback.
+
+## 2026-07-20 / combat-canary-installed-verification-v1
+
+- Feature/profile: exact installed-state verification for the isolated
+  Stable-derived CombatCanary under the Native `baseline` client profile
+- Outcome: accepted. A complete `Target Installed` readback finished in
+  196.899 seconds, below the explicit 300-second startup verification ceiling.
+  This supersedes only the preceding entry's verifier-duration limitation; no
+  server readiness, client login, gameplay, or Twills scenario is accepted by
+  this entry.
+- Implementation commit: `c38d0a6` (`perf: fit canary verification deadline`)
+- Exact result: `Valid=True`, `ServerArtifact=StableShadow`, component
+  `newserv-stable-release`, build-contract SHA-256
+  `472d2a4b443eef5427a1074b7dead87ddd8bc7750f3170a5d2518f3e88963cda`,
+  snapshot ID `dda85ff8-9c23-497d-b3b4-285efe6781ad`, base-client manifest
+  SHA-256 `4f90a80ae944b2f5f65a818a77118c29514a907a2be287a9ef51bd4b021e8f9b`,
+  client-binding SHA-256
+  `e022ecf1930c41b0391cc548b27dfb052cdf593b82309ab2baf569a3985df808`,
+  and configuration SHA-256
+  `bb072a70e55a6d345c5934db5f47edf910740a4144343f6874714a0d6f08647c`
+- Safety result: strict phosg-compatible parsing now batches ordinary UTF-8
+  spans and caches only validated key identities. Exact directory hashing and
+  ordinary-tree/reparse validation share one traversal. Duplicate manifest
+  paths on either side are rejected, and the CurrentUpstream executable stays
+  explicitly bound to its sealed build-contract identity without a second file
+  hash.
+- Tests: StableShadow 18/18; startup binding 11/11; four modified PowerShell
+  files parsed cleanly; whitespace and attribution scans passed; independent
+  review found no remaining parser, walker, reparse, manifest, or executable
+  identity blocker.
+- State result: the check was read-only. No PSOBB or newserv process or listener
+  was started; Stable, CombatCanary, Twills, registry, Desktop shortcuts, and
+  shared RenderDoc state were not changed.
+- Limitation: the launcher observer still has a 60-second verification limit,
+  so this first live gate must use the canonical direct lifecycle scripts with
+  a 300-second verification timeout. Launcher timing remains a later lifecycle
+  optimization and does not weaken the live gate.
+- Rollback: no runtime rollback is required. Revert `c38d0a6` locally only if
+  this verifier implementation must be withdrawn.
