@@ -257,3 +257,32 @@ Each entry records:
   remain pending
 - Rollback: no runtime rollback is required. Keep the module unpublished; use
   focused local Git reverts only if this source foundation must be withdrawn.
+
+## 2026-07-20 / gameplay-deferred-loader-adapter-v1
+
+- Feature/profile: deferred post-load initialization adapter for the inert
+  Gameplay native foundation
+- Outcome: source-only adapter accepted; `DllMain` remains inert and no hook,
+  input, action observation, process-memory write, runtime deployment, or
+  combat behavior is accepted by this entry
+- Implementation commit: `47b6fd2` (`feat: add deferred Gameplay
+  initialization`)
+- ABI correction: the ignored x86 test artifact now has five undecorated
+  exports, not the four recorded by the preceding foundation entry;
+  `InitializeASI` delegates only to the existing idempotent
+  `PSOBBGameplay_Initialize` preflight
+- Tests: Gameplay ABI 3/3; existing Enhancement regression 2/2; MSVC code
+  analysis completed without a diagnostic; independent read-only review found
+  no loader-lock, ABI, idempotence, or rollback blocker
+- Binary policy result: ignored Release artifact SHA-256
+  `8cbbc4484fec548ac9c2113a0dfca9f8bb76726825ba1258e4e1a81377f8fb7b`,
+  229,888 bytes, x86, ASLR, NX, Control Flow Guard, SafeSEH, and dependencies
+  limited to `bcrypt.dll` and `KERNEL32.dll`
+- State result: Stable, CombatCanary, Twills, bank, inventory, equipment,
+  techniques, MAG, registry, shortcuts, and shared RenderDoc state were not
+  changed
+- Limitation: the exact loader overlay, immutable module publication,
+  runtime-load proof, observation hook, action-state mapping, and both
+  five-minute Twills smokes remain pending
+- Rollback: no runtime rollback is required. Keep the module unpublished; use
+  a focused local Git revert only if the adapter contract must be withdrawn.
