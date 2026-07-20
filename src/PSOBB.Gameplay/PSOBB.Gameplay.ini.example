@@ -1,0 +1,4 @@
+[Gameplay]
+; The module is intentionally inert in this foundation build. Enabled=1 only
+; verifies the exact client and reports exact_client_ready; it installs no hook.
+Enabled=0

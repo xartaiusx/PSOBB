@@ -1,0 +1,5 @@
+EXPORTS
+  PSOBBGameplay_GetCapabilities=_PSOBBGameplay_GetCapabilities@4
+  PSOBBGameplay_GetVersion=_PSOBBGameplay_GetVersion@0
+  PSOBBGameplay_Initialize=_PSOBBGameplay_Initialize@0
+  PSOBBGameplay_Rollback=_PSOBBGameplay_Rollback@0
