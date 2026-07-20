@@ -425,7 +425,7 @@ $clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
 $previousMoved = $false
 $newInstalled = $false
 try {
-    Assert-PSOBBNoRunningClients -Layout $layout | Out-Null
+    Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
     Assert-NoActiveLocalAssetComposition -ClientRoot $targetClient
     if (Test-Path -LiteralPath $stagingLab) {
         throw "Refusing to reuse a LocalLab staging path: $stagingLab"
@@ -744,7 +744,7 @@ try {
     Assert-PSOBBLocalLabClientRuntimeContract -Layout $validationLayout | Out-Null
 
     New-Item -ItemType Directory -Path (Split-Path -Parent $targetClient), $snapshotRoot -Force | Out-Null
-    Assert-PSOBBNoRunningClients -Layout $layout | Out-Null
+    Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
     if (Test-Path -LiteralPath $targetClient) {
         if (Test-Path -LiteralPath $snapshotPath) {
             throw "Refusing to overwrite an existing last-known-good snapshot: $snapshotPath"

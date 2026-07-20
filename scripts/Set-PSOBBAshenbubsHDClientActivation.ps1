@@ -36,11 +36,7 @@ function Assert-PSOBBStoppedForClientAssetMutation {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
 
-    Assert-PSOBBNoRunningClients -Layout $Layout | Out-Null
-    $servers = @(Get-NewservProcessesAtPath -Layout $Layout)
-    if ($servers.Count -gt 0 -or $null -ne (Get-NewservProcess -Layout $Layout)) {
-        throw 'AshenbubsHD client activation requires newserv and every approved client to be stopped'
-    }
+    Assert-PSOBBGlobalStoppedRuntime -Layout $Layout | Out-Null
 }
 
 function Get-StrictJsonFile {
@@ -543,6 +539,7 @@ try {
             "restore AshenbubsHD activation snapshot $selectedSnapshotId")) {
             return
         }
+        Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
         Restore-ActivationSnapshot -SnapshotPath $snapshotPath -Snapshot $snapshot `
             -ClientRoot $clientRoot -RequireActiveMatch
         if (Test-Path -LiteralPath $currentActivationRoot) {
@@ -745,6 +742,7 @@ try {
         "activate unchanged AshenbubsHD $($staged.Selection) assets with the exact project large-assets module")) {
         return
     }
+    Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
 
     $snapshotId = 'activation-{0}-{1}' -f
         [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'),

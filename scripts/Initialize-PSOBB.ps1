@@ -3,7 +3,7 @@ param(
     [string]$RuntimeRoot,
     [string]$ServerName = 'PSOBB Local',
     [ValidateSet('stable-qol', 'baseline')]
-    [string]$ClientPatchProfile = 'stable-qol'
+    [string]$ClientPatchProfile = 'baseline'
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')

@@ -86,22 +86,7 @@ foreach ($runtimePath in @(
 
 $clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
 try {
-foreach ($process in @(Get-Process -Name 'Psobb', 'online', 'option' -ErrorAction SilentlyContinue)) {
-    try {
-        $processPath = [System.IO.Path]::GetFullPath($process.Path)
-        foreach ($clientRoot in @($layout.BaseClient, $targetClient)) {
-            $clientPrefix = [System.IO.Path]::GetFullPath($clientRoot).TrimEnd('\') + '\'
-            if ($processPath.StartsWith($clientPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw 'Close the PSOBB client and option processes from this runtime before rebuilding it'
-            }
-        }
-    } catch {
-        if ($_.Exception.Message -like 'Close the PSOBB client*') {
-            throw
-        }
-        throw "Cannot verify the executable path for client PID $($process.Id)"
-    }
-}
+Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
 
 if (-not (Test-Path -LiteralPath $clientArchive -PathType Leaf)) {
     throw "Approved base-client archive is missing: $clientArchive"
@@ -326,13 +311,8 @@ try {
         ($profile | ConvertTo-Json),
         [System.Text.UTF8Encoding]::new($false))
 
+    Assert-PSOBBGlobalStoppedRuntime -Layout $layout | Out-Null
     if (Test-Path -LiteralPath $targetClient) {
-        $lateClientProcesses = @(Get-PSOBBProcessesAtExactPath `
-            -Name 'Psobb' `
-            -ExpectedPath (Join-Path $targetClient 'Psobb.exe'))
-        if ($lateClientProcesses.Count -gt 0) {
-            throw "The target PSOBB client started during rebuild (PID(s): $($lateClientProcesses.Id -join ', '))"
-        }
         Move-Item -LiteralPath $targetClient -Destination $snapshotPath
         $previousMoved = $true
     }

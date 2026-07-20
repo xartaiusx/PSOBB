@@ -40,8 +40,8 @@ Add-Result 'materializer restores previous runtime on failure' (
     'failed final validation cannot strand the previous profile'
 Add-Result 'materializer serializes client changes' (
     $source -match 'Enter-PSOBBClientOperationLock' -and
-    $source -match 'Assert-PSOBBNoRunningClients') `
-    'concurrent or active-client mutation fails closed'
+    $source -match 'Assert-PSOBBGlobalStoppedRuntime') `
+    'concurrent mutation, either server environment, named clients, and reserved listeners fail closed'
 Add-Result 'materializer refuses active local asset and module compositions' (
     $source -match 'Assert-NoActiveLocalAssetComposition' -and
     $source -match "currentProfile\.PSObject\.Properties\['localAssetOverlay'\]" -and

@@ -4,6 +4,8 @@ param([string]$RuntimeRoot)
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
 $policyPath = Join-Path $repositoryRoot 'config\client-patch-profiles.json'
+$promotionSource = Get-Content -Raw -LiteralPath (
+    Join-Path $repositoryRoot 'scripts\Set-PSOBBClientPatchProfile.ps1')
 $sourceLayout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 $pinnedClientFunctionsRoot = Join-Path $sourceLayout.ServerBase 'system\client-functions'
 $results = [System.Collections.Generic.List[object]]::new()
@@ -59,6 +61,38 @@ $fixtureConfig = @'
   ],
 }
 '@
+
+function New-FixtureInstallationRecord(
+    [Parameter(Mandatory)][string]$InstallationId,
+    [Parameter(Mandatory)][string]$RuntimeRoot,
+    [string]$Profile = 'baseline'
+) {
+    $hash = [string]::new([char]'0', 64)
+    [ordered]@{
+        schemaVersion = 2
+        installationId = $InstallationId
+        initializedAtUtc = '2026-07-19T00:00:00.0000000+00:00'
+        runtimeRoot = $RuntimeRoot
+        serverVersion = 'fixture'
+        serverArchiveSha256 = $hash
+        serverExecutableSha256 = $hash
+        serverBaseManifestSha256 = $hash
+        clientVersion = 'fixture'
+        clientArchiveSha256 = $hash
+        baseClientExecutableSha256 = $hash
+        baseClientManifestSha256 = $hash
+        clientExecutableSha256 = $hash
+        rendererVersion = 'fixture'
+        rendererArchiveSha256 = $hash
+        rendererWrapperSha256 = $hash
+        rendererConfigurationSha256 = $hash
+        patchManifestSha256 = $hash
+        synchronizedPatchFiles = 0
+        clientPatchProfile = $Profile
+        clientPatchPolicySha256 = Get-LowerSha256 $policyPath
+        networkScope = 'loopback-only'
+    }
+}
 $stableConfig = Get-NewservClientPatchConfiguration `
     -Text $fixtureConfig `
     -Profile 'stable-qol' `
@@ -106,6 +140,8 @@ Add-Result 'duplicate config arrays fail closed' $duplicateArrayRejected 'ambigu
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     'PSOBB-ClientPatchProfileTests-' + [Guid]::NewGuid().ToString('N'))
+$integrationRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'PSOBB-RecoveryTests-' + [Guid]::NewGuid().ToString('N'))
 try {
     $fixtureServer = Join-Path $temporaryRoot 'server'
     foreach ($patchName in $expectedStable) {
@@ -149,10 +185,15 @@ try {
     }
     Add-Result 'a modified 59NL source fails closed' $tamperRejected 'size and SHA-256 are lock-bound'
 
-    $integrationRoot = Join-Path $temporaryRoot 'runtime'
     $integrationLayout = Get-PSOBBLayout -RuntimeRoot $integrationRoot
     New-Item -ItemType Directory -Path $integrationLayout.Server -Force | Out-Null
     $marker = Initialize-PSOBBRuntimeMarker -Layout $integrationLayout
+    [System.IO.File]::WriteAllText(
+        (Join-Path $integrationLayout.Root '.recovery-test.json'),
+        '{"fixture":true}',
+        [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedAcl `
+        -Path (Join-Path $integrationLayout.Root '.recovery-test.json')
     foreach ($patchName in $expectedStable) {
         $patchDirectory = Join-Path $integrationLayout.Server (
             'system\client-functions\' + $patchName)
@@ -169,10 +210,9 @@ try {
     New-Item -ItemType Directory -Path $integrationLayout.Stable -Force | Out-Null
     [System.IO.File]::WriteAllText(
         $integrationLayout.InstallRecord,
-        ([ordered]@{
-            schemaVersion = 2
-            installationId = $marker.installationId
-        } | ConvertTo-Json),
+        ((New-FixtureInstallationRecord `
+                -InstallationId $marker.installationId `
+                -RuntimeRoot $integrationLayout.Root) | ConvertTo-Json -Depth 5),
         [System.Text.UTF8Encoding]::new($false))
     $promotionScript = Join-Path $repositoryRoot 'scripts\Set-PSOBBClientPatchProfile.ps1'
     $promotion = & $promotionScript `
@@ -203,22 +243,300 @@ try {
         (@(Get-ActiveConfigStringArray -Text $rolledBackConfig -Key 'AutoPatches').Count -eq 0) -and
         (@(Get-ActiveConfigStringArray -Text $rolledBackConfig -Key 'BBRequiredPatches').Count -eq 0) -and
         ([string]$rolledBackRecord.clientPatchProfile -ceq 'baseline')) 'profile metadata and both arrays rolled back together'
+
+    $transactionRoot = Join-Path $integrationLayout.Stable `
+        '.client-patch-profile-transaction'
+    $configTemporary = Join-Path $integrationLayout.Server `
+        'system\.client-patch-profile-config.new'
+    $installationTemporary = Join-Path $integrationLayout.Stable `
+        '.client-patch-profile-installation.new'
+    $faultTokens = $null
+    $faultParseErrors = $null
+    $promotionAst = [System.Management.Automation.Language.Parser]::ParseInput(
+        $promotionSource, [ref]$faultTokens, [ref]$faultParseErrors)
+    if ($faultParseErrors.Count -gt 0) {
+        throw 'Patch-profile source could not be parsed for fault-boundary coverage'
+    }
+    $commandAsts = @($promotionAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst]
+            }, $true))
+    $faultPrefixesByFunction = @{
+        'Write-PatchProfileArtifact' = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal)
+        'Install-PatchProfileArtifact' = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal)
+    }
+    foreach ($commandAst in @($commandAsts | Where-Object {
+                $commandName = $_.GetCommandName()
+                $null -ne $commandName -and
+                    $faultPrefixesByFunction.ContainsKey($commandName)
+            })) {
+        $elements = @($commandAst.CommandElements)
+        for ($elementIndex = 0; $elementIndex -lt ($elements.Count - 1); $elementIndex++) {
+            if ($elements[$elementIndex] -is
+                    [System.Management.Automation.Language.CommandParameterAst] -and
+                $elements[$elementIndex].ParameterName -ceq 'FaultPrefix' -and
+                $elements[$elementIndex + 1] -is
+                    [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                [void]$faultPrefixesByFunction[$commandAst.GetCommandName()].Add(
+                    [string]$elements[$elementIndex + 1].Value)
+            }
+        }
+    }
+    $faultPointSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    $unresolvedFaultExpressions = [System.Collections.Generic.List[string]]::new()
+    foreach ($commandAst in @($commandAsts | Where-Object {
+                $_.GetCommandName() -ceq 'Invoke-PatchProfileInternalFault'
+            })) {
+        $elements = @($commandAst.CommandElements)
+        $pointExpression = $null
+        for ($elementIndex = 0; $elementIndex -lt ($elements.Count - 1); $elementIndex++) {
+            if ($elements[$elementIndex] -is
+                    [System.Management.Automation.Language.CommandParameterAst] -and
+                $elements[$elementIndex].ParameterName -ceq 'Point') {
+                $pointExpression = $elements[$elementIndex + 1]
+                break
+            }
+        }
+        if ($pointExpression -is
+            [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            [void]$faultPointSet.Add([string]$pointExpression.Value)
+        } elseif ($pointExpression -is
+            [System.Management.Automation.Language.ExpandableStringExpressionAst] -and
+            [string]$pointExpression.Value -match '^\$FaultPrefix-(.+)$') {
+            $suffix = [string]$Matches[1]
+            $enclosingFunction = $pointExpression.Parent
+            while ($null -ne $enclosingFunction -and
+                $enclosingFunction -isnot
+                    [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                $enclosingFunction = $enclosingFunction.Parent
+            }
+            if ($null -eq $enclosingFunction -or
+                -not $faultPrefixesByFunction.ContainsKey(
+                    [string]$enclosingFunction.Name)) {
+                $unresolvedFaultExpressions.Add([string]$commandAst.Extent.Text)
+                continue
+            }
+            foreach ($prefix in $faultPrefixesByFunction[[string]$enclosingFunction.Name]) {
+                [void]$faultPointSet.Add("$prefix-$suffix")
+            }
+        } else {
+            $unresolvedFaultExpressions.Add([string]$commandAst.Extent.Text)
+        }
+    }
+    $faultPoints = @($faultPointSet | Sort-Object)
+    Add-Result 'fault matrix derives every implemented profile boundary' (
+        $faultPrefixesByFunction['Write-PatchProfileArtifact'].Count -eq 4 -and
+        $faultPrefixesByFunction['Install-PatchProfileArtifact'].Count -eq 4 -and
+        $unresolvedFaultExpressions.Count -eq 0 -and
+        $faultPoints.Count -eq 44) `
+        "$($faultPoints.Count) exact fault points parsed from source"
+    foreach ($faultPoint in $faultPoints) {
+        & $promotionScript -RuntimeRoot $integrationRoot -Profile baseline `
+            -Confirm:$false | Out-Null
+        $faultObserved = $false
+        try {
+            & $promotionScript `
+                -RuntimeRoot $integrationRoot -Profile stable-qol `
+                -Confirm:$false `
+                -InternalTestFaultPoint $faultPoint `
+                -InternalTestFaultToken ([string]$marker.installationId) |
+                Out-Null
+        } catch {
+            $faultObserved = $_.Exception.Message -match
+                '(Injected|transaction failed|compensation did not complete)'
+        }
+        $recoverySucceeded = $true
+        try {
+            # A compensation-fault seam intentionally retains protected rollback.
+            # A no-fault rerun must idempotently recover it before applying baseline.
+            & $promotionScript -RuntimeRoot $integrationRoot -Profile baseline `
+                -Confirm:$false | Out-Null
+            $finalState = Assert-PSOBBClientPatchStateCoherent `
+                -ConfigPath $integrationConfigPath `
+                -InstallRecordPath $integrationLayout.InstallRecord `
+                -InstallationId ([string]$marker.installationId) `
+                -RuntimeRoot $integrationLayout.Root
+            $recoverySucceeded =
+                $finalState.Profile -ceq 'baseline' -and
+                (Test-PSOBBProtectedAcl -Path $integrationConfigPath) -and
+                (Test-PSOBBProtectedAcl -Path $integrationLayout.InstallRecord) -and
+                -not (Test-Path -LiteralPath $transactionRoot) -and
+                -not (Test-Path -LiteralPath $configTemporary) -and
+                -not (Test-Path -LiteralPath $installationTemporary)
+        } catch {
+            $recoverySucceeded = $false
+        }
+        Add-Result "journaled profile fault recovers: $faultPoint" (
+            $faultObserved -and $recoverySucceeded) `
+            'original-or-candidate pair only; exact ACL; retained compensation is idempotently recovered; no debris'
+    }
+
+    function Invoke-BlockedPromotionFixture {
+        param(
+            [Parameter(Mandatory)][string]$Name,
+            [Parameter(Mandatory)][scriptblock]$Prepare,
+            [Parameter(Mandatory)][scriptblock]$Cleanup
+        )
+
+        $configBefore = [System.IO.File]::ReadAllBytes($integrationConfigPath)
+        $recordBefore = [System.IO.File]::ReadAllBytes($integrationLayout.InstallRecord)
+        $blocked = $false
+        $detail = ''
+        try {
+            . $Prepare
+            try {
+                & $promotionScript `
+                    -RuntimeRoot $integrationRoot `
+                    -Profile stable-qol `
+                    -Confirm:$false | Out-Null
+            } catch {
+                $blocked = $_.Exception.Message -match 'requires both server environments'
+                $detail = $_.Exception.Message
+            }
+        } finally {
+            . $Cleanup
+        }
+        $configAfter = [System.IO.File]::ReadAllBytes($integrationConfigPath)
+        $recordAfter = [System.IO.File]::ReadAllBytes($integrationLayout.InstallRecord)
+        $unchanged =
+            [Convert]::ToBase64String($configBefore) -ceq
+                [Convert]::ToBase64String($configAfter) -and
+            [Convert]::ToBase64String($recordBefore) -ceq
+                [Convert]::ToBase64String($recordAfter)
+        Add-Result $Name ($blocked -and $unchanged) (
+            "blocked=$blocked unchanged=$unchanged; $detail")
+    }
+
+    $stableIntegrationLayout = Get-PSOBBServerEnvironmentLayout `
+        -Layout $integrationLayout -Environment Stable
+    $combatIntegrationLayout = Get-PSOBBServerEnvironmentLayout `
+        -Layout $integrationLayout -Environment CombatCanary
+    foreach ($environmentLayout in @(
+            $stableIntegrationLayout,
+            $combatIntegrationLayout)) {
+        Invoke-BlockedPromotionFixture `
+            -Name ("$($environmentLayout.Environment) stale lifecycle evidence blocks promotion without changing bytes") `
+            -Prepare {
+                [System.IO.Directory]::CreateDirectory(
+                    $environmentLayout.ControlDirectory) | Out-Null
+                [System.IO.File]::WriteAllText(
+                    $environmentLayout.ControlState,
+                    '{"schemaVersion":3,"state":"failed"}',
+                    [System.Text.UTF8Encoding]::new($false))
+            } `
+            -Cleanup {
+                if (Test-Path -LiteralPath $environmentLayout.ControlState) {
+                    Remove-Item -LiteralPath $environmentLayout.ControlState -Force
+                }
+            }
+    }
+
+    foreach ($reservedPort in @(11000, 12000, 12001)) {
+        $listener = $null
+        Invoke-BlockedPromotionFixture `
+            -Name "reserved listener $reservedPort blocks promotion without changing bytes" `
+            -Prepare {
+                $listener = [System.Net.Sockets.TcpListener]::new(
+                    [System.Net.IPAddress]::Loopback,
+                    $reservedPort)
+                $listener.Start()
+            } `
+            -Cleanup {
+                if ($listener) {
+                    $listener.Stop()
+                    $listener = $null
+                }
+            }
+    }
+
+    $namedBlockerRoot = Join-Path $temporaryRoot 'named-blockers'
+    [System.IO.Directory]::CreateDirectory($namedBlockerRoot) | Out-Null
+    $pingExecutable = Join-Path $env:SystemRoot 'System32\PING.EXE'
+    foreach ($processName in @('online', 'option', 'Psobb', 'newserv-windows')) {
+        $blockerProcess = $null
+        $blockerPath = Join-Path $namedBlockerRoot ($processName + '.exe')
+        Copy-Item -LiteralPath $pingExecutable -Destination $blockerPath
+        Invoke-BlockedPromotionFixture `
+            -Name "named $processName identity blocks promotion without changing bytes" `
+            -Prepare {
+                $blockerProcess = Start-Process `
+                    -FilePath $blockerPath `
+                    -ArgumentList @('-n', '60', '127.0.0.1') `
+                    -WindowStyle Hidden `
+                    -PassThru
+                $blockerProcess.Refresh()
+                if ([string]$blockerProcess.ProcessName -cne $processName) {
+                    throw "The named blocker fixture started as $($blockerProcess.ProcessName)"
+                }
+            } `
+            -Cleanup {
+                if ($blockerProcess) {
+                    $blockerProcess.Refresh()
+                    if (-not $blockerProcess.HasExited) {
+                        $blockerProcess.Kill()
+                        $blockerProcess.WaitForExit(5000) | Out-Null
+                    }
+                    $blockerProcess.Dispose()
+                    $blockerProcess = $null
+                }
+            }
+    }
 } finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $integrationRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $initializeSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Initialize-PSOBB.ps1')
 $promotionSource = Get-Content -Raw -LiteralPath (
     Join-Path $repositoryRoot 'scripts\Set-PSOBBClientPatchProfile.ps1')
+$commonSource = Get-Content -Raw -LiteralPath (
+    Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
+$globalGateOffsets = @([regex]::Matches(
+        $promotionSource,
+        'Assert-PSOBBGlobalStoppedRuntime') | ForEach-Object Index)
+$firstLockOffset = $promotionSource.IndexOf(
+    'Enter-PSOBBClientOperationLock', [System.StringComparison]::Ordinal)
+$serverLockOffset = $promotionSource.IndexOf(
+    '$ownsMutex = $mutex.WaitOne(0)', [System.StringComparison]::Ordinal)
+$firstWriteOffset = $promotionSource.IndexOf(
+    '-Source $paths.CandidateConfig', [System.StringComparison]::Ordinal)
 Add-Result 'initialization records the selected patch profile' (
-    $initializeSource -match "ClientPatchProfile = 'stable-qol'" -and
+    $initializeSource -match "ClientPatchProfile = 'baseline'" -and
     $initializeSource -match 'clientPatchPolicySha256' -and
     $initializeSource -match 'Assert-NewservClientPatchProfileAvailable') 'profile and policy hash are installation provenance'
+Add-Result 'implicit patch-profile defaults preserve Stable Native baseline' (
+    $promotionSource -match "\[string\]\`$Profile = 'baseline'" -and
+    $commonSource -match "\[string\]\`$ClientPatchProfile = 'baseline'") `
+    'stable-qol remains explicit compatibility/reference only'
 Add-Result 'runtime promotion requires stopped newserv and supports rollback' (
-    $promotionSource -match 'Get-NewservProcessesAtPath' -and
-    $promotionSource -match 'Stop the approved newserv process' -and
+    $globalGateOffsets.Count -eq 3 -and
+    $promotionSource -match 'Enter-PSOBBClientOperationLock' -and
+    $promotionSource.IndexOf(
+        'Enter-PSOBBClientOperationLock', [System.StringComparison]::Ordinal) -lt
+        $promotionSource.IndexOf(
+            "'Local\PSOBB.Newserv.Start.'", [System.StringComparison]::Ordinal) -and
+    $promotionSource.LastIndexOf(
+        '$mutex.ReleaseMutex()', [System.StringComparison]::Ordinal) -lt
+        $promotionSource.LastIndexOf(
+            'Exit-PSOBBClientOperationLock', [System.StringComparison]::Ordinal) -and
+    $promotionSource -notmatch '(?im)^\s*Stop-Process\b' -and
     $promotionSource -match "ValidateSet\('stable-qol', 'baseline'\)" -and
-    $promotionSource -match 'Write-PSOBBAtomicText') 'explicit stable-qol/baseline operation; atomic rollback on write failure'
+    $promotionSource -match 'Write-PatchProfileJournal' -and
+    $promotionSource -match 'Resolve-PatchProfileInterruptedTransaction' -and
+    $promotionSource -match 'Restore-PatchProfileOriginalPair') `
+    'client-first global interlock; protected journal; idempotent pair recovery'
+Add-Result 'global stopped-runtime gate brackets the two-file profile transaction' (
+    $globalGateOffsets.Count -eq 3 -and
+    $globalGateOffsets[0] -gt $firstLockOffset -and
+    $globalGateOffsets[0] -gt $serverLockOffset -and
+    $globalGateOffsets[1] -gt $globalGateOffsets[0] -and
+    $globalGateOffsets[1] -lt $firstWriteOffset -and
+    $globalGateOffsets[2] -gt $firstWriteOffset -and
+    $promotionSource -notmatch 'Assert-PSOBBPatchProfileActivityStopped') `
+    'both locks precede initial census; a second census precedes mutation; a third precedes acceptance'
 
 $results | Format-Table -AutoSize
 $failed = @($results | Where-Object { -not $_.Passed })

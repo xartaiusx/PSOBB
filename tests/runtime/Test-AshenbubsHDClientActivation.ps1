@@ -351,11 +351,12 @@ Add-Result 'activation exposes only activate verify and rollback' (
     $activation -notmatch "ValidateSet\([^\)]*(Stable|Canary)") `
     'the mutation interface has no stable or canary selector'
 Add-Result 'server and every approved client must be stopped' (
-    $activation -match 'Assert-PSOBBNoRunningClients' -and
-    $activation -match 'Get-NewservProcessesAtPath' -and
-    $activation -match 'Get-NewservProcess' -and
-    $activation -match 'Assert-PSOBBStoppedForClientAssetMutation') `
-    'all three actions fail closed around active processes'
+    $activation -match 'Assert-PSOBBGlobalStoppedRuntime' -and
+    $activation -match 'Assert-PSOBBStoppedForClientAssetMutation' -and
+    $common -match 'Get-PSOBBServerEnvironmentProcessRecords' -and
+    $common -match 'Get-PSOBBAllClientProcessRecords' -and
+    $common -match 'Get-PSOBBReservedServerPortListeners') `
+    'all three actions fail closed around both server environments, named clients, and reserved listeners'
 Add-Result 'current staged overlay is independently verified before locking' (
     $activation -match 'Set-PSOBBAshenbubsHDOverlay\.ps1' -and
     $activation -match '-Action Verify' -and

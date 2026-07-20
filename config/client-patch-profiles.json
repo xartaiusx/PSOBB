@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "defaultProfile": "stable-qol",
+  "defaultProfile": "baseline",
   "profiles": [
     {
       "id": "baseline",
       "channel": "stable",
-      "description": "Unmodified 59NL client behavior; emergency rollback profile.",
+      "description": "Unmodified 59NL client behavior; accepted Stable recovery profile.",
       "autoPatches": [],
       "bbRequiredPatches": []
     },
     {
       "id": "stable-qol",
       "channel": "stable",
-      "description": "Pinned-release, non-protocol client QoL patches for the exact 59NL baseline.",
+      "description": "Compatibility reference only; grouped exact-59NL QoL patches require individual acceptance before use.",
       "autoPatches": [
         "AccurateKillCount",
         "FastTekker",
