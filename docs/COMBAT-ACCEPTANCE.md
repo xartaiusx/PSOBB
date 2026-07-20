@@ -95,6 +95,10 @@ run either five-minute Twills smoke. A verified immutable canary server artifact
 exists in `server-base\release`; no server is selected into `server\release`
 and no client, binding, snapshot, or mutable canary state is installed.
 
+The later canonical Stable restore-drill prerequisite passed on 2026-07-20.
+Its protected schema-v3 receipt is
+`backups/restore-drill-20260720T105025429Z/drill-result.json`.
+
 ## Phase 0 acceptance matrix
 
 | Gate | Current status | Required evidence |
@@ -109,7 +113,7 @@ and no client, binding, snapshot, or mutable canary state is installed.
 | Sealed Twills snapshot/transaction | Source verified 2026-07-20; no canonical snapshot created | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
 | CombatCanary lifecycle/launcher | Source verified 2026-07-20; not live accepted | Environment-specific start/observe/stop and launcher tests |
 | Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
-| Current real Stable restore drill | Not run | Protected schema-v3 drill receipt and clean termination |
+| Current real Stable restore drill | Accepted 2026-07-20 | Protected schema-v3 receipt, exact process image, 2/2 accounts, three loopback listeners, and clean termination |
 | CombatCanary materialization | Not started | Clean-tree, stopped-state, signed install readback |
 | Five-minute canary and canonical smokes | Not started | Ledger entry plus restored snapshot proof |
 

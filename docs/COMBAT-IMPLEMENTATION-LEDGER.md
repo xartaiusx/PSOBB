@@ -151,3 +151,30 @@ Each entry records:
   clean, run `git status --short` and then `git switch psobb-fidelity`. No
   runtime rollback is required because this source gate materialized no
   canonical state.
+
+## 2026-07-20 / stable-restore-drill-v1
+
+- Feature/profile: Phase 0 Stable recovery prerequisite under the native
+  `baseline` client-patch profile
+- Outcome: accepted; the isolated schema-v3 restore drill started and verified
+  the exact Stable newserv image, indexed both expected accounts, bound all
+  three loopback listeners, exited gracefully, and retained only its protected
+  result
+- Implementation commit: `495fdcf` (`fix: parse native newserv licenses`)
+- Tests: recovery strict JSON 86/86; recovery integration 35/35 with the prior
+  failed live receipt intentionally excluded; complete recovery suite 37/37
+  after successful drill publication
+- Scenario: stopped-runtime recovery drill, 5,367 scaffold files verified,
+  2/2 accounts indexed, exact process image verified, three loopback listeners,
+  and 115.4 seconds elapsed; no game client or live gameplay was started
+- State result: slot-0 Twills remained the verified FOnewearl with 29 bank
+  entries before and after; no PSOBB/newserv process or reserved listener
+  remained; the Git tree remained clean with no remote
+- Evidence location:
+  `backups/restore-drill-20260720T105025429Z/drill-result.json`
+- Limitation: this accepts recovery safety only. CombatCanary materialization,
+  its isolated five-minute Twills smoke, and the later non-destructive canonical
+  five-minute smoke have not run
+- Rollback: no runtime rollback is required because the drill used and removed
+  an isolated work tree. Revert the focused parser commit locally only if its
+  current-format recovery policy must be withdrawn.

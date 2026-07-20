@@ -127,9 +127,9 @@
 
 ## Restore-drill quarantine
 
-The 2026-07-20 source-only gate tested restore-drill behavior with synthetic
-fixtures; it did not run a real drill against the canonical runtime. A real
-successful drill writes a protected schema-v3 `drill-result.json`. Its bounded
+The 2026-07-20 canonical Stable restore drill passed against the protected
+baseline backup. Its schema-v3 receipt is
+`backups/restore-drill-20260720T105025429Z/drill-result.json`. Its bounded
 identity and termination fields include `approvedServerExecutableSha256`,
 `serverExecutableSha256`, `processId`, `processStartTimeFileTimeUtc`,
 `processImageVerified`, `quarantineReason`, `quarantinePublicationState`, and
@@ -152,10 +152,11 @@ its ACL.
 ## Combat canary materialization runbook
 
 The implementation range from `6f5e78b` through `96bcddc`, inclusive, passed a
-source-only gate. The canonical runtime-marker migration, current real Stable
-restore drill, CombatCanary materialization, and both five-minute Twills smokes
-have not run. Do not start this sequence until the marker and restore-drill
-prerequisites pass, the Git tree is clean, every PSOBB/newserv process is
+source-only gate. The current real Stable restore drill passed on 2026-07-20.
+The canonical runtime-marker migration, CombatCanary materialization, and both
+five-minute Twills smokes have not run. Do not start this sequence until the
+marker and restore-drill prerequisites pass, the Git tree is clean, every
+PSOBB/newserv process is
 stopped, ports 11000, 12000, and 12001 are free, and no `P:` build mapping
 exists. Stable and CombatCanary must never run concurrently.
 
