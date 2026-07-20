@@ -1,0 +1,1110 @@
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+$repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
+. (Join-Path $repositoryRoot 'scripts\PSOBB.CombatCanary.Common.ps1')
+
+$migrationScript = Join-Path $repositoryRoot `
+    'scripts\Repair-PSOBBStableInstallationRecord.ps1'
+$legacyPolicySha256 =
+    'f3501e6cff0d2fd69b0792036c1361ad521f7b3abfec4d695632c6fcc9c0fffb'
+$results = [System.Collections.Generic.List[object]]::new()
+$fixtureRoots = [System.Collections.Generic.List[string]]::new()
+
+function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
+    $results.Add([pscustomobject]@{
+            Name = $Name
+            Passed = $Passed
+            Detail = $Detail
+        })
+}
+
+function Get-TestSha256([byte[]]$Bytes) {
+    ([Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($Bytes))).ToLowerInvariant()
+}
+
+function Write-TestBytes([string]$Path, [byte[]]$Bytes) {
+    $parent = Split-Path -Parent $Path
+    [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    [System.IO.File]::WriteAllBytes($Path, $Bytes)
+    [pscustomobject]@{
+        Path = $Path
+        Size = [long]$Bytes.Length
+        Sha256 = Get-TestSha256 $Bytes
+    }
+}
+
+function Write-TestJson([string]$Path, $Value, [switch]$Protected) {
+    $bytes = [System.Text.UTF8Encoding]::new($false, $true).GetBytes(
+        ($Value | ConvertTo-Json -Depth 12) + "`n")
+    try {
+        $result = Write-TestBytes $Path $bytes
+        if ($Protected) { Set-PSOBBProtectedAcl -Path $Path }
+        $result
+    } finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function New-TestFixture {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'PSOBB-StableInstallationRecordMigrationTests-' +
+        [Guid]::NewGuid().ToString('N'))
+    $fixtureRoots.Add($root)
+    $layout = Get-PSOBBLayout -RuntimeRoot $root
+    foreach ($directory in @(
+            $layout.Root,
+            $layout.Stable,
+            $layout.Server,
+            $layout.BaseClient,
+            $layout.Client,
+            $layout.Archives,
+            $layout.Backups,
+            (Join-Path $layout.Server 'system'),
+            (Join-Path $layout.Stable 'overlays\dgvoodoo-2.87.3\MS\x86'))) {
+        [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+    }
+    Set-PSOBBProtectedAcl -Path $layout.Backups
+    $installationId = [Guid]::NewGuid().ToString('D')
+    [void](Write-TestJson $layout.RuntimeMarker ([ordered]@{
+                schemaVersion = 1
+                installationId = $installationId
+                runtimeRoot = $layout.Root
+                createdAtUtc = '2026-07-20T00:00:00Z'
+            }) -Protected)
+    $testMarker = Join-Path $layout.Root `
+        '.stable-installation-record-migration-test.json'
+    [void](Write-TestJson $testMarker ([ordered]@{
+                schemaVersion = 1
+                purpose = 'stable-installation-record-migration-tests'
+            }) -Protected)
+
+    $serverExe = Write-TestBytes `
+        (Join-Path $layout.Server 'newserv-windows.exe') `
+        ([System.Text.Encoding]::ASCII.GetBytes('fixture-server'))
+    $clientBytes = [System.Text.Encoding]::ASCII.GetBytes('fixture-client')
+    $baseClientExe = Write-TestBytes `
+        (Join-Path $layout.BaseClient 'Psobb.exe') $clientBytes
+    [void](Write-TestBytes (Join-Path $layout.Client 'Psobb.exe') $clientBytes)
+    $rendererArchive = Write-TestBytes `
+        (Join-Path $layout.Archives 'dgVoodoo2_87_3.zip') `
+        ([System.Text.Encoding]::ASCII.GetBytes('fixture-renderer-archive'))
+    $rendererDll = Write-TestBytes `
+        (Join-Path $layout.Stable `
+            'overlays\dgvoodoo-2.87.3\MS\x86\D3D8.dll') `
+        ([System.Text.Encoding]::ASCII.GetBytes('fixture-renderer-dll'))
+    $rendererConfig = Write-TestBytes `
+        (Join-Path $layout.Stable `
+            'overlays\dgvoodoo-2.87.3\dgVoodoo.conf') `
+        ([System.Text.Encoding]::ASCII.GetBytes('fixture-renderer-config'))
+    $serverArchiveHash = ('1' * 64)
+    $clientArchiveHash = ('2' * 64)
+    $serverManifest = Write-TestJson `
+        (Join-Path $layout.Stable 'server-base.manifest.json') `
+        ([ordered]@{ schemaVersion = 1; files = @() })
+    $clientManifest = Write-TestJson $layout.BaseClientManifest `
+        ([ordered]@{ schemaVersion = 1; files = @() })
+    $patchManifest = Write-TestJson `
+        (Join-Path $layout.Stable 'patch-bb-data.manifest.json') `
+        ([ordered]@{
+                schemaVersion = 1
+                sourceClientArchiveSha256 = $clientArchiveHash
+                generatedAtUtc = '2026-07-20T00:00:00Z'
+                files = @()
+            })
+    [void](Write-TestJson (Join-Path $layout.Server 'system\config.json') `
+            ([ordered]@{
+                AutoPatches = @()
+                BBRequiredPatches = @()
+                FixtureTerminator = $true
+            }))
+
+    $sourceLockPath = Join-Path $layout.Root 'fixture-sources.lock.json'
+    [void](Write-TestJson $sourceLockPath ([ordered]@{
+                schemaVersion = 1
+                generatedAtUtc = '2026-07-20T00:00:00Z'
+                components = @(
+                    [ordered]@{
+                        id = 'newserv-stable-release'
+                        version = 'fixture-stable'
+                        size = 1
+                        sha256 = $serverArchiveHash
+                        members = @([ordered]@{
+                                path = 'release/newserv-windows.exe'
+                                size = $serverExe.Size
+                                sha256 = $serverExe.Sha256
+                            })
+                    },
+                    [ordered]@{
+                        id = 'tethealla-59nl-english'
+                        version = 'fixture-59nl'
+                        size = 1
+                        sha256 = $clientArchiveHash
+                        members = @([ordered]@{
+                                path = 'Psobb.exe'
+                                size = $baseClientExe.Size
+                                sha256 = $baseClientExe.Sha256
+                            })
+                    },
+                    [ordered]@{
+                        id = 'dgvoodoo2-x86-d3d8'
+                        version = 'fixture-renderer'
+                        size = $rendererArchive.Size
+                        sha256 = $rendererArchive.Sha256
+                        members = @(
+                            [ordered]@{
+                                path = 'MS/x86/D3D8.dll'
+                                size = $rendererDll.Size
+                                sha256 = $rendererDll.Sha256
+                            },
+                            [ordered]@{
+                                path = 'dgVoodoo.conf'
+                                size = $rendererConfig.Size
+                                sha256 = $rendererConfig.Sha256
+                            })
+                    })
+                behaviorReferences = @()
+            }) -Protected)
+    $policyPath = Join-Path $layout.Root 'fixture-client-patch-policy.json'
+    [void](Write-TestJson $policyPath ([ordered]@{
+                schemaVersion = 1
+                defaultProfile = 'baseline'
+                profiles = @([ordered]@{
+                        id = 'baseline'
+                        channel = 'stable'
+                        description = 'Fixture empty baseline.'
+                        autoPatches = @()
+                        bbRequiredPatches = @()
+                    })
+                gated = [ordered]@{
+                    sourceCanaryOnly = @()
+                    protocolRequired = @()
+                    migrationRequired = @()
+                }
+            }) -Protected)
+    $policyHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $policyPath).
+        Hash.ToLowerInvariant()
+    if ($policyHash -ceq $legacyPolicySha256) {
+        throw 'Fixture current policy unexpectedly matches the known legacy policy'
+    }
+    $legacyRecord = [ordered]@{
+        schemaVersion = 2
+        installationId = $installationId
+        initializedAtUtc = '2026-07-19T00:00:00Z'
+        runtimeRoot = $layout.Root
+        serverVersion = 'fixture-stable'
+        serverArchiveSha256 = $serverArchiveHash
+        serverExecutableSha256 = $serverExe.Sha256
+        serverBaseManifestSha256 = $serverManifest.Sha256
+        clientVersion = 'fixture-59nl'
+        clientArchiveSha256 = $clientArchiveHash
+        baseClientExecutableSha256 = $baseClientExe.Sha256
+        baseClientManifestSha256 = $clientManifest.Sha256
+        clientExecutableSha256 = $baseClientExe.Sha256
+        patchManifestSha256 = $patchManifest.Sha256
+        synchronizedPatchFiles = 0
+        clientPatchProfile = 'baseline'
+        clientPatchPolicySha256 = $legacyPolicySha256
+        networkScope = 'loopback-only'
+    }
+    [void](Write-TestJson $layout.InstallRecord $legacyRecord -Protected)
+    [pscustomobject]@{
+        Layout = $layout
+        InstallationId = $installationId
+        TestMarker = $testMarker
+        SourceLockPath = $sourceLockPath
+        PolicyPath = $policyPath
+        PolicySha256 = $policyHash
+        LegacyRecord = [pscustomobject]$legacyRecord
+        RendererArchive = $rendererArchive
+        RendererDll = $rendererDll
+        RendererConfig = $rendererConfig
+        TransactionRoot = Join-Path $layout.Stable `
+            '.stable-installation-record-migration'
+    }
+}
+
+function Get-InvokeParameters($Fixture) {
+    @{
+        RuntimeRoot = $Fixture.Layout.Root
+        InternalTestSourcesLockPath = $Fixture.SourceLockPath
+        InternalTestPolicyPath = $Fixture.PolicyPath
+        InternalTestFaultToken = $Fixture.InstallationId
+        Confirm = $false
+    }
+}
+
+function Test-PreservedRecord($Before, $After, $Fixture) {
+    $preserved = @($Before.PSObject.Properties.Name | Where-Object {
+            $_ -cne 'clientPatchPolicySha256'
+        })
+    @($preserved | Where-Object {
+            $Before.$_ -cne $After.$_
+        }).Count -eq 0 -and
+        [string]$After.rendererVersion -ceq 'fixture-renderer' -and
+        [string]$After.rendererArchiveSha256 -ceq
+            $Fixture.RendererArchive.Sha256 -and
+        [string]$After.rendererWrapperSha256 -ceq
+            $Fixture.RendererDll.Sha256 -and
+        [string]$After.rendererConfigurationSha256 -ceq
+            $Fixture.RendererConfig.Sha256 -and
+        [string]$After.clientPatchPolicySha256 -ceq $Fixture.PolicySha256
+}
+
+function Test-FinalMigrationState($Fixture) {
+    try {
+        if (Test-Path -LiteralPath $Fixture.TransactionRoot) { return $false }
+        $record = Get-Content -Raw -LiteralPath $Fixture.Layout.InstallRecord |
+            ConvertFrom-Json -DateKind String
+        if (-not (Test-PreservedRecord $Fixture.LegacyRecord $record $Fixture) -or
+            -not (Test-PSOBBProtectedAcl -Path $Fixture.Layout.InstallRecord)) {
+            return $false
+        }
+        $completed = @(Get-ChildItem -LiteralPath $Fixture.Layout.Backups `
+                -Directory -Filter 'installation-record-migration-*')
+        if ($completed.Count -ne 1) { return $false }
+        $tree = Get-PSOBBOrdinaryTreeSnapshot `
+            -Path $completed[0].FullName -Root $Fixture.Layout.Backups `
+            -Label 'completed migration convergence evidence' `
+            -RequireProtectedAcl
+        $expectedNames = @('.psobb-combat-canary-transaction.json',
+            'candidate-installation.json', 'completed.json',
+            'displaced-installation.json', 'journal.json',
+            'original-installation.json')
+        $actualNames = @($tree.Items | Where-Object { -not $_.IsDirectory } |
+            ForEach-Object { [System.IO.Path]::GetFileName($_.Path) } |
+            Sort-Object)
+        if (@(Compare-Object $expectedNames $actualNames).Count -ne 0) {
+            return $false
+        }
+        $journal = Get-Content -Raw -LiteralPath (
+            Join-Path $completed[0].FullName 'journal.json') |
+            ConvertFrom-Json -DateKind String
+        $target = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $Fixture.Layout.InstallRecord -Root $Fixture.Layout.Root `
+            -Directory $false -RoleLabel 'converged migration target'
+        $expectedFileId = [Convert]::ToUInt64(
+            [string]$journal.candidateStageFileId, 16)
+        [uint32]$target.VolumeSerialNumber -eq
+            [uint32]$journal.candidateStageVolume -and
+            [uint64]$target.FileId -eq $expectedFileId
+    } catch {
+        $false
+    }
+}
+
+try {
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $migrationScript, [ref]$tokens, [ref]$parseErrors)
+    Add-Result 'migration script parses' ($parseErrors.Count -eq 0) `
+        "errors=$($parseErrors.Count)"
+
+    $source = Get-Content -Raw -LiteralPath $migrationScript
+    Add-Result 'migration has exact legacy policy and stopped transaction gates' (
+        $source -match [regex]::Escape($legacyPolicySha256) -and
+        $source -match 'SupportsShouldProcess' -and
+        @([regex]::Matches($source, 'Assert-PSOBBGlobalStoppedRuntime')).Count `
+            -ge 3 -and
+        $source -match 'Enter-PSOBBClientOperationLock' -and
+        $source -notmatch '(?im)^\s*Stop-Process\b') `
+        'known input only; both lifecycle locks; no process termination'
+
+    $whatIf = New-TestFixture
+    $beforeBytes = [System.IO.File]::ReadAllBytes(
+        $whatIf.Layout.InstallRecord)
+    $beforeInventory = @(Get-ChildItem -Recurse -Force -LiteralPath `
+            $whatIf.Layout.Root | ForEach-Object FullName | Sort-Object)
+    $whatIfParameters = Get-InvokeParameters $whatIf
+    $preview = & $migrationScript @whatIfParameters -WhatIf
+    $afterBytes = [System.IO.File]::ReadAllBytes(
+        $whatIf.Layout.InstallRecord)
+    $afterInventory = @(Get-ChildItem -Recurse -Force -LiteralPath `
+            $whatIf.Layout.Root | ForEach-Object FullName | Sort-Object)
+    Add-Result 'WhatIf performs no write' (
+        -not [bool]$preview.Changed -and [bool]$preview.Pending -and
+        [Convert]::ToBase64String($beforeBytes) -ceq
+            [Convert]::ToBase64String($afterBytes) -and
+        @(Compare-Object $beforeInventory $afterInventory).Count -eq 0 -and
+        -not (Test-Path -LiteralPath $whatIf.TransactionRoot)) `
+        'installation bytes and complete fixture inventory remain exact'
+
+    $happy = New-TestFixture
+    $happyBefore = (Get-Content -Raw -LiteralPath $happy.Layout.InstallRecord |
+        ConvertFrom-Json -DateKind String)
+    $happyOriginalSha256 = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $happy.Layout.InstallRecord).Hash.ToLowerInvariant()
+    $happyParameters = Get-InvokeParameters $happy
+    $changed = & $migrationScript @happyParameters
+    $happyAfter = (Get-Content -Raw -LiteralPath $happy.Layout.InstallRecord |
+        ConvertFrom-Json -DateKind String)
+    $idempotent = & $migrationScript @happyParameters
+    $completedEvidence = @(Get-ChildItem -LiteralPath $happy.Layout.Backups `
+        -Directory -Filter 'installation-record-migration-*')
+    $evidenceExact = $completedEvidence.Count -eq 1
+    if ($evidenceExact) {
+        $evidenceTree = Get-PSOBBOrdinaryTreeSnapshot `
+            -Path $completedEvidence[0].FullName -Root $happy.Layout.Backups `
+            -Label 'completed migration test evidence' -RequireProtectedAcl
+        $evidenceNames = @($evidenceTree.Items | Where-Object {
+                -not $_.IsDirectory
+            } | ForEach-Object { [System.IO.Path]::GetFileName($_.Path) } |
+            Sort-Object)
+        $evidenceExact =
+            @(Compare-Object @('.psobb-combat-canary-transaction.json',
+                    'candidate-installation.json', 'completed.json',
+                    'displaced-installation.json', 'journal.json',
+                    'original-installation.json') $evidenceNames).Count -eq 0 -and
+            (Get-FileHash -Algorithm SHA256 -LiteralPath (
+                Join-Path $completedEvidence[0].FullName `
+                    'original-installation.json')).Hash.ToLowerInvariant() -ceq
+                $happyOriginalSha256
+    }
+    Add-Result 'exact legacy record migrates once and is idempotent' (
+        [bool]$changed.Changed -and -not [bool]$idempotent.Changed -and
+        (Test-PreservedRecord $happyBefore $happyAfter $happy) -and
+        -not (Test-Path -LiteralPath $happy.TransactionRoot) -and
+        $evidenceExact -and
+        (Test-PSOBBProtectedAcl -Path $happy.Layout.InstallRecord)) `
+        'four fields plus policy; completed protected original/journal evidence'
+
+    $publishedTamper = New-TestFixture
+    $publishedTamperParameters = Get-InvokeParameters $publishedTamper
+    & $migrationScript @publishedTamperParameters | Out-Null
+    $publishedTamperPath = @(Get-ChildItem `
+        -LiteralPath $publishedTamper.Layout.Backups -Directory `
+        -Filter 'installation-record-migration-*')[0].FullName
+    $completionPath = Join-Path $publishedTamperPath 'completed.json'
+    $completionValue = Get-Content -Raw -LiteralPath $completionPath |
+        ConvertFrom-Json -DateKind String
+    Add-Member -InputObject $completionValue -NotePropertyName extra `
+        -NotePropertyValue 'rejected'
+    [void](Write-TestJson $completionPath $completionValue -Protected)
+    $publishedTamperTarget = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $publishedTamper.Layout.InstallRecord).Hash
+    $publishedTamperRejected = $false
+    try { & $migrationScript @publishedTamperParameters | Out-Null } catch {
+        $publishedTamperRejected = $true
+    }
+    Add-Result 'current path revalidates its completed evidence bundle' (
+        $publishedTamperRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $publishedTamper.Layout.InstallRecord).Hash -ceq
+                $publishedTamperTarget -and
+        -not (Test-Path -LiteralPath $publishedTamper.TransactionRoot)) `
+        'post-move evidence cannot be bypassed by the idempotent current path'
+
+    $publishedAmbiguity = New-TestFixture
+    $publishedAmbiguityParameters = Get-InvokeParameters $publishedAmbiguity
+    & $migrationScript @publishedAmbiguityParameters | Out-Null
+    $ambiguousPath = Join-Path $publishedAmbiguity.Layout.Backups (
+        'installation-record-migration-' + [Guid]::NewGuid().ToString('N'))
+    [System.IO.Directory]::CreateDirectory($ambiguousPath) | Out-Null
+    Set-PSOBBProtectedAcl -Path $ambiguousPath
+    $publishedAmbiguityTarget = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $publishedAmbiguity.Layout.InstallRecord).Hash
+    $publishedAmbiguityRejected = $false
+    try { & $migrationScript @publishedAmbiguityParameters | Out-Null } catch {
+        $publishedAmbiguityRejected = $_.Exception.Message -match
+            'multiple installation migration bundles'
+    }
+    Add-Result 'multiple completed evidence bundles fail closed' (
+        $publishedAmbiguityRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $publishedAmbiguity.Layout.InstallRecord).Hash -ceq
+                $publishedAmbiguityTarget -and
+        -not (Test-Path -LiteralPath $publishedAmbiguity.TransactionRoot)) `
+        'transaction-ID publication ambiguity never mutates current metadata'
+
+    $unknown = New-TestFixture
+    $unknownValue = Get-Content -Raw -LiteralPath $unknown.Layout.InstallRecord |
+        ConvertFrom-Json -DateKind String
+    Add-Member -InputObject $unknownValue -NotePropertyName unexpected `
+        -NotePropertyValue 'rejected'
+    [void](Write-TestJson $unknown.Layout.InstallRecord $unknownValue -Protected)
+    $unknownBefore = Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $unknown.Layout.InstallRecord
+    $unknownRejected = $false
+    $unknownParameters = Get-InvokeParameters $unknown
+    try { & $migrationScript @unknownParameters | Out-Null } catch {
+        $unknownRejected = $_.Exception.Message -match
+            'neither the exact known legacy nor current shape'
+    }
+    Add-Result 'unknown legacy shape is rejected without mutation' (
+        $unknownRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $unknown.Layout.InstallRecord).Hash -ceq
+            $unknownBefore.Hash -and
+        -not (Test-Path -LiteralPath $unknown.TransactionRoot)) `
+        'extra property is not normalized'
+
+    $legacyCount = New-TestFixture
+    $legacyCountRecord = Get-Content -Raw `
+        -LiteralPath $legacyCount.Layout.InstallRecord |
+        ConvertFrom-Json -DateKind String
+    $legacyCountRecord.synchronizedPatchFiles = 1
+    [void](Write-TestJson `
+            $legacyCount.Layout.InstallRecord $legacyCountRecord -Protected)
+    $legacyCountBefore = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $legacyCount.Layout.InstallRecord).Hash
+    $legacyCountRejected = $false
+    $legacyCountParameters = Get-InvokeParameters $legacyCount
+    try { & $migrationScript @legacyCountParameters | Out-Null } catch {
+        $legacyCountRejected = $_.Exception.Message -match
+            'exact known pre-bb4be91 baseline state'
+    }
+    Add-Result 'legacy synchronized patch-file count must match manifest' (
+        $legacyCountRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $legacyCount.Layout.InstallRecord).Hash -ceq
+                $legacyCountBefore -and
+        -not (Test-Path -LiteralPath $legacyCount.TransactionRoot)) `
+        'strict manifest count is bound before transaction creation'
+
+    $currentMutations = [ordered]@{
+        profile = { param($Record) $Record.clientPatchProfile = 'stable-qol' }
+        server = { param($Record) $Record.serverVersion = 'unbound-server' }
+        client = { param($Record) $Record.clientVersion = 'unbound-client' }
+        renderer = {
+            param($Record)
+            $Record.rendererWrapperSha256 = '3' * 64
+        }
+        policy = {
+            param($Record)
+            $Record.clientPatchPolicySha256 = '4' * 64
+        }
+        synchronizedCount = {
+            param($Record)
+            $Record.synchronizedPatchFiles = 1
+        }
+    }
+    $currentMutationPassed = $true
+    $currentMutationDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $currentMutations.GetEnumerator()) {
+        $fixture = New-TestFixture
+        $parameters = Get-InvokeParameters $fixture
+        & $migrationScript @parameters | Out-Null
+        $record = Get-Content -Raw -LiteralPath $fixture.Layout.InstallRecord |
+            ConvertFrom-Json -DateKind String
+        & $entry.Value $record
+        [void](Write-TestJson $fixture.Layout.InstallRecord $record -Protected)
+        $before = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $rejected = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $rejected = $_.Exception.Message -match
+                'exact baseline source bindings'
+        }
+        $passed = $rejected -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $before
+        $currentMutationPassed = $currentMutationPassed -and $passed
+        $currentMutationDetails.Add("$($entry.Key)=$passed")
+    }
+    Add-Result 'current record rejects every unbound provenance family' (
+        $currentMutationPassed) ($currentMutationDetails -join '; ')
+
+    $hardLink = New-TestFixture
+    $hardLinkPath = $hardLink.Layout.InstallRecord + '.link'
+    New-Item -ItemType HardLink -Path $hardLinkPath `
+        -Target $hardLink.Layout.InstallRecord | Out-Null
+    $hardLinkRejected = $false
+    $hardLinkParameters = Get-InvokeParameters $hardLink
+    try { & $migrationScript @hardLinkParameters | Out-Null } catch {
+        $hardLinkRejected = $true
+    }
+    Remove-Item -LiteralPath $hardLinkPath -Force
+    Add-Result 'hard-linked legacy target is rejected before transaction' (
+        $hardLinkRejected -and
+        -not (Test-Path -LiteralPath $hardLink.TransactionRoot)) `
+        'single-link handle policy fails closed'
+
+    $declaredBoundaries = @([regex]::Matches(
+            $source, "Invoke-MigrationBoundary\s+'(?<point>[^']+)'" ) |
+        ForEach-Object { $_.Groups['point'].Value } | Sort-Object -Unique)
+    $preReplaceBoundaries = @('transaction-after-root',
+        'transaction-after-original', 'transaction-after-stage',
+        'install-before-replace', 'install-after-final-validation')
+    $postReplaceBoundaries = @('install-after-replace')
+    $rollbackBoundaries = @('rollback-before-replace',
+        'rollback-after-replace')
+    $cleanupBoundaries = @('cleanup-before-remove')
+    $publishBoundaries = @('publish-before-move', 'publish-after-move')
+    $matrixBoundaries = @($preReplaceBoundaries + $postReplaceBoundaries +
+        $rollbackBoundaries + $cleanupBoundaries + $publishBoundaries |
+        Sort-Object -Unique)
+    $matrixPassed = @(Compare-Object $declaredBoundaries $matrixBoundaries).
+        Count -eq 0
+    $matrixDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($boundary in $preReplaceBoundaries) {
+        $fixture = New-TestFixture
+        $beforeHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $beforeIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Migration matrix original'
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestFaultPoints = @($boundary)
+        $observed = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $observed = $_.Exception.Message -match 'Injected'
+        }
+        $afterIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Migration matrix original'
+        $passed = $observed -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $beforeHash -and
+            $beforeIdentity.VolumeSerialNumber -eq
+                $afterIdentity.VolumeSerialNumber -and
+            $beforeIdentity.FileId -eq $afterIdentity.FileId -and
+            (Test-PSOBBProtectedAcl -Path $fixture.Layout.InstallRecord) -and
+            -not (Test-Path -LiteralPath $fixture.TransactionRoot)
+        $matrixPassed = $matrixPassed -and $passed
+        $matrixDetails.Add("$boundary=$passed")
+    }
+    foreach ($boundary in $postReplaceBoundaries) {
+        $fixture = New-TestFixture
+        $beforeHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $beforeIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Migration matrix original'
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestFaultPoints = @($boundary)
+        $observed = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $observed = $_.Exception.Message -match 'Injected'
+        }
+        $afterIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Migration matrix restored original'
+        $passed = $observed -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $beforeHash -and
+            $beforeIdentity.VolumeSerialNumber -eq
+                $afterIdentity.VolumeSerialNumber -and
+            $beforeIdentity.FileId -eq $afterIdentity.FileId -and
+            (Test-PSOBBProtectedAcl -Path $fixture.Layout.InstallRecord) -and
+            -not (Test-Path -LiteralPath $fixture.TransactionRoot)
+        $matrixPassed = $matrixPassed -and $passed
+        $matrixDetails.Add("$boundary=$passed")
+    }
+    foreach ($boundary in $rollbackBoundaries) {
+        $fixture = New-TestFixture
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestFaultPoints = @(
+            'install-after-replace', $boundary)
+        $observed = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $observed = $_.Exception.Message -match
+                'conditional recovery did not complete'
+        }
+        $retained = Test-Path -LiteralPath $fixture.TransactionRoot
+        $protected = $false
+        if ($retained) {
+            $tree = Get-PSOBBOrdinaryTreeSnapshot `
+                -Path $fixture.TransactionRoot -Root $fixture.Layout.Stable `
+                -Label 'retained migration matrix evidence' -RequireProtectedAcl
+            $protected = $tree.Items.Count -ge 5
+        }
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $idempotent = & $migrationScript @resumeParameters
+        $passed = $observed -and $retained -and $protected -and
+            [bool]$resumed.Changed -and
+            -not [bool]$idempotent.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $matrixPassed = $matrixPassed -and $passed
+        $matrixDetails.Add("$boundary=$passed")
+    }
+    foreach ($boundary in $cleanupBoundaries) {
+        $fixture = New-TestFixture
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestFaultPoints = @(
+            'transaction-after-root', $boundary)
+        $observed = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $observed = $_.Exception.Message -match
+                'conditional recovery did not complete'
+        }
+        $retained = Test-Path -LiteralPath $fixture.TransactionRoot
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $idempotent = & $migrationScript @resumeParameters
+        $passed = $observed -and $retained -and
+            [bool]$resumed.Changed -and -not [bool]$idempotent.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $matrixPassed = $matrixPassed -and $passed
+        $matrixDetails.Add("$boundary=$passed")
+    }
+    foreach ($boundary in $publishBoundaries) {
+        $fixture = New-TestFixture
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestFaultPoints = @($boundary)
+        $observed = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $observed = $_.Exception.Message -match 'Injected'
+        }
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $passed = $observed -and -not [bool]$resumed.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $matrixPassed = $matrixPassed -and $passed
+        $matrixDetails.Add("$boundary=$passed")
+    }
+    Add-Result 'all declared transaction boundaries satisfy recovery matrix' (
+        $matrixPassed) ($matrixDetails -join '; ')
+
+    $rootRace = New-TestFixture
+    $rootSaved = $rootRace.TransactionRoot + '.saved'
+    $rootHook = {
+        param($Context)
+        [System.IO.Directory]::Move($Context.Root, $rootSaved)
+        New-Item -ItemType Junction -Path $Context.Root -Target $rootSaved |
+            Out-Null
+    }
+    $rootParameters = Get-InvokeParameters $rootRace
+    $rootParameters.InternalTestHookPoint = 'transaction-after-root'
+    $rootParameters.InternalTestHook = $rootHook
+    $rootRejected = $false
+    try { & $migrationScript @rootParameters | Out-Null } catch {
+        $rootRejected = $true
+    }
+    $rootEvidence = Test-Path -LiteralPath $rootRace.TransactionRoot
+    if ($rootEvidence) {
+        Remove-Item -LiteralPath $rootRace.TransactionRoot -Force
+    }
+    if (Test-Path -LiteralPath $rootSaved) {
+        Remove-Item -LiteralPath $rootSaved -Recurse -Force
+    }
+    Add-Result 'transaction-root reparse substitution fails closed' (
+        $rootRejected -and $rootEvidence -and
+        [string](Get-Item -Force -LiteralPath $rootRace.Layout.InstallRecord).
+            Attributes -notmatch 'ReparsePoint') `
+        'native root creation is revalidated before any transaction artifact'
+
+    $artifactRacePassed = $true
+    $artifactRaceDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($artifactName in @('original-installation.json',
+            'candidate-installation.json', 'candidate-installation.stage',
+            'journal.json')) {
+        $fixture = New-TestFixture
+        $linkPath = Join-Path $fixture.Layout.Stable (
+            '.migration-artifact-link-' + [Guid]::NewGuid().ToString('N'))
+        $hook = {
+            param($Context)
+            New-Item -ItemType HardLink -Path $linkPath `
+                -Target (Join-Path $Context.TransactionRoot $artifactName) |
+                Out-Null
+        }
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestHookPoint = 'install-after-final-validation'
+        $parameters.InternalTestHook = $hook
+        $rejected = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $rejected = $true
+        }
+        $retained = Test-Path -LiteralPath $fixture.TransactionRoot
+        if (Test-Path -LiteralPath $linkPath) {
+            Remove-Item -LiteralPath $linkPath -Force
+        }
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $idempotent = & $migrationScript @resumeParameters
+        $expectedChanged = $artifactName -ceq 'candidate-installation.stage'
+        $passed = $rejected -and $retained -and
+            ([bool]$resumed.Changed -eq $expectedChanged) -and
+            -not [bool]$idempotent.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $artifactRacePassed = $artifactRacePassed -and $passed
+        $artifactRaceDetails.Add(
+            "$artifactName=$passed/rejected=$rejected/retained=$retained/" +
+            "changed=$([bool]$resumed.Changed)/expected=$expectedChanged")
+    }
+    Add-Result 'all transaction artifacts reject hard-link substitution' (
+        $artifactRacePassed) ($artifactRaceDetails -join '; ')
+
+    $artifactReparse = New-TestFixture
+    $artifactReparsePath = Join-Path $artifactReparse.TransactionRoot `
+        'candidate-installation.json'
+    $artifactReparseSaved = Join-Path $artifactReparse.Layout.Stable (
+        '.migration-artifact-saved-' + [Guid]::NewGuid().ToString('N'))
+    $artifactReparseHook = {
+        param($Context)
+        [System.IO.File]::Move(
+            $artifactReparsePath, $artifactReparseSaved, $false)
+        [void][System.IO.File]::CreateSymbolicLink(
+            $artifactReparsePath, $artifactReparseSaved)
+    }
+    $artifactReparseParameters = Get-InvokeParameters $artifactReparse
+    $artifactReparseParameters.InternalTestHookPoint =
+        'install-after-final-validation'
+    $artifactReparseParameters.InternalTestHook = $artifactReparseHook
+    $artifactReparseRejected = $false
+    try { & $migrationScript @artifactReparseParameters | Out-Null } catch {
+        $artifactReparseRejected = $true
+    }
+    $artifactReparseRetained =
+        Test-Path -LiteralPath $artifactReparse.TransactionRoot
+    $artifactReparseObserved = $false
+    if (Test-Path -LiteralPath $artifactReparsePath) {
+        $artifactReparseObserved = [bool]((Get-Item -Force `
+                    -LiteralPath $artifactReparsePath).Attributes -band
+                [System.IO.FileAttributes]::ReparsePoint)
+        [System.IO.File]::Delete($artifactReparsePath)
+    }
+    if (Test-Path -LiteralPath $artifactReparseSaved) {
+        [System.IO.File]::Move(
+            $artifactReparseSaved, $artifactReparsePath, $false)
+    }
+    $artifactReparseResumeParameters = Get-InvokeParameters $artifactReparse
+    $artifactReparseResumed =
+        & $migrationScript @artifactReparseResumeParameters
+    $artifactReparseIdempotent =
+        & $migrationScript @artifactReparseResumeParameters
+    Add-Result 'transaction-artifact reparse substitution fails closed' (
+        $artifactReparseRejected -and $artifactReparseRetained -and
+        $artifactReparseObserved -and
+        -not [bool]$artifactReparseResumed.Changed -and
+        -not [bool]$artifactReparseIdempotent.Changed -and
+        (Test-FinalMigrationState $artifactReparse)) `
+        'clean rerun publishes only the exact identity-bound candidate'
+
+    $markerRacePassed = $true
+    $markerRaceDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($markerCase in @('missing', 'extra', 'transaction', 'purpose',
+            'root', 'replaced', 'hard-linked')) {
+        $fixture = New-TestFixture
+        $markerPath = Join-Path $fixture.TransactionRoot `
+            '.psobb-combat-canary-transaction.json'
+        $savedMarker = Join-Path $fixture.Layout.Stable (
+            '.migration-marker-saved-' + [Guid]::NewGuid().ToString('N'))
+        $markerLink = Join-Path $fixture.Layout.Stable (
+            '.migration-marker-link-' + [Guid]::NewGuid().ToString('N'))
+        $targetBefore = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Marker-race target'
+        $targetHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $hook = {
+            param($Context)
+            if ($markerCase -ceq 'hard-linked') {
+                New-Item -ItemType HardLink -Path $markerLink `
+                    -Target $markerPath | Out-Null
+                return
+            }
+            [System.IO.File]::Move($markerPath, $savedMarker, $false)
+            if ($markerCase -ceq 'missing') { return }
+            if ($markerCase -ceq 'replaced') {
+                [System.IO.File]::Copy($savedMarker, $markerPath, $false)
+                Set-PSOBBProtectedAcl -Path $markerPath
+                return
+            }
+            $value = Get-Content -Raw -LiteralPath $savedMarker |
+                ConvertFrom-Json -DateKind String
+            switch ($markerCase) {
+                'extra' {
+                    Add-Member -InputObject $value -NotePropertyName extra `
+                        -NotePropertyValue 'rejected'
+                }
+                'transaction' {
+                    $value.transactionId = if (
+                        [string]$value.transactionId -clike '0*') {
+                        '1' + ([string]$value.transactionId).Substring(1)
+                    } else {
+                        '0' + ([string]$value.transactionId).Substring(1)
+                    }
+                }
+                'purpose' { $value.purpose = 'invalid-migration-purpose' }
+                'root' { $value.rootFileId = '0000000000000000' }
+            }
+            [void](Write-TestJson $markerPath $value -Protected)
+        }
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestHookPoint = 'install-after-final-validation'
+        $parameters.InternalTestHook = $hook
+        $rejected = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $rejected = $true
+        }
+        $retained = Test-Path -LiteralPath $fixture.TransactionRoot
+        $targetAfter = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $fixture.Layout.InstallRecord -Root $fixture.Layout.Root `
+            -Directory $false -RoleLabel 'Marker-race unchanged target'
+        $unchanged = $targetBefore.VolumeSerialNumber -eq
+                $targetAfter.VolumeSerialNumber -and
+            $targetBefore.FileId -eq $targetAfter.FileId -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $targetHash
+        if (Test-Path -LiteralPath $markerLink) {
+            Remove-Item -LiteralPath $markerLink -Force
+        }
+        if ($markerCase -cne 'hard-linked') {
+            if (Test-Path -LiteralPath $markerPath) {
+                [System.IO.File]::Delete($markerPath)
+            }
+            [System.IO.File]::Move($savedMarker, $markerPath, $false)
+        }
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $idempotent = & $migrationScript @resumeParameters
+        $passed = $rejected -and $retained -and $unchanged -and
+            [bool]$resumed.Changed -and -not [bool]$idempotent.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $markerRacePassed = $markerRacePassed -and $passed
+        $markerRaceDetails.Add("$markerCase=$passed")
+    }
+    Add-Result 'transaction marker tampering fails closed and resumes exactly' (
+        $markerRacePassed) ($markerRaceDetails -join '; ')
+
+    $publicationRacePassed = $true
+    $publicationRaceDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($publicationCase in @('journal', 'original', 'displaced',
+            'backups')) {
+        $fixture = New-TestFixture
+        $savedPath = Join-Path $fixture.Layout.Stable (
+            '.migration-publication-saved-' +
+            [Guid]::NewGuid().ToString('N'))
+        $backupSaved = $fixture.Layout.Backups + '.saved'
+        $hook = {
+            param($Context)
+            if ($publicationCase -ceq 'backups') {
+                [System.IO.Directory]::Move($Context.BackupPath, $backupSaved)
+                New-Item -ItemType Junction -Path $Context.BackupPath `
+                    -Target $backupSaved | Out-Null
+                return
+            }
+            $artifactName = switch ($publicationCase) {
+                'journal' { 'journal.json' }
+                'original' { 'original-installation.json' }
+                'displaced' { 'displaced-installation.json' }
+            }
+            $artifactPath = Join-Path $Context.TransactionRoot $artifactName
+            [System.IO.File]::Move($artifactPath, $savedPath, $false)
+            [System.IO.File]::Copy($savedPath, $artifactPath, $false)
+            Set-PSOBBProtectedAcl -Path $artifactPath
+        }
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestHookPoint = 'publish-before-move'
+        $parameters.InternalTestHook = $hook
+        $rejected = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $rejected = $true
+        }
+        $retained = Test-Path -LiteralPath $fixture.TransactionRoot
+        $published = @(Get-ChildItem -LiteralPath $fixture.Layout.Backups `
+                -Directory -Filter 'installation-record-migration-*' `
+                -ErrorAction SilentlyContinue).Count -eq 1
+        $boundaryDefended = $true
+        if ($publicationCase -ceq 'backups') {
+            $boundaryStable =
+                (Test-Path -LiteralPath $fixture.Layout.Backups) -and
+                -not (Test-Path -LiteralPath $backupSaved) -and
+                -not [bool]((Get-Item -Force `
+                        -LiteralPath $fixture.Layout.Backups).Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint)
+            $boundarySubstitutionObserved =
+                (Test-Path -LiteralPath $backupSaved) -or
+                ((Test-Path -LiteralPath $fixture.Layout.Backups) -and
+                 [bool]((Get-Item -Force `
+                            -LiteralPath $fixture.Layout.Backups).Attributes -band
+                        [System.IO.FileAttributes]::ReparsePoint))
+            $boundaryDefended = $boundaryStable -or
+                ($boundarySubstitutionObserved -and $retained -and
+                    -not $published)
+            if (Test-Path -LiteralPath $fixture.Layout.Backups) {
+                $backupItem = Get-Item -Force `
+                    -LiteralPath $fixture.Layout.Backups
+                if ($backupItem.Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) {
+                    Remove-Item -LiteralPath $fixture.Layout.Backups -Force
+                }
+            }
+            if (Test-Path -LiteralPath $backupSaved) {
+                [System.IO.Directory]::Move(
+                    $backupSaved, $fixture.Layout.Backups)
+            }
+        } elseif (Test-Path -LiteralPath $savedPath) {
+            $artifactName = switch ($publicationCase) {
+                'journal' { 'journal.json' }
+                'original' { 'original-installation.json' }
+                'displaced' { 'displaced-installation.json' }
+            }
+            $artifactPath = Join-Path $fixture.TransactionRoot $artifactName
+            if (Test-Path -LiteralPath $artifactPath) {
+                [System.IO.File]::Delete($artifactPath)
+            }
+            [System.IO.File]::Move($savedPath, $artifactPath, $false)
+        }
+        $resumeParameters = Get-InvokeParameters $fixture
+        $resumed = & $migrationScript @resumeParameters
+        $idempotent = & $migrationScript @resumeParameters
+        $passed = $rejected -and ($retained -or $published) -and
+            $boundaryDefended -and -not [bool]$resumed.Changed -and
+            -not [bool]$idempotent.Changed -and
+            (Test-FinalMigrationState $fixture)
+        $publicationRacePassed = $publicationRacePassed -and $passed
+        $publicationRaceDetails.Add(
+            "$publicationCase=$passed/retained=$retained/" +
+            "published=$published/defended=$boundaryDefended")
+    }
+    Add-Result 'final publication seal and backup lease reject substitutions' (
+        $publicationRacePassed) ($publicationRaceDetails -join '; ')
+
+    $postMoveJournal = New-TestFixture
+    $postMoveJournalSaved = Join-Path $postMoveJournal.Layout.Stable (
+        '.migration-post-move-journal-' + [Guid]::NewGuid().ToString('N'))
+    $postMoveJournalHook = {
+        param($Context)
+        $journalPath = Join-Path $Context.DestinationPath 'journal.json'
+        [System.IO.File]::Move(
+            $journalPath, $postMoveJournalSaved, $false)
+        [System.IO.File]::Copy(
+            $postMoveJournalSaved, $journalPath, $false)
+        Set-PSOBBProtectedAcl -Path $journalPath
+    }
+    $postMoveJournalParameters = Get-InvokeParameters $postMoveJournal
+    $postMoveJournalParameters.InternalTestHookPoint = 'publish-after-move'
+    $postMoveJournalParameters.InternalTestHook = $postMoveJournalHook
+    $postMoveJournalRejected = $false
+    try { & $migrationScript @postMoveJournalParameters | Out-Null } catch {
+        $postMoveJournalRejected = $_.Exception.Message -match
+            'conditional recovery did not complete'
+    }
+    $postMovePublished = @(Get-ChildItem `
+        -LiteralPath $postMoveJournal.Layout.Backups -Directory `
+        -Filter 'installation-record-migration-*')
+    $postMoveJournalRetained = $postMovePublished.Count -eq 1 -and
+        (Test-Path -LiteralPath $postMoveJournalSaved) -and
+        -not (Test-Path -LiteralPath $postMoveJournal.TransactionRoot)
+    if ($postMovePublished.Count -eq 1 -and
+        (Test-Path -LiteralPath $postMoveJournalSaved)) {
+        $journalPath = Join-Path $postMovePublished[0].FullName 'journal.json'
+        [System.IO.File]::Delete($journalPath)
+        [System.IO.File]::Move(
+            $postMoveJournalSaved, $journalPath, $false)
+    }
+    $postMoveResumeParameters = Get-InvokeParameters $postMoveJournal
+    $postMoveResumed = & $migrationScript @postMoveResumeParameters
+    $postMoveIdempotent = & $migrationScript @postMoveResumeParameters
+    Add-Result 'post-move journal replacement remains fail-closed' (
+        $postMoveJournalRejected -and $postMoveJournalRetained -and
+        -not [bool]$postMoveResumed.Changed -and
+        -not [bool]$postMoveIdempotent.Changed -and
+        (Test-FinalMigrationState $postMoveJournal)) `
+        'outer recovery requires the original sealed journal identity'
+
+    $bindingRacePassed = $true
+    $bindingRaceDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($bindingName in @('marker', 'source', 'policy', 'config',
+            'renderer')) {
+        $fixture = New-TestFixture
+        $bindingPath = switch ($bindingName) {
+            'marker' { $fixture.Layout.RuntimeMarker }
+            'source' { $fixture.SourceLockPath }
+            'policy' { $fixture.PolicyPath }
+            'config' { Join-Path $fixture.Layout.Server 'system\config.json' }
+            'renderer' { $fixture.RendererConfig.Path }
+        }
+        $savedPath = $bindingPath + '.swap-attempt'
+        $hook = {
+            param($Context)
+            [System.IO.File]::Move($bindingPath, $savedPath, $false)
+            [System.IO.File]::Copy($savedPath, $bindingPath, $false)
+            if ($bindingName -cin @('marker', 'source', 'policy')) {
+                Set-PSOBBProtectedAcl -Path $bindingPath
+            }
+        }
+        $before = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $parameters = Get-InvokeParameters $fixture
+        $parameters.InternalTestHookPoint = 'install-after-final-validation'
+        $parameters.InternalTestHook = $hook
+        $rejected = $false
+        try { & $migrationScript @parameters | Out-Null } catch {
+            $rejected = $true
+        }
+        $passed = $rejected -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $before -and
+            (Test-PSOBBProtectedAcl -Path $fixture.Layout.InstallRecord) -and
+            -not (Test-Path -LiteralPath $fixture.TransactionRoot)
+        $bindingRacePassed = $bindingRacePassed -and $passed
+        $bindingRaceDetails.Add("$bindingName=$passed")
+    }
+    Add-Result 'marker, source, policy, config, and renderer swaps fail closed' (
+        $bindingRacePassed) ($bindingRaceDetails -join '; ')
+
+    $race = New-TestFixture
+    $raceSaved = $race.Layout.InstallRecord + '.saved'
+    $raceHook = {
+        param($Context)
+        [System.IO.File]::Move($Context.TargetPath, $raceSaved, $false)
+        [System.IO.File]::Copy($raceSaved, $Context.TargetPath, $false)
+        Set-PSOBBProtectedAcl -Path $Context.TargetPath
+    }
+    $raceParameters = Get-InvokeParameters $race
+    $raceParameters.InternalTestHookPoint = 'install-after-final-validation'
+    $raceParameters.InternalTestHook = $raceHook
+    $raceRejected = $false
+    try { & $migrationScript @raceParameters | Out-Null } catch {
+        $raceRejected = $_.Exception.Message -match
+            'conditional recovery did not complete'
+    }
+    Add-Result 'same-byte target substitution retains evidence' (
+        $raceRejected -and
+        (Test-Path -LiteralPath $race.TransactionRoot) -and
+        (Test-Path -LiteralPath $raceSaved)) `
+        'digest equality cannot substitute for the sealed target identity'
+
+    $linkRace = New-TestFixture
+    $linkRacePath = $linkRace.Layout.InstallRecord + '.race-link'
+    $linkHook = {
+        param($Context)
+        New-Item -ItemType HardLink -Path $linkRacePath `
+            -Target $Context.TargetPath | Out-Null
+    }
+    $linkParameters = Get-InvokeParameters $linkRace
+    $linkParameters.InternalTestHookPoint = 'install-after-final-validation'
+    $linkParameters.InternalTestHook = $linkHook
+    $linkRejected = $false
+    try { & $migrationScript @linkParameters | Out-Null } catch {
+        $linkRejected = $true
+    }
+    $linkEvidence = Test-Path -LiteralPath $linkRace.TransactionRoot
+    Remove-Item -LiteralPath $linkRacePath -Force
+    $linkResumeParameters = Get-InvokeParameters $linkRace
+    $linkResumed = & $migrationScript @linkResumeParameters
+    $linkIdempotent = & $migrationScript @linkResumeParameters
+    Add-Result 'hard-link race retains evidence and clean rerun converges' (
+        $linkRejected -and $linkEvidence -and [bool]$linkResumed.Changed -and
+        -not [bool]$linkIdempotent.Changed -and
+        (Test-FinalMigrationState $linkRace)) `
+        'second handle-bound preflight and retained recovery both fail closed'
+} finally {
+    foreach ($root in $fixtureRoots) {
+        $fullRoot = [System.IO.Path]::GetFullPath($root)
+        $temporaryRoot = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        if ($fullRoot.StartsWith(
+                $temporaryRoot,
+                [System.StringComparison]::OrdinalIgnoreCase) -and
+            [System.IO.Path]::GetFileName($fullRoot) -cmatch
+                '^PSOBB-StableInstallationRecordMigrationTests-[a-f0-9]{32}$') {
+            Remove-Item -LiteralPath $fullRoot -Recurse -Force `
+                -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+$results | Format-Table -AutoSize
+$failed = @($results | Where-Object { -not $_.Passed })
+if ($failed.Count -gt 0) {
+    $failed | Format-List Name, Detail
+    throw "$($failed.Count) Stable installation-record migration test(s) failed"
+}

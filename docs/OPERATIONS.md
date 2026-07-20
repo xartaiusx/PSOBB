@@ -359,6 +359,40 @@ hotbar. Source-canary, protocol, and save-migration patches are classified
 separately in `config/client-patch-profiles.json` and cannot enter either stable
 profile.
 
+### One-time Stable installation-record repair
+
+An installation created before the baseline policy update can have the exact
+schema-v2 property set that predates renderer provenance while its client and
+server files are already current. Do not rerun the broad initializer to repair
+that metadata. With both server environments and all clients stopped, preview
+the narrow transaction first:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -WhatIf
+```
+
+If the preview recognizes the exact legacy baseline record, apply it with:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Confirm:$false
+```
+
+The repair adds only `rendererVersion`, `rendererArchiveSha256`,
+`rendererWrapperSha256`, and `rendererConfigurationSha256` from the current
+source lock, and changes only `clientPatchPolicySha256` to the current empty
+`baseline` policy. It requires the exact known legacy policy hash, current
+runtime marker and source bindings, matching renderer/server/client files,
+an exact strict patch-data manifest and synchronized-file count, empty patch
+arrays, protected single-link metadata, and a globally stopped runtime. The
+transaction journal binds its ownership marker and every rollback identity. On
+success, the protected original, candidate, displaced original, completion
+record, and immutable journal move together beneath the protected Stable
+backups boundary. An ambiguous identity, publication, or interrupted rollback
+retains or revalidates the exact transaction evidence. Keep the runtime stopped
+and rerun the same command to resume exact conditional recovery. An already
+repaired record and its sole completed evidence bundle are revalidated without
+another write.
+
 Backups are schema-v3 exact-file snapshots. They bind `system/config.json` and
 `stable/installation.json` to one verified client-patch profile and policy hash.
 Restore rejects older incomplete snapshots and any config/metadata mismatch,
