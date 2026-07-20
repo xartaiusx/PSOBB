@@ -18,6 +18,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.CombatCanary.Common.ps1')
+
 $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $script:CanonicalRuntimeRoot = [System.IO.Path]::TrimEndingDirectorySeparator(
     [System.IO.Path]::GetFullPath((Join-Path $script:RepositoryRoot 'PSOBB-Runtime')))
@@ -1915,12 +1918,184 @@ function Exit-CombatCanaryBuildBoundary {
     }
 }
 
+function Get-CombatCanaryPublicationDirectoryIdentity {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Label
+    )
+    $safeRoot = Assert-ReparseFreeDirectory -Path $Root -Label "$Label root"
+    $safePath = Assert-ReparseFreeDirectory -Path $Path -Label $Label
+    $handle = $null
+    try {
+        $handle = Open-PSOBBCombatCanaryNativePathHandle `
+            -Path $safePath -Directory $true
+        Assert-PSOBBCombatCanaryNativeHandlePath `
+            -Handle $handle -ExpectedPath $safePath -Root $safeRoot `
+            -Directory $true -RoleLabel $Label
+    } finally {
+        if ($null -ne $handle) { $handle.Dispose() }
+    }
+}
+
+function Assert-CombatCanaryPublicationDirectoryIdentity {
+    param(
+        [Parameter(Mandatory)]$Expected,
+        [Parameter(Mandatory)]$Actual,
+        [Parameter(Mandatory)][string]$Label
+    )
+    if ([uint32]$Actual.VolumeSerialNumber -ne
+            [uint32]$Expected.VolumeSerialNumber -or
+        [uint64]$Actual.FileId -ne [uint64]$Expected.FileId -or
+        [uint32]$Actual.Attributes -ne [uint32]$Expected.Attributes) {
+        throw "The $Label directory identity changed"
+    }
+}
+
+function Assert-CombatCanaryOrdinaryPublicationTree {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Label
+    )
+    $safeRoot = Assert-ReparseFreeDirectory -Path $Root -Label "$Label root"
+    $safeTree = Assert-ReparseFreeDirectory -Path $Path -Label $Label
+    $rootIdentity = Get-CombatCanaryPublicationDirectoryIdentity `
+        -Path $safeTree -Root $safeRoot -Label $Label
+    $pending = [System.Collections.Generic.Queue[string]]::new()
+    $pending.Enqueue($safeTree)
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    [void]$seen.Add(('{0:x8}:{1:x16}' -f
+            [uint32]$rootIdentity.VolumeSerialNumber,
+            [uint64]$rootIdentity.FileId))
+    $entries = 0
+    $aggregate = [uint64]0
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Dequeue()
+        foreach ($child in @(Get-ChildItem -LiteralPath $directory -Force `
+                    -ErrorAction Stop)) {
+            $entries++
+            if ($entries -gt 4096) {
+                throw "The $Label inventory exceeds its count bound"
+            }
+            $childPath = Assert-PathWithinRoot `
+                -Path $child.FullName -Root $safeTree
+            $isDirectory = [bool]$child.PSIsContainer
+            $handle = $null
+            try {
+                $handle = Open-PSOBBCombatCanaryNativePathHandle `
+                    -Path $childPath -Directory $isDirectory
+                $identity = Assert-PSOBBCombatCanaryNativeHandlePath `
+                    -Handle $handle -ExpectedPath $childPath -Root $safeTree `
+                    -Directory $isDirectory -RoleLabel $Label `
+                    -RequireSingleLink:(-not $isDirectory)
+                $key = '{0:x8}:{1:x16}' -f
+                    [uint32]$identity.VolumeSerialNumber,
+                    [uint64]$identity.FileId
+                if (-not $seen.Add($key)) {
+                    throw "The $Label inventory repeats an identity"
+                }
+                if ($isDirectory) {
+                    $pending.Enqueue($childPath)
+                } else {
+                    if ([uint64]::MaxValue - $aggregate -lt
+                        [uint64]$identity.Length) {
+                        throw "The $Label inventory aggregate overflowed"
+                    }
+                    $aggregate += [uint64]$identity.Length
+                    if ($aggregate -gt 256MB) {
+                        throw "The $Label inventory exceeds its byte bound"
+                    }
+                }
+            } finally {
+                if ($null -ne $handle) { $handle.Dispose() }
+            }
+        }
+    }
+    [pscustomobject]@{
+        Identity = $rootIdentity
+        Entries = $entries
+        TotalBytes = $aggregate
+    }
+}
+
+function Assert-CombatCanaryPublicationStagingState {
+    param(
+        [Parameter(Mandatory)][string]$StagingRoot,
+        [Parameter(Mandatory)][string]$StageRelease
+    )
+    $staging = Assert-ReparseFreeDirectory -Path $StagingRoot `
+        -Label 'publication staging root'
+    $stage = Assert-ReparseFreeDirectory -Path $StageRelease `
+        -Label 'staged publication release'
+    if (-not [string]::Equals(
+            [System.IO.Path]::GetDirectoryName($stage),
+            $staging,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The staged release is not an immediate child of the publication staging root'
+    }
+    $children = @(Get-ChildItem -LiteralPath $staging -Force -ErrorAction Stop)
+    if ($children.Count -ne 1 -or -not $children[0].PSIsContainer -or
+        ($children[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace([string]$children[0].LinkType) -or
+        -not [string]::Equals(
+            [System.IO.Path]::GetFullPath($children[0].FullName),
+            $stage,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The publication staging root must contain exactly the staged release'
+    }
+}
+
+function Remove-CombatCanaryEmptyPublicationStagingRoot {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ParentRoot,
+        [Parameter(Mandatory)]$ExpectedIdentity
+    )
+    $safeParent = Assert-ReparseFreeDirectory -Path $ParentRoot `
+        -Label 'publication staging parent'
+    $safePath = Assert-ReparseFreeDirectory -Path $Path `
+        -Label 'publication staging root'
+    if (-not [string]::Equals(
+            [System.IO.Path]::GetDirectoryName($safePath),
+            $safeParent,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The publication staging root is not an immediate child of its expected parent'
+    }
+    if (@(Get-ChildItem -LiteralPath $safePath -Force -ErrorAction Stop).Count -ne 0) {
+        throw 'The publication staging root is not empty after publication'
+    }
+
+    $handle = $null
+    try {
+        $handle = Open-PSOBBCombatCanaryNativePathHandle `
+            -Path $safePath -Directory $true -Delete
+        $actualIdentity = Assert-PSOBBCombatCanaryNativeHandlePath `
+            -Handle $handle -ExpectedPath $safePath -Root $safeParent `
+            -Directory $true -RoleLabel 'publication staging root'
+        Assert-CombatCanaryPublicationDirectoryIdentity `
+            -Expected $ExpectedIdentity -Actual $actualIdentity `
+            -Label 'publication staging root'
+        if (@(Get-ChildItem -LiteralPath $safePath -Force -ErrorAction Stop).Count -ne 0) {
+            throw 'The publication staging root changed before removal'
+        }
+        [PSOBBCombatCanary.NativeFiles]::MarkDelete($handle)
+    } finally {
+        if ($null -ne $handle) { $handle.Dispose() }
+    }
+    if (Test-Path -LiteralPath $safePath) {
+        throw 'The empty publication staging root removal was incomplete'
+    }
+}
+
 function Publish-CombatCanaryRelease {
     param(
         [Parameter(Mandatory)][string]$StageRelease,
         [Parameter(Mandatory)][string]$ReleaseRoot,
         [Parameter(Mandatory)][string]$StagingRoot,
-        [Parameter(Mandatory)][scriptblock]$VerifyAction
+        [Parameter(Mandatory)][scriptblock]$VerifyAction,
+        [Parameter(DontShow = $true)][scriptblock]$InternalTestAfterRetire
     )
     if ($script:BuildBoundaryDepth -ne 1) {
         throw 'Publication requires the exclusive combat-canary build and lifecycle boundary'
@@ -1931,35 +2106,97 @@ function Publish-CombatCanaryRelease {
         -Label 'staged publication release'
     $release = Assert-ReparseFreePathHierarchy -Path $ReleaseRoot `
         -Label 'publication release root'
-    $stagingPrefix = $staging.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
-        [System.IO.Path]::DirectorySeparatorChar
-    if (-not $stage.StartsWith(
-            $stagingPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The staged release is outside the publication staging root'
-    }
     $staging = New-ReparseFreeDirectory -Path $staging `
         -Label 'publication staging root'
+    $stagingParent = New-ReparseFreeDirectory -Path (Split-Path -Parent $staging) `
+        -Label 'publication staging parent'
+    $stagingIdentity = Get-CombatCanaryPublicationDirectoryIdentity `
+        -Path $staging -Root $stagingParent -Label 'publication staging root'
+    Assert-CombatCanaryPublicationStagingState `
+        -StagingRoot $staging -StageRelease $stage
+    $stageIdentity = Get-CombatCanaryPublicationDirectoryIdentity `
+        -Path $stage -Root $staging -Label 'staged publication release'
     New-ReparseFreeDirectory -Path (Split-Path -Parent $release) `
         -Label 'publication release parent' | Out-Null
 
     $hadPreviousRelease = Test-Path -LiteralPath $release
     $retired = $null
+    $retiredTree = $null
+    $previousIdentity = $null
     if ($hadPreviousRelease) {
-        Assert-ReparseFreePathHierarchy -Path $release `
-            -Label 'existing publication release' | Out-Null
+        $previousTree = Assert-CombatCanaryOrdinaryPublicationTree `
+            -Path $release -Root $stagingParent `
+            -Label 'existing publication release'
+        $previousIdentity = $previousTree.Identity
         $retired = Join-Path $staging (
             'previous-release-' + [Guid]::NewGuid().ToString('N'))
         Assert-ReparseFreePathHierarchy -Path $retired `
             -Label 'retired publication release' | Out-Null
-        Move-Item -LiteralPath $release -Destination $retired
-        Assert-ReparseFreePathHierarchy -Path $retired `
-            -Label 'retired publication release' | Out-Null
+        if (Test-Path -LiteralPath $retired) {
+            throw 'The retired publication release path already exists'
+        }
+        try {
+            Move-Item -LiteralPath $release -Destination $retired
+            if ($null -ne $InternalTestAfterRetire) {
+                & $InternalTestAfterRetire
+            }
+            $retiredTree = Assert-CombatCanaryOrdinaryPublicationTree `
+                -Path $retired -Root $staging -Label 'retired publication release'
+            Assert-CombatCanaryPublicationDirectoryIdentity `
+                -Expected $previousIdentity -Actual $retiredTree.Identity `
+                -Label 'retired publication release'
+            if ([int]$retiredTree.Entries -ne [int]$previousTree.Entries -or
+                [uint64]$retiredTree.TotalBytes -ne [uint64]$previousTree.TotalBytes) {
+                throw 'The retired publication release inventory changed during its move'
+            }
+        } catch {
+            $retirementFailure = $_
+            try {
+                if (Test-Path -LiteralPath $release) {
+                    if (Test-Path -LiteralPath $retired) {
+                        throw 'Both publication and retired release paths exist during compensation'
+                    }
+                    $restoredTree = Assert-CombatCanaryOrdinaryPublicationTree `
+                        -Path $release -Root $stagingParent `
+                        -Label 'unchanged retirement compensation release'
+                } else {
+                    $compensationTree = Assert-CombatCanaryOrdinaryPublicationTree `
+                        -Path $retired -Root $staging `
+                        -Label 'retirement compensation release'
+                    Assert-CombatCanaryPublicationDirectoryIdentity `
+                        -Expected $previousIdentity -Actual $compensationTree.Identity `
+                        -Label 'retirement compensation release'
+                    if ([int]$compensationTree.Entries -ne [int]$previousTree.Entries -or
+                        [uint64]$compensationTree.TotalBytes -ne
+                            [uint64]$previousTree.TotalBytes) {
+                        throw 'The retirement compensation inventory is not exact'
+                    }
+                    Move-Item -LiteralPath $retired -Destination $release
+                    $restoredTree = Assert-CombatCanaryOrdinaryPublicationTree `
+                        -Path $release -Root $stagingParent `
+                        -Label 'retirement compensation restored release'
+                }
+                Assert-CombatCanaryPublicationDirectoryIdentity `
+                    -Expected $previousIdentity -Actual $restoredTree.Identity `
+                    -Label 'retirement compensation restored release'
+                if ([int]$restoredTree.Entries -ne [int]$previousTree.Entries -or
+                    [uint64]$restoredTree.TotalBytes -ne [uint64]$previousTree.TotalBytes) {
+                    throw 'The restored retirement compensation inventory is not exact'
+                }
+            } catch {
+                throw 'Retired publication validation failed and safe compensation could not be proven; evidence was retained'
+            }
+            throw $retirementFailure
+        }
     }
 
     try {
         Move-Item -LiteralPath $stage -Destination $release
-        Assert-ReparseFreeDirectory -Path $release `
-            -Label 'published release' | Out-Null
+        $publishedIdentity = Get-CombatCanaryPublicationDirectoryIdentity `
+            -Path $release -Root $stagingParent -Label 'published release'
+        Assert-CombatCanaryPublicationDirectoryIdentity `
+            -Expected $stageIdentity -Actual $publishedIdentity `
+            -Label 'published release'
         & $VerifyAction
     } catch {
         if (Test-Path -LiteralPath $release) {
@@ -1971,11 +2208,26 @@ function Publish-CombatCanaryRelease {
         }
         if ($hadPreviousRelease) {
             Move-Item -LiteralPath $retired -Destination $release
-            Assert-ReparseFreePathHierarchy -Path $release `
-                -Label 'restored publication release' | Out-Null
+            $restoredIdentity = Get-CombatCanaryPublicationDirectoryIdentity `
+                -Path $release -Root $stagingParent `
+                -Label 'restored publication release'
+            Assert-CombatCanaryPublicationDirectoryIdentity `
+                -Expected $previousIdentity -Actual $restoredIdentity `
+                -Label 'restored publication release'
         }
         throw
     }
+
+    if ($hadPreviousRelease) {
+        Remove-PSOBBCombatCanaryOwnedTree `
+            -Path $retired -Root $staging `
+            -ExpectedVolumeSerialNumber $previousIdentity.VolumeSerialNumber `
+            -ExpectedFileId $previousIdentity.FileId `
+            -RoleLabel 'retired publication release'
+    }
+    Remove-CombatCanaryEmptyPublicationStagingRoot `
+        -Path $staging -ParentRoot $stagingParent `
+        -ExpectedIdentity $stagingIdentity
 }
 
 function Invoke-CombatCanaryBuild {

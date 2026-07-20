@@ -1106,45 +1106,240 @@ try {
     $absentPublishPassed = (Test-Path -LiteralPath (
             Join-Path $bootstrapRelease 'new.txt') -PathType Leaf) -and
         -not (Test-Path -LiteralPath $bootstrapStage) -and
-        @(Get-ChildItem -LiteralPath $publicationStaging -Directory -Filter 'previous-release-*').Count -eq 0
+        -not (Test-Path -LiteralPath $publicationStaging)
 
-    $failedBootstrapStage = Join-Path $publicationStaging 'failed-bootstrap-stage\release'
-    $failedBootstrapRelease = Join-Path $publicationRoot 'failed-server-base\release'
+    $failedPublicationRoot = Join-Path $temporaryRoot 'publication-failed-bootstrap'
+    $failedPublicationStaging = Join-Path $failedPublicationRoot '.staging'
+    $failedBootstrapStage = Join-Path $failedPublicationStaging 'failed-bootstrap-stage'
+    $failedBootstrapRelease = Join-Path $failedPublicationRoot 'server-base\release'
     New-Item -ItemType Directory -Path $failedBootstrapStage -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $failedBootstrapStage 'new.txt'), 'new')
     $absentFailureRejected = Test-Rejected -Pattern 'fixture verification failure' {
         Publish-CombatCanaryRelease -StageRelease $failedBootstrapStage `
-            -ReleaseRoot $failedBootstrapRelease -StagingRoot $publicationStaging `
+            -ReleaseRoot $failedBootstrapRelease -StagingRoot $failedPublicationStaging `
             -VerifyAction { throw 'fixture verification failure' }
     }
     $absentFailurePassed = $absentFailureRejected -and
         -not (Test-Path -LiteralPath $failedBootstrapRelease) -and
-        @(Get-ChildItem -LiteralPath $publicationStaging -Directory -Filter 'failed-release-*').Count -eq 1
+        @(Get-ChildItem -LiteralPath $failedPublicationStaging -Directory `
+            -Filter 'failed-release-*').Count -eq 1
     Add-Result 'publication supports an absent release without fabricated rollback state' (
         $absentPublishPassed -and $absentFailurePassed) `
         "publish=$absentPublishPassed; failure=$absentFailurePassed"
 
-    $replacementStage = Join-Path $publicationStaging 'replacement-stage\release'
-    $replacementRelease = Join-Path $publicationRoot 'replacement-server-base\release'
+    $successfulReplacementRoot = Join-Path $temporaryRoot 'publication-replacement'
+    $successfulReplacementStaging = Join-Path $successfulReplacementRoot '.staging'
+    $successfulReplacementStage = Join-Path $successfulReplacementStaging 'replacement-stage'
+    $successfulReplacementRelease = Join-Path $successfulReplacementRoot 'server-base\release'
+    New-Item -ItemType Directory -Path $successfulReplacementStage, `
+        $successfulReplacementRelease -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $successfulReplacementStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText(
+        (Join-Path $successfulReplacementRelease 'old.txt'), 'old')
+    Publish-CombatCanaryRelease -StageRelease $successfulReplacementStage `
+        -ReleaseRoot $successfulReplacementRelease `
+        -StagingRoot $successfulReplacementStaging `
+        -VerifyAction { if (-not (Test-Path -LiteralPath (
+                        Join-Path $successfulReplacementRelease 'new.txt'))) {
+                throw 'missing replacement release'
+            } } | Out-Null
+    $successfulReplacementPassed =
+        (Test-Path -LiteralPath (
+                Join-Path $successfulReplacementRelease 'new.txt') -PathType Leaf) -and
+        -not (Test-Path -LiteralPath (
+                Join-Path $successfulReplacementRelease 'old.txt')) -and
+        -not (Test-Path -LiteralPath $successfulReplacementStaging)
+    Add-Result 'successful replacement removes its retired release and empty staging root' `
+        $successfulReplacementPassed "replaced=$successfulReplacementPassed"
+
+    $failedReplacementRoot = Join-Path $temporaryRoot 'publication-failed-replacement'
+    $failedReplacementStaging = Join-Path $failedReplacementRoot '.staging'
+    $replacementStage = Join-Path $failedReplacementStaging 'replacement-stage'
+    $replacementRelease = Join-Path $failedReplacementRoot 'server-base\release'
     New-Item -ItemType Directory -Path $replacementStage, $replacementRelease -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $replacementStage 'new.txt'), 'new')
     [System.IO.File]::WriteAllText((Join-Path $replacementRelease 'old.txt'), 'old')
     $replacementRejected = Test-Rejected -Pattern 'fixture replacement failure' {
         Publish-CombatCanaryRelease -StageRelease $replacementStage `
-            -ReleaseRoot $replacementRelease -StagingRoot $publicationStaging `
+            -ReleaseRoot $replacementRelease -StagingRoot $failedReplacementStaging `
             -VerifyAction { throw 'fixture replacement failure' }
     }
     $replacementPassed = $replacementRejected -and
         (Test-Path -LiteralPath (Join-Path $replacementRelease 'old.txt') -PathType Leaf) -and
         -not (Test-Path -LiteralPath (Join-Path $replacementRelease 'new.txt')) -and
-        @(Get-ChildItem -LiteralPath $publicationStaging -Directory `
-            -Filter 'previous-release-*').Count -eq 0
+        @(Get-ChildItem -LiteralPath $failedReplacementStaging -Directory `
+            -Filter 'previous-release-*').Count -eq 0 -and
+        @(Get-ChildItem -LiteralPath $failedReplacementStaging -Directory `
+            -Filter 'failed-release-*').Count -eq 1
     Add-Result 'failed replacement restores the prior release only when one existed' `
         $replacementPassed "restored=$replacementPassed"
 
+    $unknownRoot = Join-Path $temporaryRoot 'publication-unknown-child'
+    $unknownStaging = Join-Path $unknownRoot '.staging'
+    $unknownStage = Join-Path $unknownStaging 'candidate-stage'
+    $unknownChild = Join-Path $unknownStaging 'unknown-child'
+    $unknownRelease = Join-Path $unknownRoot 'server-base\release'
+    New-Item -ItemType Directory -Path $unknownStage, $unknownChild, `
+        $unknownRelease -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $unknownStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText((Join-Path $unknownRelease 'old.txt'), 'old')
+    $unknownChildRejected = Test-Rejected `
+        -Pattern 'must contain exactly the staged release' {
+        Publish-CombatCanaryRelease -StageRelease $unknownStage `
+            -ReleaseRoot $unknownRelease -StagingRoot $unknownStaging `
+            -VerifyAction { }
+    }
+    $unknownChildPassed = $unknownChildRejected -and
+        (Test-Path -LiteralPath (Join-Path $unknownStage 'new.txt') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $unknownRelease 'old.txt') -PathType Leaf) -and
+        (Test-Path -LiteralPath $unknownChild -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $unknownStaging -Directory `
+            -Filter 'previous-release-*').Count -eq 0 -and
+        @(Get-ChildItem -LiteralPath $unknownStaging -Directory `
+            -Filter 'failed-release-*').Count -eq 0
+    Add-Result 'unknown staging content fails closed before publication mutation' `
+        $unknownChildPassed "rejected=$unknownChildRejected"
+
+    $descendantRoot = Join-Path $temporaryRoot 'publication-descendant-reparse'
+    $descendantStaging = Join-Path $descendantRoot '.staging'
+    $descendantStage = Join-Path $descendantStaging 'candidate-stage'
+    $descendantRelease = Join-Path $descendantRoot 'server-base\release'
+    $descendantTarget = Join-Path $temporaryRoot 'publication-descendant-target'
+    New-Item -ItemType Directory -Path $descendantStage, $descendantRelease, `
+        $descendantTarget -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $descendantStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText((Join-Path $descendantRelease 'old.txt'), 'old')
+    [System.IO.File]::WriteAllText((Join-Path $descendantTarget 'sentinel.txt'), 'safe')
+    $descendantLink = Join-Path $descendantRelease 'unsafe-link'
+    New-Item -ItemType Junction -Path $descendantLink `
+        -Target $descendantTarget | Out-Null
+    $fixtureJunctions.Add($descendantLink)
+    $descendantRejected = Test-Rejected -Pattern 'reparse point' {
+        Publish-CombatCanaryRelease -StageRelease $descendantStage `
+            -ReleaseRoot $descendantRelease -StagingRoot $descendantStaging `
+            -VerifyAction { }
+    }
+    $descendantPassed = $descendantRejected -and
+        (Test-Path -LiteralPath (Join-Path $descendantStage 'new.txt') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $descendantRelease 'old.txt') -PathType Leaf) -and
+        (Test-Path -LiteralPath $descendantLink -PathType Container) -and
+        (Get-Content -Raw -LiteralPath (
+                Join-Path $descendantTarget 'sentinel.txt')) -ceq 'safe' -and
+        @(Get-ChildItem -LiteralPath $descendantStaging -Directory `
+            -Filter 'previous-release-*').Count -eq 0
+    Add-Result 'existing release descendant reparses fail before publication mutation' `
+        $descendantPassed "rejected=$descendantRejected"
+
+    $retireFailureRoot = Join-Path $temporaryRoot 'publication-retire-validation-failure'
+    $retireFailureStaging = Join-Path $retireFailureRoot '.staging'
+    $retireFailureStage = Join-Path $retireFailureStaging 'candidate-stage'
+    $retireFailureRelease = Join-Path $retireFailureRoot 'server-base\release'
+    New-Item -ItemType Directory -Path $retireFailureStage, `
+        $retireFailureRelease -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $retireFailureStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText((Join-Path $retireFailureRelease 'old.txt'), 'old')
+    $retireFailureRejected = Test-Rejected `
+        -Pattern 'fixture post-retirement validation failure' {
+        Publish-CombatCanaryRelease -StageRelease $retireFailureStage `
+            -ReleaseRoot $retireFailureRelease -StagingRoot $retireFailureStaging `
+            -VerifyAction { } `
+            -InternalTestAfterRetire {
+                throw 'fixture post-retirement validation failure'
+            }
+    }
+    $retireFailurePassed = $retireFailureRejected -and
+        (Test-Path -LiteralPath (
+                Join-Path $retireFailureRelease 'old.txt') -PathType Leaf) -and
+        (Test-Path -LiteralPath (
+                Join-Path $retireFailureStage 'new.txt') -PathType Leaf) -and
+        @(Get-ChildItem -LiteralPath $retireFailureStaging -Directory `
+            -Filter 'previous-release-*').Count -eq 0 -and
+        @(Get-ChildItem -LiteralPath $retireFailureStaging -Directory `
+            -Filter 'failed-release-*').Count -eq 0
+    Add-Result 'post-retirement validation failure restores the exact prior release' `
+        $retireFailurePassed "rejected=$retireFailureRejected"
+
+    $unsafeRetireRoot = Join-Path $temporaryRoot 'publication-unsafe-retire'
+    $unsafeRetireStaging = Join-Path $unsafeRetireRoot '.staging'
+    $unsafeRetireStage = Join-Path $unsafeRetireStaging 'candidate-stage'
+    $unsafeRetireRelease = Join-Path $unsafeRetireRoot 'server-base\release'
+    $unsafeRetireTarget = Join-Path $temporaryRoot 'publication-unsafe-retire-target'
+    New-Item -ItemType Directory -Path $unsafeRetireStage, $unsafeRetireRelease, `
+        $unsafeRetireTarget -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $unsafeRetireStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText((Join-Path $unsafeRetireRelease 'old.txt'), 'old')
+    [System.IO.File]::WriteAllText((Join-Path $unsafeRetireTarget 'sentinel.txt'), 'safe')
+    $unsafeRetireLink = $null
+    $unsafeRetireRejected = Test-Rejected `
+        -Pattern 'safe compensation could not be proven' {
+        Publish-CombatCanaryRelease -StageRelease $unsafeRetireStage `
+            -ReleaseRoot $unsafeRetireRelease -StagingRoot $unsafeRetireStaging `
+            -VerifyAction { } `
+            -InternalTestAfterRetire {
+                $retired = @(Get-ChildItem -LiteralPath $unsafeRetireStaging -Directory `
+                        -Filter 'previous-release-*')
+                if ($retired.Count -ne 1) { throw 'missing unsafe retirement fixture' }
+                $script:unsafeRetireLink = Join-Path $retired[0].FullName 'unsafe-link'
+                New-Item -ItemType Junction -Path $script:unsafeRetireLink `
+                    -Target $unsafeRetireTarget | Out-Null
+                $fixtureJunctions.Add($script:unsafeRetireLink)
+            }
+    }
+    $unsafeRetired = @(Get-ChildItem -LiteralPath $unsafeRetireStaging -Directory `
+            -Filter 'previous-release-*')
+    $unsafeRetirePassed = $unsafeRetireRejected -and
+        -not (Test-Path -LiteralPath $unsafeRetireRelease) -and
+        (Test-Path -LiteralPath (
+                Join-Path $unsafeRetireStage 'new.txt') -PathType Leaf) -and
+        $unsafeRetired.Count -eq 1 -and
+        -not [string]::IsNullOrWhiteSpace([string]$script:unsafeRetireLink) -and
+        (Test-Path -LiteralPath $script:unsafeRetireLink -PathType Container) -and
+        (Get-Content -Raw -LiteralPath (
+                Join-Path $unsafeRetireTarget 'sentinel.txt')) -ceq 'safe'
+    Add-Result 'unsafe retirement compensation retains exact evidence' `
+        $unsafeRetirePassed "rejected=$unsafeRetireRejected"
+
+    $injectionRoot = Join-Path $temporaryRoot 'publication-post-verify-reparse'
+    $injectionStaging = Join-Path $injectionRoot '.staging'
+    $injectionStage = Join-Path $injectionStaging 'candidate-stage'
+    $injectionRelease = Join-Path $injectionRoot 'server-base\release'
+    $injectionTarget = Join-Path $temporaryRoot 'publication-injection-target'
+    New-Item -ItemType Directory -Path $injectionStage, $injectionRelease, `
+        $injectionTarget -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $injectionStage 'new.txt'), 'new')
+    [System.IO.File]::WriteAllText((Join-Path $injectionRelease 'old.txt'), 'old')
+    [System.IO.File]::WriteAllText((Join-Path $injectionTarget 'sentinel.txt'), 'safe')
+    $injectionLink = $null
+    $injectionRejected = Test-Rejected -Pattern 'reparse point' {
+        Publish-CombatCanaryRelease -StageRelease $injectionStage `
+            -ReleaseRoot $injectionRelease -StagingRoot $injectionStaging `
+            -VerifyAction {
+                $retired = @(Get-ChildItem -LiteralPath $injectionStaging -Directory `
+                        -Filter 'previous-release-*')
+                if ($retired.Count -ne 1) { throw 'missing retired release fixture' }
+                $script:injectionLink = Join-Path $retired[0].FullName 'unsafe-link'
+                New-Item -ItemType Junction -Path $script:injectionLink `
+                    -Target $injectionTarget | Out-Null
+                $fixtureJunctions.Add($script:injectionLink)
+            }
+    }
+    $injectionRetired = @(Get-ChildItem -LiteralPath $injectionStaging -Directory `
+            -Filter 'previous-release-*')
+    $injectionPassed = $injectionRejected -and
+        (Test-Path -LiteralPath (Join-Path $injectionRelease 'new.txt') -PathType Leaf) -and
+        -not (Test-Path -LiteralPath (Join-Path $injectionRelease 'old.txt')) -and
+        $injectionRetired.Count -eq 1 -and
+        -not [string]::IsNullOrWhiteSpace([string]$script:injectionLink) -and
+        (Test-Path -LiteralPath $script:injectionLink -PathType Container) -and
+        (Get-Content -Raw -LiteralPath (
+                Join-Path $injectionTarget 'sentinel.txt')) -ceq 'safe'
+    Add-Result 'post-verification reparse injection retains verified release and evidence' `
+        $injectionPassed "rejected=$injectionRejected"
+
     $junctionPublicationRoot = Join-Path $temporaryRoot 'junction-publication'
     $junctionPublicationStaging = Join-Path $junctionPublicationRoot '.staging'
-    $junctionPublicationStage = Join-Path $junctionPublicationStaging 'candidate\release'
+    $junctionPublicationStage = Join-Path $junctionPublicationStaging 'candidate'
     $junctionPublicationTarget = Join-Path $temporaryRoot 'junction-publication-target'
     New-Item -ItemType Directory -Path $junctionPublicationStage, `
         $junctionPublicationTarget -Force | Out-Null
