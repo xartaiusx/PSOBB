@@ -1352,14 +1352,16 @@ function Get-PSOBBCombatCanaryInstallation {
         -LiteralPath $clientProfilePath -Root $Layout.Client -MaximumBytes 256KB `
         -ExpectedSha256 ([string]$binding.clientProfileSha256) `
         -RoleLabel 'combat canary client profile' -PassThruSnapshot
-    $runtimeClientEntries = @(@($baseManifest.files) + @([pscustomobject]@{
-                path = 'client-profile.json'
-                size = [int64]$clientProfileSnapshot.Length
-                sha256 = [string]$clientProfileSnapshot.Sha256
-            }))
-    if (-not (Test-PSOBBManifestEntriesEqual `
-            -Left $runtimeClientEntries -Right $actualRuntimeClientEntries)) {
-        throw 'The combat-canary runtime client is not an exact base-client copy plus client-profile.json'
+    $clientProfileEntry = [pscustomobject]@{
+        path = 'client-profile.json'
+        size = [int64]$clientProfileSnapshot.Length
+        sha256 = [string]$clientProfileSnapshot.Sha256
+    }
+    if (-not (Test-PSOBBCombatCanaryRuntimeClientManifest `
+            -BaseEntries @($baseManifest.files) `
+            -ActualEntries $actualRuntimeClientEntries `
+            -ClientProfileEntry $clientProfileEntry)) {
+        throw 'The combat-canary runtime client contains an unapproved mutable or changed file'
     }
     $approvedClient = Get-PSOBBCombatCanaryApprovedClientIdentity `
         -RepositoryRoot $script:RepositoryRoot

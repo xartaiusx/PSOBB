@@ -614,6 +614,168 @@ function Assert-PSOBBCombatCanaryPayloadSetPolicy {
     }
 }
 
+function Test-PSOBBCombatCanaryRuntimeClientManifest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$BaseEntries,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$ActualEntries,
+
+        [Parameter(Mandatory)]
+        $ClientProfileEntry
+    )
+
+    if ($BaseEntries.Count -lt 1 -or $BaseEntries.Count -gt 65536 -or
+        $ActualEntries.Count -gt ($BaseEntries.Count + 40)) {
+        return $false
+    }
+
+    $baseByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $actualByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($set in @(
+            [pscustomobject]@{ Entries = $BaseEntries; Map = $baseByPath },
+            [pscustomobject]@{ Entries = $ActualEntries; Map = $actualByPath })) {
+        foreach ($entry in @($set.Entries)) {
+            if ($null -eq $entry) { return $false }
+            $properties = @($entry.PSObject.Properties.Name | Sort-Object)
+            if ([string]::Join("`n", $properties) -cne
+                [string]::Join("`n", @('path', 'sha256', 'size'))) {
+                return $false
+            }
+            $path = [string]$entry.path
+            $size = [int64]0
+            if ($entry.path -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($path) -or
+                $path -cnotmatch '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*[\\:])[ -~]+$' -or
+                $entry.size -isnot [long] -or
+                -not [int64]::TryParse(
+                    ([string]$entry.size),
+                    [Globalization.NumberStyles]::None,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [ref]$size) -or
+                $size -lt 0 -or
+                $entry.sha256 -isnot [string] -or
+                [string]$entry.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+                $set.Map.ContainsKey($path)) {
+                return $false
+            }
+            $set.Map.Add($path, $entry)
+        }
+    }
+
+    if ($null -eq $ClientProfileEntry) { return $false }
+    $profileProperties = @(
+        $ClientProfileEntry.PSObject.Properties.Name | Sort-Object)
+    if ([string]::Join("`n", $profileProperties) -cne
+        [string]::Join("`n", @('path', 'sha256', 'size')) -or
+        $ClientProfileEntry.path -isnot [string] -or
+        [string]$ClientProfileEntry.path -cne 'client-profile.json' -or
+        $ClientProfileEntry.size -isnot [long] -or
+        [int64]$ClientProfileEntry.size -lt 1 -or
+        [int64]$ClientProfileEntry.size -gt 256KB -or
+        $ClientProfileEntry.sha256 -isnot [string] -or
+        [string]$ClientProfileEntry.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        return $false
+    }
+
+    $mutableBytes = [uint64]0
+    $chatLogs = 0
+    $mutableGameGuard = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($path in @(
+            'GameGuard/0npgg.erl',
+            'GameGuard/0npgl.erl',
+            'GameGuard/0npgm.erl',
+            'GameGuard/0npgmup.erl',
+            'GameGuard/0npsc.erl',
+            'GameGuard/npgl.erl')) {
+        [void]$mutableGameGuard.Add($path)
+    }
+    $generatedGameGuard = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($path in @(
+            'GameGuard/1npgg.erl',
+            'GameGuard/1npgl.erl',
+            'GameGuard/1npgm.erl',
+            'GameGuard/1npgmup.erl',
+            'GameGuard/1npsc.erl')) {
+        [void]$generatedGameGuard.Add($path)
+    }
+
+    foreach ($baseEntry in $BaseEntries) {
+        $path = [string]$baseEntry.path
+        $mutable = $mutableGameGuard.Contains($path) -or
+            $path -cmatch '^log/(?:spec|error|generic)\.log$'
+        if (-not $actualByPath.ContainsKey($path)) {
+            if ($mutable) { continue }
+            return $false
+        }
+        $actual = $actualByPath[$path]
+        if ([string]$actual.path -cne $path) { return $false }
+        if (-not $mutable) {
+            if ([int64]$actual.size -ne [int64]$baseEntry.size -or
+                [string]$actual.sha256 -cne [string]$baseEntry.sha256) {
+                return $false
+            }
+            continue
+        }
+
+        $maximum = if ($mutableGameGuard.Contains($path)) { 1MB } else { 16MB }
+        $minimum = if ($mutableGameGuard.Contains($path)) { 1 } else { 0 }
+        $size = [uint64][int64]$actual.size
+        if ($size -lt [uint64]$minimum -or $size -gt [uint64]$maximum -or
+            [uint64]::MaxValue - $mutableBytes -lt $size) {
+            return $false
+        }
+        $mutableBytes += $size
+    }
+
+    foreach ($actual in $ActualEntries) {
+        $path = [string]$actual.path
+        if ($baseByPath.ContainsKey($path)) {
+            if ([string]$baseByPath[$path].path -cne $path) { return $false }
+            continue
+        }
+        if ($path -ceq 'client-profile.json') {
+            if ([int64]$actual.size -ne [int64]$ClientProfileEntry.size -or
+                [string]$actual.sha256 -cne
+                    [string]$ClientProfileEntry.sha256) {
+                return $false
+            }
+            continue
+        }
+
+        $maximum = [int64]0
+        if ($generatedGameGuard.Contains($path)) {
+            $maximum = 1MB
+        } elseif ($path -cmatch '^log/chat[0-9]{8}\.txt$') {
+            $chatLogs++
+            if ($chatLogs -gt 32) { return $false }
+            $maximum = 16MB
+        } else {
+            return $false
+        }
+        $size = [uint64][int64]$actual.size
+        if ($size -gt [uint64]$maximum -or
+            ($generatedGameGuard.Contains($path) -and $size -lt 1) -or
+            [uint64]::MaxValue - $mutableBytes -lt $size) {
+            return $false
+        }
+        $mutableBytes += $size
+    }
+
+    $actualByPath.ContainsKey('client-profile.json') -and
+        [string]$actualByPath['client-profile.json'].path -ceq
+            'client-profile.json' -and
+        $mutableBytes -le [uint64](64MB)
+}
+
 function Open-PSOBBCombatCanaryDirectoryLeaseChain {
     [CmdletBinding()]
     param(
