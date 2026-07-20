@@ -524,7 +524,8 @@ function Get-PSOBBCombatInitializeStableShadowBuild {
     param(
         [Parameter(Mandatory)]$RootLayout,
         [Parameter(Mandatory)]$StableLayout,
-        [string]$ExplicitHash
+        [string]$ExplicitHash,
+        [switch]$VerifyPayload
     )
 
     $expectedHash = if ([string]::IsNullOrWhiteSpace($ExplicitHash)) {
@@ -629,7 +630,10 @@ function Get-PSOBBCombatInitializeStableShadowBuild {
         -RoleLabel 'Stable server base manifest'
     if ([int]$baseManifest.schemaVersion -ne 1 -or
         [string]$baseManifest.sourceArchiveSha256 -cne
-            [string]$contract.source.serverArchiveSha256 -or
+            [string]$contract.source.serverArchiveSha256) {
+        throw 'Stable server-base provenance is invalid'
+    }
+    if ($VerifyPayload.IsPresent -and
         -not (Test-PSOBBDirectoryManifest `
             -Root (Split-Path -Parent $StableLayout.ServerBase) `
             -Files @($baseManifest.files))) {
@@ -656,7 +660,10 @@ function Get-PSOBBCombatInitializeStableShadowBuild {
         [string]$patchManifest.sourceClientArchiveSha256 -cne
             [string]$clientComponents[0].sha256 -or
         @($patchManifest.files).Count -ne
-            [int]$contract.source.patchDataFileCount -or
+            [int]$contract.source.patchDataFileCount) {
+        throw 'Stable BB patch-data provenance is invalid'
+    }
+    if ($VerifyPayload.IsPresent -and
         -not (Test-PSOBBDirectoryManifest `
             -Root $patchDataPath -Files @($patchManifest.files))) {
         throw 'Stable BB patch-data differs from its accepted manifest'
@@ -711,6 +718,39 @@ function Get-PSOBBCombatInitializeStableShadowBuild {
         StablePatchManifestSha256 = [string]$patchSnapshot.Sha256
         ReleaseEntries = $releaseEntries.ToArray()
     }
+}
+
+function Assert-PSOBBCombatInitializeStableShadowSourceEqual {
+    param(
+        [Parameter(Mandatory)]$Expected,
+        [Parameter(Mandatory)]$Actual,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+
+    if ([string]$Actual.Artifact -cne [string]$Expected.Artifact -or
+        [string]$Actual.ComponentId -cne [string]$Expected.ComponentId -or
+        [string]$Actual.Path -cne [string]$Expected.Path -or
+        [string]$Actual.Hash -cne [string]$Expected.Hash -or
+        [string]$Actual.StableServerBase -cne
+            [string]$Expected.StableServerBase -or
+        [string]$Actual.StableInstallRecordSha256 -cne
+            [string]$Expected.StableInstallRecordSha256 -or
+        [string]$Actual.StableBaseClientManifestSha256 -cne
+            [string]$Expected.StableBaseClientManifestSha256 -or
+        [string]$Actual.StableBaseClientExecutableSha256 -cne
+            [string]$Expected.StableBaseClientExecutableSha256 -or
+        [string]$Actual.StableServerBaseManifestSha256 -cne
+            [string]$Expected.StableServerBaseManifestSha256 -or
+        [string]$Actual.StablePatchData -cne
+            [string]$Expected.StablePatchData -or
+        [string]$Actual.StablePatchManifestSha256 -cne
+            [string]$Expected.StablePatchManifestSha256 -or
+        -not (Test-PSOBBManifestEntriesEqual `
+            -Left @($Actual.ReleaseEntries) `
+            -Right @($Expected.ReleaseEntries))) {
+        throw $FailureMessage
+    }
+    $true
 }
 
 function New-PSOBBCombatInitializeStableShadowServerBase {
@@ -1016,8 +1056,6 @@ $stableBaseManifestJson = $stableBaseManifestSnapshot.Value
 $stableBaseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
     -JsonObject $stableBaseManifestJson -RoleLabel 'stable base client manifest'
 if ([int]$stableBaseManifest.schemaVersion -ne 1 -or
-    -not (Test-PSOBBDirectoryManifest `
-        -Root $stableLayout.BaseClient -Files @($stableBaseManifest.files)) -or
     (Get-Item -Force -LiteralPath (
         Join-Path $stableLayout.BaseClient 'Psobb.exe')).Length -ne $approvedClient.Size -or
     (Get-LowerSha256 (Join-Path $stableLayout.BaseClient 'Psobb.exe')) -cne
@@ -1049,6 +1087,7 @@ try {
 
     $replacement = $false
     $existing = $null
+    $existingExpectations = $null
     $previousBuildContractSha256 = $null
     if (Test-Path -LiteralPath $layout.InstallRecord -PathType Leaf) {
         $existingExpectations =
@@ -1056,6 +1095,52 @@ try {
                 -Layout $rootLayout
         $previousBuildContractSha256 =
             [string]$existingExpectations.BuildContractSha256
+        if ($previousBuildContractSha256 -cne [string]$build.Hash -and
+            ($ServerArtifact -cne 'StableShadow' -or
+            [string]$existingExpectations.ServerComponentId -cne
+                'newserv-combat-canary-build')) {
+            throw 'Only exact CurrentUpstream-to-StableShadow replacement is permitted'
+        }
+        $replacement = $previousBuildContractSha256 -cne [string]$build.Hash
+    } else {
+        if ($ServerArtifact -ceq 'StableShadow') {
+            throw 'StableShadow requires one fully verified CurrentUpstream combat-canary installation'
+        }
+        [void](Assert-PSOBBCombatInitializeFirstInstallEmpty -Layout $layout)
+    }
+    if (-not $PSCmdlet.ShouldProcess(
+            $layout.EnvironmentRoot,
+            'Atomically materialize the selected combat-canary server artifact')) {
+        return [pscustomobject]@{
+            Initialized = $false
+            Changed = $false
+            WhatIf = $true
+            Environment = 'CombatCanary'
+            ServerArtifact = [string]$build.Artifact
+            Replacement = $replacement
+            SnapshotId = [string]$snapshot.SnapshotId
+            BuildContractSha256 = $build.Hash
+        }
+    }
+
+    if ($ServerArtifact -ceq 'StableShadow') {
+        $verifiedBuild = Get-PSOBBCombatInitializeStableShadowBuild `
+            -RootLayout $rootLayout -StableLayout $stableLayout `
+            -ExplicitHash $build.Hash -VerifyPayload
+        [void](Assert-PSOBBCombatInitializeStableShadowSourceEqual `
+                -Expected $build -Actual $verifiedBuild `
+                -FailureMessage 'Stable changed before StableShadow payload verification completed')
+        $build = $verifiedBuild
+    }
+    if ((Get-LowerSha256 $stableLayout.BaseClientManifest) -cne
+            $stableBaseManifestHash -or
+        -not (Test-PSOBBDirectoryManifest `
+            -Root $stableLayout.BaseClient `
+            -Files @($stableBaseManifest.files))) {
+        throw 'The Stable immutable 59NL base client differs from its manifest'
+    }
+
+    if ($null -ne $existingExpectations) {
         $existingParameters = @{
             RuntimeRoot = $rootLayout.Root
             Target = 'Installed'
@@ -1083,31 +1168,10 @@ try {
                 TwillsContractSha256 = [string]$snapshot.TwillsContractSha256
             }
         }
-        if ($ServerArtifact -cne 'StableShadow' -or
-            [string]$existing.ServerArtifact -cne 'CurrentUpstream' -or
+        if ([string]$existing.ServerArtifact -cne 'CurrentUpstream' -or
             [string]$existing.ServerComponentId -cne
                 'newserv-combat-canary-build') {
             throw 'Only exact CurrentUpstream-to-StableShadow replacement is permitted'
-        }
-        $replacement = $true
-    } else {
-        if ($ServerArtifact -ceq 'StableShadow') {
-            throw 'StableShadow requires one fully verified CurrentUpstream combat-canary installation'
-        }
-        [void](Assert-PSOBBCombatInitializeFirstInstallEmpty -Layout $layout)
-    }
-    if (-not $PSCmdlet.ShouldProcess(
-            $layout.EnvironmentRoot,
-            'Atomically materialize the selected combat-canary server artifact')) {
-        return [pscustomobject]@{
-            Initialized = $false
-            Changed = $false
-            WhatIf = $true
-            Environment = 'CombatCanary'
-            ServerArtifact = [string]$build.Artifact
-            Replacement = $replacement
-            SnapshotId = [string]$snapshot.SnapshotId
-            BuildContractSha256 = $build.Hash
         }
     }
 
@@ -1369,7 +1433,7 @@ try {
         if ($ServerArtifact -ceq 'StableShadow') {
             $sourceReadback = Get-PSOBBCombatInitializeStableShadowBuild `
                 -RootLayout $rootLayout -StableLayout $stableLayout `
-                -ExplicitHash $build.Hash
+                -ExplicitHash $build.Hash -VerifyPayload
             if ([string]$sourceReadback.StableInstallRecordSha256 -cne
                     [string]$build.StableInstallRecordSha256 -or
                 [string]$sourceReadback.StableBaseClientManifestSha256 -cne
@@ -1481,7 +1545,7 @@ try {
         if ($replacement) {
             $stableReadback = Get-PSOBBCombatInitializeStableShadowBuild `
                 -RootLayout $rootLayout -StableLayout $stableLayout `
-                -ExplicitHash $build.Hash
+                -ExplicitHash $build.Hash -VerifyPayload
             if ([string]$stableReadback.StableInstallRecordSha256 -cne
                     [string]$build.StableInstallRecordSha256 -or
                 [string]$stableReadback.StableBaseClientManifestSha256 -cne

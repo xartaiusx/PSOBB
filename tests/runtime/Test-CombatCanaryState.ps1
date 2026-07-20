@@ -4230,7 +4230,7 @@ try {
             try {
                 & (Join-Path $transactionScriptsRoot `
                     'Initialize-PSOBBCombatCanary.ps1') `
-                    @shadowParameters | Out-Null
+                    @shadowParameters -WhatIf | Out-Null
             } catch {
                 $stableBindingRejected = $true
             }

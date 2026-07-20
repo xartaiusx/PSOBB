@@ -244,6 +244,36 @@ try {
 }
 
 $initializerSource = Get-Content -Raw -LiteralPath $initializerPath
+$shouldProcessIndex = $initializerSource.IndexOf(
+    '$PSCmdlet.ShouldProcess(', [StringComparison]::Ordinal)
+$firstFullVerificationIndex = $initializerSource.IndexOf(
+    '-ExplicitHash $build.Hash -VerifyPayload',
+    [StringComparison]::Ordinal)
+$clientManifestRecheckIndex = $initializerSource.IndexOf(
+    '(Get-LowerSha256 $stableLayout.BaseClientManifest)',
+    [StringComparison]::Ordinal)
+$clientPayloadVerificationIndex = [regex]::Match(
+    $initializerSource,
+    'Test-PSOBBDirectoryManifest\s+`\s*\n\s*' +
+        '-Root \$stableLayout\.BaseClient\s+`\s*\n\s*' +
+        '-Files @\(\$stableBaseManifest\.files\)').Index
+$transactionIndex = $initializerSource.IndexOf(
+    '$transactionId = [Guid]::NewGuid()', [StringComparison]::Ordinal)
+Add-Result 'StableShadow preview precedes every bulk payload gate' (
+    $shouldProcessIndex -ge 0 -and
+    $firstFullVerificationIndex -gt $shouldProcessIndex -and
+    $clientManifestRecheckIndex -gt $firstFullVerificationIndex -and
+    $clientManifestRecheckIndex -lt $clientPayloadVerificationIndex -and
+    $clientPayloadVerificationIndex -gt $shouldProcessIndex -and
+    $clientPayloadVerificationIndex -lt $transactionIndex -and
+    $transactionIndex -gt $firstFullVerificationIndex -and
+    [regex]::Matches(
+        $initializerSource,
+        [regex]::Escape('-ExplicitHash $build.Hash -VerifyPayload')).Count -eq 3 -and
+    [regex]::Matches(
+        $initializerSource,
+        [regex]::Escape('$VerifyPayload.IsPresent -and')).Count -eq 2) `
+    'metadata preview; full source verification before staging and at both source readbacks'
 Add-Result 'StableShadow assembly uses only approved Stable source layers' (
     $initializerSource -match
         'StableServerBase[\s\S]*StablePatchData' -and
