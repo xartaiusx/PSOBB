@@ -363,3 +363,63 @@ Each entry records:
   live observation candidate is allowed
 - Rollback: no runtime rollback is required. Use a focused local Git revert of
   `2d045ab` only if the source contract must be withdrawn.
+
+## 2026-07-20 / combat-canary-stable-shadow-materialized-v1
+
+- Feature/profile: isolated Stable-derived CombatCanary under the Native
+  `baseline` client profile
+- Outcome: the exact StableShadow fixture was materialized successfully; this
+  entry does not yet accept server readiness, a client login, gameplay, or a
+  five-minute Twills scenario
+- Implementation commits: `858268f` (`perf: avoid duplicate canary preview
+  hashes`), `b2378a8` (`fix: bound StableShadow cleanup`), and `78e42a8`
+  (`fix: respect Stable config capabilities`)
+- Server identity: Stable newserv v2026-02-27 commit
+  `a649a4a146d04dba320bb579ac291527db0febb5`; executable SHA-256
+  `7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd`;
+  StableShadow contract SHA-256
+  `472d2a4b443eef5427a1074b7dead87ddd8bc7750f3170a5d2518f3e88963cda`
+- Snapshot identity: sealed snapshot ID
+  `dda85ff8-9c23-497d-b3b4-285efe6781ad`; snapshot-manifest SHA-256
+  `90ba01ca235d929d434c8ca146423e2260ea8463eaacb8a0cb07a18cb95bf4bb`;
+  slot-0 Twills FOnewearl contract SHA-256
+  `1582691fe1cb3019e7ee33e303d0d7811a9bf271e505bae22580e094b3ee1fd1`
+- Cleanup result: the retained failed stage was independently verified as an
+  ordinary, non-reparse, transaction-bound tree and removed through its exact
+  authenticated marker. Initialize-stage and initialize-rollback cleanup is
+  bounded to 16,384 entries and 1 GiB; all other transaction purposes retain
+  the 4,096-entry and 256-MiB defaults.
+- Configuration result: StableShadow preserves exact absence of unsupported
+  `CensorCredentials` and `AllowSameAccountConcurrentLogins` properties,
+  including escaped-property detection through strict decoded JSON. The same
+  controls remain mandatory with exact safe values for CurrentUpstream. Normal
+  games remain private-drop; Battle and Challenge remain shared.
+- Materialization result: the authenticated replacement completed in
+  1,339.713 seconds, reported `Initialized`, `Changed`, and
+  `ReplacedExisting`, retained the prior CurrentUpstream installation as
+  protected frozen evidence, and left no initialize-stage or
+  initialize-rollback debris.
+- Stable invariance: the protected Stable installation record remained SHA-256
+  `e31321851b4e9e411fa57eab97348ab1e0e4fba8854e2b69e6fb829396096316`;
+  the Stable server-base manifest remained SHA-256
+  `ec72183bde0dd747c5796b4a92060dba87d20dd0bde2ed236712fd17d8c5f048`;
+  the Stable executable remained byte-exact.
+- Tests: StableShadow 14/14; startup binding 11/11; four modified PowerShell
+  files parsed cleanly; whitespace and attribution scans passed; real Stable
+  configuration finalized and strict-parsed in memory; an independent review
+  found no blocker. The materializer completed its source, staged payload,
+  source-readback, sealed-state, and publication checks successfully.
+- Bounded verifier result: a separate complete `Target Both` readback produced
+  no integrity error but exceeded the five-minute command ceiling and was
+  stopped at 300 seconds. No success is claimed for that separate pass; it left
+  no verifier process, server/client process, listener, or transaction debris.
+- State result: no character was logged in and no gameplay action occurred.
+  Stable, the canonical Twills state, registry, Desktop shortcuts, and shared
+  RenderDoc state were unchanged.
+- Limitation: complete installed-state verification must be made to finish
+  within the lifecycle's 300-second startup limit before the server readiness
+  probe and both five-minute Twills scenarios can run.
+- Rollback: there is no supported post-success server-artifact rollback
+  command. Keep CombatCanary stopped and retain the protected frozen
+  CurrentUpstream receipt; do not manually swap its trees. Snapshot reset is
+  only for isolated Twills state and is not a server-artifact rollback.
