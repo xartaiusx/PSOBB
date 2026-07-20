@@ -263,6 +263,7 @@
         "rootRelative",
         "executable",
         "releaseManifest",
+        "requiredDirectories",
         "fileCount",
         "totalBytes",
         "versionOutput",
@@ -272,6 +273,15 @@
         "rootRelative": { "const": "combat-canary/server-base/release" },
         "executable": { "$ref": "#/$defs/outputFile" },
         "releaseManifest": { "$ref": "#/$defs/outputFile" },
+        "requiredDirectories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [
+            { "const": "system/ep3/maps" }
+          ],
+          "items": false
+        },
         "fileCount": { "type": "integer", "minimum": 1 },
         "totalBytes": { "type": "integer", "minimum": 1 },
         "versionOutput": {

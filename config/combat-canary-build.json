@@ -306,6 +306,9 @@
       "sha256": "d9626c5a2159f9478a5ef058dbcdc1dbafda7f3aad57aead9a5a343bc32c7bbb",
       "authenticode": "NotApplicable"
     },
+    "requiredDirectories": [
+      "system/ep3/maps"
+    ],
     "fileCount": 2913,
     "totalBytes": 56750845,
     "versionOutput": "newserv-d754a34 built 2026-07-11 14:06:17.000000 UTC",

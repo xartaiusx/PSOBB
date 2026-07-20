@@ -614,6 +614,7 @@ try {
             { param($value) $value.validation.dependencyTests[0].passed = 17 },
             { param($value) $value.validation.dependencyTests[1].name = 'other CTest' },
             { param($value) $value.validation.newservCTest = 'passed' },
+            { param($value) $value.output.requiredDirectories[0] = 'system/other' },
             { param($value) $value.output.versionOutput = 'unverified version' },
             {
                 param($value)
@@ -644,6 +645,65 @@ try {
         @($manifest.files).Count -eq [int]$contract.output.fileCount -and
         $total -eq [long]$contract.output.totalBytes) `
         "manifestFiles=$(@($manifest.files).Count); reparse=$($reparse.Count)"
+
+    $publishedRequiredDirectoryAccepted = Test-Accepted {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $releaseRoot | Out-Null
+    }
+    Add-Result 'release contains the exact empty required directory' `
+        $publishedRequiredDirectoryAccepted `
+        ([string]$contract.output.requiredDirectories[0])
+
+    $requiredDirectoryFixture = Join-Path $temporaryRoot `
+        'required-directory-fixture'
+    $requiredSystem = Join-Path $requiredDirectoryFixture 'system'
+    $requiredEpisode3 = Join-Path $requiredSystem 'ep3'
+    $requiredMaps = Join-Path $requiredEpisode3 'maps'
+    New-Item -ItemType Directory -Path $requiredEpisode3 -Force | Out-Null
+    $missingRequired = Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+        -Build $contract -Root $requiredDirectoryFixture -AllowMissing
+    $missingRequiredRejected = Test-Rejected -Pattern 'is missing' {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $requiredDirectoryFixture
+    }
+    [System.IO.File]::WriteAllBytes($requiredMaps, [byte[]]@(0))
+    $wrongTypeRequiredRejected = Test-Rejected -Pattern 'is not ordinary' {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $requiredDirectoryFixture
+    }
+    [System.IO.File]::Delete($requiredMaps)
+    New-Item -ItemType Directory -Path $requiredMaps | Out-Null
+    $emptyRequiredAccepted = Test-Accepted {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $requiredDirectoryFixture
+    }
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $requiredMaps 'unexpected.bin'), [byte[]]@(0))
+    $nonemptyRequiredRejected = Test-Rejected -Pattern 'is not empty' {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $requiredDirectoryFixture
+    }
+    [System.IO.File]::Delete((Join-Path $requiredMaps 'unexpected.bin'))
+    [System.IO.Directory]::Delete($requiredMaps, $false)
+    $requiredReparseTarget = Join-Path $temporaryRoot `
+        'required-directory-reparse-target'
+    New-Item -ItemType Directory -Path $requiredReparseTarget | Out-Null
+    New-Item -ItemType Junction -Path $requiredMaps `
+        -Target $requiredReparseTarget | Out-Null
+    $reparseRequiredRejected = Test-Rejected `
+        -Pattern 'reparse point|is not ordinary' {
+        Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $contract -Root $requiredDirectoryFixture
+    }
+    [System.IO.Directory]::Delete($requiredMaps, $false)
+    Add-Result 'required release directory fails closed independently of file manifests' (
+        @($missingRequired.MissingDirectories).Count -eq 1 -and
+        [string]$missingRequired.MissingDirectories[0] -ceq
+            'system/ep3/maps' -and
+        $missingRequiredRejected -and $wrongTypeRequiredRejected -and
+        $emptyRequiredAccepted -and $nonemptyRequiredRejected -and
+        $reparseRequiredRejected) `
+        "missing=$(@($missingRequired.MissingDirectories).Count); wrongType=$wrongTypeRequiredRejected; nonempty=$nonemptyRequiredRejected; reparse=$reparseRequiredRejected"
 
     $manifestPaths = [string[]]@($manifest.files | ForEach-Object { [string]$_.path })
     $ordinalManifestPaths = [string[]]@($manifestPaths)
@@ -740,6 +800,12 @@ try {
     $plannedSystemPaths = [string[]]@($packagePlan | ForEach-Object {
             [string]$_.DestinationPath
         })
+    $plannedEpisode3Payloads = @($plannedSystemPaths | Where-Object {
+            $_.StartsWith('system/ep3/', [System.StringComparison]::Ordinal)
+        })
+    Add-Result 'tracked Episode 3 payloads remain excluded from packaging' (
+        $plannedEpisode3Payloads.Count -eq 0) `
+        "planned=$($plannedEpisode3Payloads.Count)"
     $publishedSystemPaths = [string[]]@($manifestPaths | Where-Object {
             $_.StartsWith('system/', [System.StringComparison]::Ordinal)
         })
@@ -1410,6 +1476,25 @@ try {
     $parseErrors = $null
     $scriptAst = [System.Management.Automation.Language.Parser]::ParseFile(
         $buildScript, [ref]$tokens, [ref]$parseErrors)
+    $repairFunctions = @($scriptAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Invoke-CombatCanaryRepairLayout'
+            }, $true))
+    $repairText = if ($repairFunctions.Count -eq 1) {
+        [string]$repairFunctions[0].Extent.Text
+    } else { '' }
+    Add-Result 'RepairLayout is canonical, stopped, exclusive, and fail-closed' (
+        $parseErrors.Count -eq 0 -and $repairFunctions.Count -eq 1 -and
+        $scriptText -match "ValidateSet\('Verify', 'Build', 'RepairLayout'\)" -and
+        $repairText -match '\$PSCmdlet\.ShouldProcess\(' -and
+        $repairText -match 'Enter-CombatCanaryBuildBoundary' -and
+        $repairText -match 'Get-CombatCanaryRepairLayoutState' -and
+        $repairText -match 'Assert-PSOBBCombatCanaryRequiredReleaseDirectories' -and
+        $repairText -match "New-Item -ItemType Directory" -and
+        $repairText -match '\[System\.IO\.Directory\]::Delete' -and
+        $repairText -notmatch 'Remove-Item') `
+        "functions=$($repairFunctions.Count); parseErrors=$($parseErrors.Count)"
     $nativeToolNames = @(
         'cmd', 'cmd.exe', 'git', 'git.exe', 'gpgv', 'gpgv.exe', 'tar', 'tar.exe',
         'cmake', 'cmake.exe', 'ctest', 'ctest.exe', 'ninja', 'ninja.exe',

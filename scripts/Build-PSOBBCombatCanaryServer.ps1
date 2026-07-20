@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [ValidateSet('Verify', 'Build')]
+    [ValidateSet('Verify', 'Build', 'RepairLayout')]
     [string]$Action = 'Verify',
 
     [string]$RuntimeRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'PSOBB-Runtime'),
@@ -737,8 +737,7 @@ function Get-NewservPackageSystemPlan {
         if ($parts.Count -eq 1 -and
             $name.EndsWith('.json', [System.StringComparison]::OrdinalIgnoreCase) -and
             $name -cne 'config.example.json') { $include = $false }
-        if ($parts[0] -ceq 'ep3' -and $parts.Count -ge 2 -and
-            -not $parts[1].StartsWith('cardtex', [System.StringComparison]::Ordinal)) {
+        if ($parts[0] -ceq 'ep3') {
             $include = $false
         }
         if ($parts[0] -ceq 'client-functions' -and
@@ -1572,7 +1571,10 @@ function Assert-CTestSummary {
 }
 
 function Assert-Release {
-    param([Parameter(Mandatory)]$Contract)
+    param(
+        [Parameter(Mandatory)]$Contract,
+        [switch]$AllowMissingRequiredDirectories
+    )
     $releaseRoot = Resolve-ContractRelativePath -Root $script:RuntimeRoot `
         -RelativePath ([string]$Contract.output.rootRelative)
     if (-not (Test-Path -LiteralPath $releaseRoot -PathType Container)) {
@@ -1585,6 +1587,9 @@ function Assert-Release {
     if ($reparse.Count -ne 0) {
         throw 'The combat-canary release contains a reparse point'
     }
+    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $Contract -Root $releaseRoot `
+            -AllowMissing:$AllowMissingRequiredDirectories.IsPresent)
     $manifestPath = Resolve-ContractRelativePath -Root $releaseRoot `
         -RelativePath ([string]$Contract.output.releaseManifest.path)
     Assert-FileRecord -Path $manifestPath -Record $Contract.output.releaseManifest | Out-Null
@@ -1745,6 +1750,7 @@ function Invoke-CombatCanaryPreflight {
         throw 'The combat-canary build contract does not match its tracked schema'
     }
     $contract = $contractText | ConvertFrom-Json -Depth 50
+    [void](Assert-PSOBBCombatCanaryBuildContractIdentity -Build $contract)
     $recordedBuilds = @($contract.reproducibility.builds)
     if ([string]$contract.profileId -cne 'newserv-combat-canary-build' -or
         [string]$contract.source.commit -cne $script:SourceCommit -or
@@ -1788,8 +1794,25 @@ function Invoke-CombatCanaryVerify {
         TotalBytes = [long]$contract.output.totalBytes
         VersionOutput = [string]$contract.output.versionOutput
         RuntimeImportCount = @($contract.output.runtimeImports).Count
+        RequiredDirectoryCount = @($contract.output.requiredDirectories).Count
         ReleaseRoot = $releaseRoot
         Verified = $true
+    }
+}
+
+function Get-CombatCanaryRepairLayoutState {
+    $preflight = Invoke-CombatCanaryPreflight
+    $contract = $preflight.Contract
+    $releaseRoot = Assert-Release -Contract $contract `
+        -AllowMissingRequiredDirectories
+    Assert-SourceLock -Contract $contract -ReleaseRoot $releaseRoot `
+        -Component $preflight.SourceLockComponent
+    $required = Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+        -Build $contract -Root $releaseRoot -AllowMissing
+    [pscustomobject]@{
+        Contract = $contract
+        ReleaseRoot = $releaseRoot
+        MissingDirectories = @($required.MissingDirectories)
     }
 }
 
@@ -2557,6 +2580,14 @@ endif()
             Copy-PackageFile -Source $plannedFile.SourcePath `
                 -RelativePath $plannedFile.DestinationPath
         }
+        foreach ($requiredDirectory in @($contract.output.requiredDirectories)) {
+            $requiredPath = Resolve-ContractRelativePath -Root $stageRelease `
+                -RelativePath ([string]$requiredDirectory)
+            New-ReparseFreeDirectory -Path $requiredPath `
+                -Label 'required publication directory' | Out-Null
+        }
+        [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                -Build $contract -Root $stageRelease)
         $releaseFiles = [System.Collections.Generic.List[object]]::new()
         $payloadBytes = [long]0
         foreach ($entry in @(Get-OrdinalRelativeFiles -Root $stageRelease `
@@ -2609,11 +2640,121 @@ endif()
     }
 }
 
+function Invoke-CombatCanaryRepairLayout {
+    $canonicalContract = Join-Path $script:RepositoryRoot `
+        'config\combat-canary-build.json'
+    $canonicalSeries = Join-Path $script:RepositoryRoot `
+        'patches\newserv\series.json'
+    if ($script:ContractPath -cne $canonicalContract -or
+        $script:SeriesPath -cne $canonicalSeries) {
+        throw 'Layout repair requires the canonical tracked contract and patch series'
+    }
+
+    $state = Get-CombatCanaryRepairLayoutState
+    if (@($state.MissingDirectories).Count -eq 0) {
+        $verified = Invoke-CombatCanaryVerify
+        return [pscustomobject]@{
+            Action = 'RepairLayout'
+            Changed = $false
+            ReleaseRoot = $state.ReleaseRoot
+            Verified = [bool]$verified.Verified
+        }
+    }
+    if (@($state.MissingDirectories).Count -ne 1 -or
+        [string]$state.MissingDirectories[0] -cne 'system/ep3/maps') {
+        throw 'Layout repair found an unexpected missing-directory contract'
+    }
+    $target = Resolve-ContractRelativePath -Root $state.ReleaseRoot `
+        -RelativePath ([string]$state.MissingDirectories[0])
+    if (-not $PSCmdlet.ShouldProcess(
+            $target, 'Create the exact empty required release directory')) {
+        return [pscustomobject]@{
+            Action = 'RepairLayout'
+            Changed = $false
+            Pending = $true
+            RequiredDirectory = [string]$state.MissingDirectories[0]
+            ReleaseRoot = $state.ReleaseRoot
+            Verified = $false
+        }
+    }
+
+    $boundary = Enter-CombatCanaryBuildBoundary
+    try {
+        $state = Get-CombatCanaryRepairLayoutState
+        if (@($state.MissingDirectories).Count -eq 0) {
+            $verified = Invoke-CombatCanaryVerify
+            return [pscustomobject]@{
+                Action = 'RepairLayout'
+                Changed = $false
+                ReleaseRoot = $state.ReleaseRoot
+                Verified = [bool]$verified.Verified
+            }
+        }
+        if (@($state.MissingDirectories).Count -ne 1 -or
+            [string]$state.MissingDirectories[0] -cne 'system/ep3/maps') {
+            throw 'Layout repair state changed before mutation'
+        }
+
+        $created = [System.Collections.Generic.List[string]]::new()
+        try {
+            $current = $state.ReleaseRoot
+            foreach ($part in @(([string]$state.MissingDirectories[0]).Split('/'))) {
+                $next = Resolve-ContractRelativePath -Root $state.ReleaseRoot `
+                    -RelativePath ([System.IO.Path]::GetRelativePath(
+                            $state.ReleaseRoot, (Join-Path $current $part)).Replace('\', '/'))
+                if (Test-Path -LiteralPath $next) {
+                    Assert-ReparseFreeDirectory -Path $next `
+                        -Label 'required release directory ancestor' | Out-Null
+                } else {
+                    New-Item -ItemType Directory -Path $next -ErrorAction Stop | Out-Null
+                    $created.Add($next)
+                    Assert-ReparseFreeDirectory -Path $next `
+                        -Label 'created required release directory' | Out-Null
+                }
+                $current = $next
+            }
+            [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                    -Build $state.Contract -Root $state.ReleaseRoot)
+            $verified = Invoke-CombatCanaryVerify
+            [pscustomobject]@{
+                Action = 'RepairLayout'
+                Changed = $true
+                RequiredDirectory = [string]$state.MissingDirectories[0]
+                ReleaseRoot = $state.ReleaseRoot
+                Verified = [bool]$verified.Verified
+            }
+        } catch {
+            $repairError = $_
+            $rollbackFailed = $false
+            for ($index = $created.Count - 1; $index -ge 0; $index--) {
+                try {
+                    $createdPath = Assert-ReparseFreeDirectory `
+                        -Path $created[$index] -Label 'layout-repair rollback directory'
+                    if (@(Get-ChildItem -Force -LiteralPath $createdPath `
+                                -ErrorAction Stop).Count -ne 0) {
+                        throw 'Created layout-repair directory is no longer empty'
+                    }
+                    [System.IO.Directory]::Delete($createdPath, $false)
+                } catch {
+                    $rollbackFailed = $true
+                    break
+                }
+            }
+            if ($rollbackFailed) {
+                throw 'Layout repair failed and safe rollback could not be proven; evidence was retained'
+            }
+            throw $repairError
+        }
+    } finally {
+        Exit-CombatCanaryBuildBoundary -Boundary $boundary
+    }
+}
+
 if ($MyInvocation.InvocationName -cne '.') {
     Assert-CanonicalRuntimeRoot | Out-Null
-    if ($Action -ceq 'Verify') {
-        Invoke-CombatCanaryVerify
-    } else {
-        Invoke-CombatCanaryBuild
+    switch ($Action) {
+        'Verify' { Invoke-CombatCanaryVerify }
+        'Build' { Invoke-CombatCanaryBuild }
+        'RepairLayout' { Invoke-CombatCanaryRepairLayout }
     }
 }

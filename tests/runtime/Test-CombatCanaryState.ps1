@@ -508,6 +508,10 @@ if ($buildHash -cne $ExpectedBuildSha256.ToLowerInvariant()) {
             "synthetic combat-canary transaction fixture`n"))
     Copy-Item -LiteralPath $ConfigurationSourcePath `
         -Destination (Join-Path $serverSystem 'config.json')
+    $requiredDirectoryRelativePath = 'system/ep3/maps'
+    $requiredDirectoryPath = Join-Path $serverBase (
+        $requiredDirectoryRelativePath.Replace('/', '\'))
+    New-Item -ItemType Directory -Path $requiredDirectoryPath -Force | Out-Null
 
     $releaseEntries = @(Get-PSOBBDirectoryManifest -Root $serverBase |
         Where-Object { [string]$_.path -cne 'release-manifest.json' })
@@ -609,6 +613,7 @@ if ($buildHash -cne $ExpectedBuildSha256.ToLowerInvariant()) {
         ReleaseManifestPath = $releaseManifestPath
         ReleaseFiles = $releaseEntries.Count
         ReleaseBytes = [int64]$trackedBuild.output.totalBytes
+        RequiredDirectoryRelativePath = $requiredDirectoryRelativePath
     }
 }
 
@@ -3315,6 +3320,110 @@ try {
         [bool]$initialized.Initialized -and [bool]$initialized.Changed -and
         [bool]$idempotent.Initialized -and -not [bool]$idempotent.Changed -and
         [bool]$installedBeforeMutation.Valid) 'changed=true then changed=false'
+    $installedRequiredDirectory = Join-Path $canary.Server (
+        ([string]$syntheticHarness.RequiredDirectoryRelativePath).Replace('/', '\'))
+    Add-Result 'Initialize preserves the exact empty required release directory' (
+        (Test-Path -LiteralPath $installedRequiredDirectory -PathType Container) -and
+        @(Get-ChildItem -Force -LiteralPath $installedRequiredDirectory).Count -eq 0) `
+        ([string]$syntheticHarness.RequiredDirectoryRelativePath)
+    try {
+        [System.IO.Directory]::Delete($installedRequiredDirectory, $false)
+        Assert-Rejected -Name `
+            'Installed verification rejects the missing required release directory' `
+            -Action {
+                & (Join-Path $transactionScriptsRoot `
+                        'Test-PSOBBCombatCanary.ps1') `
+                    -RuntimeRoot $layout.Root -Target Installed `
+                    -SnapshotPath $created.SnapshotPath `
+                    -ExpectedBuildContractSha256 $buildContractHash `
+                    -ExpectedTwillsContractSha256 $contractHash `
+                    -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+            }
+    } finally {
+        New-Item -ItemType Directory -Path $installedRequiredDirectory | Out-Null
+        Set-PSOBBProtectedAcl -Path $installedRequiredDirectory
+    }
+    $requiredDirectoryWrongTypeRejected = $false
+    try {
+        [System.IO.Directory]::Delete($installedRequiredDirectory, $false)
+        [System.IO.File]::WriteAllBytes(
+            $installedRequiredDirectory, [byte[]]@(0))
+        Set-PSOBBProtectedAcl -Path $installedRequiredDirectory
+        try {
+            & (Join-Path $transactionScriptsRoot `
+                    'Test-PSOBBCombatCanary.ps1') `
+                -RuntimeRoot $layout.Root -Target Installed `
+                -SnapshotPath $created.SnapshotPath `
+                -ExpectedBuildContractSha256 $buildContractHash `
+                -ExpectedTwillsContractSha256 $contractHash `
+                -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint |
+                Out-Null
+        } catch {
+            $requiredDirectoryWrongTypeRejected = $true
+        }
+    } finally {
+        if (Test-Path -LiteralPath $installedRequiredDirectory -PathType Leaf) {
+            [System.IO.File]::Delete($installedRequiredDirectory)
+        }
+        New-Item -ItemType Directory -Path $installedRequiredDirectory | Out-Null
+        Set-PSOBBProtectedAcl -Path $installedRequiredDirectory
+    }
+    Add-Result 'Installed verification rejects a required directory with the wrong type' `
+        $requiredDirectoryWrongTypeRejected 'contract requires one ordinary directory'
+    $installedRequiredDirectoryPayload = Join-Path `
+        $installedRequiredDirectory 'unexpected.bin'
+    try {
+        [System.IO.File]::WriteAllBytes(
+            $installedRequiredDirectoryPayload, [byte[]]@(0))
+        Set-PSOBBProtectedAcl -Path $installedRequiredDirectoryPayload
+        Assert-Rejected -Name `
+            'Installed verification rejects a nonempty required release directory' `
+            -Action {
+                & (Join-Path $transactionScriptsRoot `
+                        'Test-PSOBBCombatCanary.ps1') `
+                    -RuntimeRoot $layout.Root -Target Installed `
+                    -SnapshotPath $created.SnapshotPath `
+                    -ExpectedBuildContractSha256 $buildContractHash `
+                    -ExpectedTwillsContractSha256 $contractHash `
+                    -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+            }
+    } finally {
+        if (Test-Path -LiteralPath $installedRequiredDirectoryPayload `
+                -PathType Leaf) {
+            [System.IO.File]::Delete($installedRequiredDirectoryPayload)
+        }
+    }
+    $requiredDirectoryReparseTarget = Join-Path $temporaryRoot `
+        'installed-required-directory-reparse-target'
+    New-Item -ItemType Directory -Path $requiredDirectoryReparseTarget | Out-Null
+    try {
+        [System.IO.Directory]::Delete($installedRequiredDirectory, $false)
+        New-Item -ItemType Junction -Path $installedRequiredDirectory `
+            -Target $requiredDirectoryReparseTarget | Out-Null
+        Assert-Rejected -Name `
+            'Installed verification rejects a reparsed required release directory' `
+            -Action {
+                & (Join-Path $transactionScriptsRoot `
+                        'Test-PSOBBCombatCanary.ps1') `
+                    -RuntimeRoot $layout.Root -Target Installed `
+                    -SnapshotPath $created.SnapshotPath `
+                    -ExpectedBuildContractSha256 $buildContractHash `
+                    -ExpectedTwillsContractSha256 $contractHash `
+                    -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+            }
+    } finally {
+        if (Test-Path -LiteralPath $installedRequiredDirectory) {
+            $requiredDirectoryItem = Get-Item -Force `
+                -LiteralPath $installedRequiredDirectory
+            if (($requiredDirectoryItem.Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                [System.IO.Directory]::Delete(
+                    $installedRequiredDirectory, $false)
+            }
+        }
+        New-Item -ItemType Directory -Path $installedRequiredDirectory | Out-Null
+        Set-PSOBBProtectedAcl -Path $installedRequiredDirectory
+    }
     $initializedControlValid = $false
     try {
         [void](Assert-PSOBBLifecyclePathAcl `

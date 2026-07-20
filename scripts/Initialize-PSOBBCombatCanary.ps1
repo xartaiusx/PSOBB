@@ -325,6 +325,8 @@ function Get-PSOBBCombatInitializeBuild {
     [void](Assert-PSOBBCombatInitializeOrdinaryTree `
             -Path $Layout.ServerBase -Root $Layout.EnvironmentRoot `
             -Label 'Combat-canary server base')
+    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $build -Root $Layout.ServerBase)
     $manifestPath = Join-Path $Layout.ServerBase 'release-manifest.json'
     $manifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
         -LiteralPath $manifestPath -Root $Layout.ServerBase `
@@ -714,6 +716,8 @@ try {
         Copy-PSOBBCombatInitializeTree `
             -Source $layout.ServerBase -Destination $stageServer `
             -DestinationRoot $stageRoot
+        [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                -Build $build.Value -Root $stageServer)
         Copy-PSOBBCombatInitializeTree `
             -Source $stableLayout.BaseClient -Destination $stageBaseClient `
             -DestinationRoot $stageRoot

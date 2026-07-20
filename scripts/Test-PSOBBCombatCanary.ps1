@@ -694,6 +694,8 @@ function Get-PSOBBCombatCanaryInstallation {
     [void](Assert-PSOBBCombatCanaryOrdinaryTree `
             -Path $Layout.ServerBase -Root $Layout.EnvironmentRoot `
             -Label 'Combat-canary server base')
+    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $build -Root $Layout.ServerBase)
     $releaseManifestPath = Assert-PathWithinRoot `
         -Path (Join-Path $Layout.ServerBase 'release-manifest.json') `
         -Root $Layout.ServerBase
@@ -809,6 +811,8 @@ function Get-PSOBBCombatCanaryInstallation {
     [void](Assert-PSOBBCombatCanaryOrdinaryTree `
             -Path $Layout.Server -Root $Layout.EnvironmentRoot `
             -Label 'Mutable combat-canary server')
+    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+            -Build $build -Root $Layout.Server)
     $expectedMutableEntries = @(
         @($releaseEntries | Where-Object {
                 -not (Test-PSOBBCombatCanaryVerifierMutableServerExemptPath `

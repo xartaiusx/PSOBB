@@ -2099,7 +2099,8 @@ function Assert-PSOBBCombatCanaryBuildContractShape {
         [void](Assert-PSOBBCombatCanaryExactProperties -Value $Build.output `
                 -RoleLabel 'combat-canary build output' `
                 -Expected @('rootRelative', 'executable', 'releaseManifest',
-                    'fileCount', 'totalBytes', 'versionOutput', 'runtimeImports'))
+                    'requiredDirectories', 'fileCount', 'totalBytes',
+                    'versionOutput', 'runtimeImports'))
         [void](Assert-PSOBBCombatCanaryExactProperties `
                 -Value $Build.output.executable `
                 -RoleLabel 'combat-canary executable output' `
@@ -2108,7 +2109,11 @@ function Assert-PSOBBCombatCanaryBuildContractShape {
                 -Value $Build.output.releaseManifest `
                 -RoleLabel 'combat-canary release manifest output' `
                 -Expected @('path', 'size', 'sha256', 'authenticode'))
-        if ($Build.output.runtimeImports -isnot [System.Array]) { throw $invalid }
+        if ($Build.output.requiredDirectories -isnot [System.Array] -or
+            @($Build.output.requiredDirectories).Count -ne 1 -or
+            $Build.output.runtimeImports -isnot [System.Array]) {
+            throw $invalid
+        }
         $true
     } catch {
         throw $invalid
@@ -2150,6 +2155,8 @@ function Assert-PSOBBCombatCanaryBuildContractIdentity {
         [long]$Build.output.releaseManifest.size -le 0 -or
         [string]$Build.output.releaseManifest.authenticode -cne
             'NotApplicable' -or
+        [string]$Build.output.requiredDirectories[0] -cne
+            'system/ep3/maps' -or
         $Build.output.fileCount -isnot [long] -or
         [long]$Build.output.fileCount -le 0 -or
         $Build.output.totalBytes -isnot [long] -or
@@ -2175,6 +2182,65 @@ function Assert-PSOBBCombatCanaryBuildContractIdentity {
         throw 'The combat-canary build contract has an invalid fixed identity'
     }
     $true
+}
+
+function Assert-PSOBBCombatCanaryRequiredReleaseDirectories {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Build,
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$AllowMissing
+    )
+
+    [void](Assert-PSOBBCombatCanaryBuildContractIdentity -Build $Build)
+    $safeRoot = [System.IO.Path]::TrimEndingDirectorySeparator(
+        [System.IO.Path]::GetFullPath($Root))
+    $rootItem = Get-Item -Force -LiteralPath $safeRoot -ErrorAction Stop
+    if (-not $rootItem.PSIsContainer -or
+        ($rootItem.Attributes -band
+            [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace([string]$rootItem.LinkType)) {
+        throw 'The combat-canary release root is not an ordinary directory'
+    }
+
+    $resolved = [System.Collections.Generic.List[string]]::new()
+    $missing = [System.Collections.Generic.List[string]]::new()
+    foreach ($relative in @($Build.output.requiredDirectories)) {
+        $current = $safeRoot
+        $pathMissing = $false
+        foreach ($part in @(([string]$relative).Split('/'))) {
+            $current = Assert-PathWithinRoot `
+                -Path (Join-Path $current $part) -Root $safeRoot
+            if (-not (Test-Path -LiteralPath $current)) {
+                $pathMissing = $true
+                break
+            }
+            $item = Get-Item -Force -LiteralPath $current -ErrorAction Stop
+            if (-not $item.PSIsContainer -or
+                ($item.Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
+                throw "Required combat-canary release directory is not ordinary: $relative"
+            }
+        }
+        if ($pathMissing) {
+            if (-not $AllowMissing.IsPresent) {
+                throw "Required combat-canary release directory is missing: $relative"
+            }
+            $missing.Add([string]$relative)
+            continue
+        }
+        if (@(Get-ChildItem -Force -LiteralPath $current `
+                    -ErrorAction Stop).Count -ne 0) {
+            throw "Required combat-canary release directory is not empty: $relative"
+        }
+        $resolved.Add($current)
+    }
+
+    [pscustomobject]@{
+        RequiredDirectories = @($resolved)
+        MissingDirectories = @($missing)
+    }
 }
 
 function Get-PSOBBCombatCanaryStrictRuntimeMarker {
