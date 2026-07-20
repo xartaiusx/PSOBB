@@ -9,6 +9,17 @@ param(
     [Parameter(DontShow = $true)][scriptblock]$InternalTestHook
 )
 
+$script:MigrationInternalTestRequested = $false
+foreach ($parameterName in @(
+        'InternalTestSourcesLockPath', 'InternalTestPolicyPath',
+        'InternalTestFaultPoints', 'InternalTestFaultToken',
+        'InternalTestHookPoint', 'InternalTestHook')) {
+    if ($PSBoundParameters.ContainsKey($parameterName)) {
+        $script:MigrationInternalTestRequested = $true
+        break
+    }
+}
+
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 . (Join-Path $PSScriptRoot 'PSOBB.CombatCanary.Common.ps1')
 
@@ -168,9 +179,7 @@ function Read-MigrationTransactionMarker(
 }
 
 function Assert-MigrationInternalTestGate($Layout, $Marker) {
-    $requested = $InternalTestSourcesLockPath -or $InternalTestPolicyPath -or
-        @($InternalTestFaultPoints).Count -gt 0 -or $InternalTestHookPoint -or
-        $null -ne $InternalTestHook -or $InternalTestFaultToken
+    $requested = $script:MigrationInternalTestRequested
     if (-not $requested) { return $true }
     $root = [System.IO.Path]::GetFullPath([string]$Layout.Root).TrimEnd('\')
     $temporaryRoot = [System.IO.Path]::GetFullPath(

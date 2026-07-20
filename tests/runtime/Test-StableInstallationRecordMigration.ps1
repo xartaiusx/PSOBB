@@ -314,6 +314,69 @@ try {
         $source -notmatch '(?im)^\s*Stop-Process\b') `
         'known input only; both lifecycle locks; no process termination'
 
+    $omittedHiddenPassed = $true
+    $omittedHiddenDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($mode in @('call-operator', 'file-process')) {
+        $fixture = New-TestFixture
+        $beforeHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $beforeInventory = @(Get-ChildItem -Recurse -Force `
+            -LiteralPath $fixture.Layout.Root |
+            ForEach-Object FullName | Sort-Object)
+        $message = ''
+        $failedAfterGate = $false
+        if ($mode -ceq 'call-operator') {
+            try {
+                & $migrationScript -RuntimeRoot $fixture.Layout.Root `
+                    -WhatIf | Out-Null
+            } catch {
+                $failedAfterGate = $true
+                $message = $_.Exception.Message
+            }
+        } else {
+            $pwshPath = (Get-Process -Id $PID).Path
+            $childOutput = @(& $pwshPath -NoLogo -NoProfile `
+                    -ExecutionPolicy Bypass -File $migrationScript `
+                    -RuntimeRoot $fixture.Layout.Root -WhatIf 2>&1 |
+                ForEach-Object { [string]$_ })
+            $failedAfterGate = $LASTEXITCODE -ne 0
+            $message = $childOutput -join "`n"
+        }
+        $afterInventory = @(Get-ChildItem -Recurse -Force `
+            -LiteralPath $fixture.Layout.Root |
+            ForEach-Object FullName | Sort-Object)
+        $passed = $failedAfterGate -and
+            $message -notmatch [regex]::Escape(
+                'Internal migration controls require one exact protected temporary fixture') -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $beforeHash -and
+            @(Compare-Object $beforeInventory $afterInventory).Count -eq 0 -and
+            -not (Test-Path -LiteralPath $fixture.TransactionRoot)
+        $omittedHiddenPassed = $omittedHiddenPassed -and $passed
+        $omittedHiddenDetails.Add("$mode=$passed")
+    }
+    Add-Result 'omitted hidden controls do not arm migration test mode' (
+        $omittedHiddenPassed) ($omittedHiddenDetails -join '; ')
+
+    $explicitNull = New-TestFixture
+    $explicitNullBefore = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $explicitNull.Layout.InstallRecord).Hash
+    $explicitNullRejected = $false
+    try {
+        & $migrationScript -RuntimeRoot $explicitNull.Layout.Root `
+            -InternalTestFaultPoints $null -WhatIf | Out-Null
+    } catch {
+        $explicitNullRejected = $_.Exception.Message -match
+            'Internal migration controls require one exact protected temporary fixture'
+    }
+    Add-Result 'explicit-null hidden control remains fail-closed' (
+        $explicitNullRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $explicitNull.Layout.InstallRecord).Hash -ceq
+                $explicitNullBefore -and
+        -not (Test-Path -LiteralPath $explicitNull.TransactionRoot)) `
+        'script-scope bound-parameter presence controls the hidden test gate'
+
     $whatIf = New-TestFixture
     $beforeBytes = [System.IO.File]::ReadAllBytes(
         $whatIf.Layout.InstallRecord)
