@@ -462,3 +462,47 @@ Each entry records:
   optimization and does not weaken the live gate.
 - Rollback: no runtime rollback is required. Revert `c38d0a6` locally only if
   this verifier implementation must be withdrawn.
+
+## 2026-07-20 / combat-canary-native-parity-scenario-v1
+
+- Feature/profile: isolated Stable-derived CombatCanary using the Native
+  `baseline` client profile; no Gameplay module or combat enhancement was
+  published or enabled
+- Outcome: the active Forest scenario and post-save semantic integrity gate
+  passed. Exact restoration, restart/relog, and the canonical non-destructive
+  smoke remain pending and are not accepted by this entry.
+- Scenario: slot-0 Twills FOnewearl only; 2026-07-20T19:49:42.1900419Z through
+  2026-07-20T19:54:47.1546148Z; 304.965 active seconds with 58 bounded samples
+- Gameplay result: the operator confirmed native Normal, Heavy, and Special
+  attacks, techniques, movement fluidity, and the on-screen fluid action. The
+  client remained responsive, all three exact loopback listeners remained
+  present, and one exact client game connection was observed throughout.
+- Lifecycle result: the client exited normally. The server then stopped through
+  its authenticated shell-exit protocol with no force action; server,
+  supervisor, client, and reserved listeners were absent afterward.
+- Lifecycle correction: the first combined stopped-client/server cleanup
+  exposed an empty-client-census strict-mode defect. Commit `7bfbfc3` makes the
+  census helper accept an empty array while still rejecting null or malformed
+  records. Lifecycle tests passed 63/63 and CombatCanary lifecycle tests passed
+  32/32; a real stopped-runtime retry returned `not-running` for both targets.
+- Post-save state result: the sealed and saved character each passed all 11
+  Twills build checks with the exact 57-item ownership contract; the sealed and
+  saved authoritative bank each contained the exact 29-item contract and had
+  the same SHA-256. Both license files, card, system, team, and bank were
+  byte-exact.
+- Bounded character delta: both files remained 14,748 bytes. The sealed
+  character SHA-256 was
+  `d092108a0d8cde09e6c1177947b1c2d5290cca5e2b108f8aabd83731aa9802d5`;
+  the saved SHA-256 was
+  `35e2bcd1ffcf9ad1dd9bb28dd9bc7b985dc3e667350f7c6e8949343a3c46d53c`.
+  All 31 changed bytes were confined to 28 transient inventory item-ID
+  namespace bytes, the four-byte play-time field with two changed bytes, and
+  one Choice Search configuration byte. No descriptor, stack, equipment,
+  technique, MAG, bank-ownership, or unrelated protected-state byte changed.
+- Limitation: the visual fluid action did not produce a persisted stack delta.
+  Consumable save/relog persistence and no-double-consumption are therefore
+  unverified and must receive a controlled item-only scenario before item
+  quick-use work. This does not block the observation-only action probe.
+- Rollback: restore only through `Reset-PSOBBCombatCanaryState.ps1` from sealed
+  snapshot ID `dda85ff8-9c23-497d-b3b4-285efe6781ad`, then require exact
+  `Target Both` readback before another candidate.
