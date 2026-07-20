@@ -1683,6 +1683,34 @@ try {
                     -Text $resourceProbe.Text -RoleLabel $resourceProbe.Role
             }
     }
+    $stableManifestPolicy = Get-PSOBBCombatCanaryJsonResourcePolicy `
+        -RoleLabel 'Stable server base manifest'
+    Add-Result 'Stable server-base manifest has a bounded dedicated budget' (
+        [int]$stableManifestPolicy.MaximumCharacters -eq 4MB -and
+        [int]$stableManifestPolicy.MaximumTokens -eq 262144 -and
+        [int]$stableManifestPolicy.MaximumProperties -eq 65536 -and
+        [int]$stableManifestPolicy.MaximumItems -eq 65536 -and
+        [int]$stableManifestPolicy.MaximumDepth -eq 32 -and
+        [int64]$stableManifestPolicy.MaximumNormalizedWork -eq 16MB) `
+        "characters=$($stableManifestPolicy.MaximumCharacters)"
+    $stableManifestText = (' ' * (1MB + 1)) +
+        '{"schemaVersion":1,"sourceArchiveSha256":"' + ('a' * 64) +
+        '","generatedAtUtc":"2026-07-20T00:00:00Z","files":[]}'
+    $stableManifestJson = Read-PSOBBCombatCanaryStrictJsonObject `
+        -Text $stableManifestText -RoleLabel 'Stable server base manifest'
+    Add-Result 'strict JSON accepts a representative over-1MiB Stable manifest' (
+        $stableManifestText.Length -gt 1MB -and
+        [int]$stableManifestJson['schemaVersion'] -eq 1 -and
+        $stableManifestJson['files'].Count -eq 0) `
+        "characters=$($stableManifestText.Length)"
+    $stableManifestText = $null
+    $stableManifestJson = $null
+    Assert-Rejected -Name 'Stable server-base manifest budget remains bounded' `
+        -Action {
+            Read-PSOBBCombatCanaryStrictJsonObject `
+                -Text ('{"value":"' + ('x' * (4MB)) + '"}') `
+                -RoleLabel 'Stable server base manifest'
+        }
     $normalizedPolicy = Get-PSOBBCombatCanaryJsonResourcePolicy `
         -RoleLabel 'snapshot manifest'
     foreach ($budgetProbe in @(

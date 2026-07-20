@@ -1221,6 +1221,16 @@ function Get-PSOBBCombatCanaryJsonResourcePolicy {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$RoleLabel)
 
+    if ($RoleLabel -ceq 'Stable server base manifest') {
+        return [pscustomobject]@{
+            MaximumCharacters = 4MB
+            MaximumTokens = 262144
+            MaximumProperties = 65536
+            MaximumItems = 65536
+            MaximumDepth = 32
+            MaximumNormalizedWork = 16MB
+        }
+    }
     if ($RoleLabel -match '(?i)license|credential') {
         return [pscustomobject]@{
             MaximumCharacters = 256KB
