@@ -623,10 +623,10 @@ function Get-PSOBBCombatInitializeStableShadowBuild {
         -LiteralPath $serverBaseManifestPath `
         -Root $StableLayout.EnvironmentRoot -MaximumBytes 16MB `
         -ExpectedSha256 ([string]$install.serverBaseManifestSha256) `
-        -RoleLabel 'Stable server-base manifest' -PassThruSnapshot
+        -RoleLabel 'Stable server base manifest' -PassThruSnapshot
     $baseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
         -JsonObject $baseSnapshot.Value `
-        -RoleLabel 'Stable server-base manifest'
+        -RoleLabel 'Stable server base manifest'
     if ([int]$baseManifest.schemaVersion -ne 1 -or
         [string]$baseManifest.sourceArchiveSha256 -cne
             [string]$contract.source.serverArchiveSha256 -or

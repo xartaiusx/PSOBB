@@ -1693,6 +1693,17 @@ try {
         [int]$stableManifestPolicy.MaximumDepth -eq 32 -and
         [int64]$stableManifestPolicy.MaximumNormalizedWork -eq 16MB) `
         "characters=$($stableManifestPolicy.MaximumCharacters)"
+    $initializerText = Get-Content -Raw -LiteralPath (
+        Join-Path $scriptsRoot 'Initialize-PSOBBCombatCanary.ps1')
+    Add-Result 'initializer uses the canonical Stable manifest role' (
+        ([regex]::Matches(
+                $initializerText,
+                "-RoleLabel 'Stable server base manifest'",
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ).Count -eq 2) -and
+        $initializerText.IndexOf(
+            "-RoleLabel 'Stable server-base manifest'",
+            [StringComparison]::Ordinal) -lt 0) 'canonical exact role used twice'
     $stableManifestText = (' ' * (1MB + 1)) +
         '{"schemaVersion":1,"sourceArchiveSha256":"' + ('a' * 64) +
         '","generatedAtUtc":"2026-07-20T00:00:00Z","files":[]}'
