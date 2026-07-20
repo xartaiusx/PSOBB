@@ -244,6 +244,26 @@ try {
 }
 
 $initializerSource = Get-Content -Raw -LiteralPath $initializerPath
+$stageCleanupPolicy = Get-PSOBBCombatCanaryTransactionCleanupPolicy `
+    -Purpose 'initialize-stage'
+$rollbackCleanupPolicy = Get-PSOBBCombatCanaryTransactionCleanupPolicy `
+    -Purpose 'initialize-rollback'
+$defaultCleanupPolicy = Get-PSOBBCombatCanaryTransactionCleanupPolicy `
+    -Purpose 'snapshot-stage'
+Add-Result 'StableShadow transaction cleanup remains purpose-bounded' (
+    [int]$stageCleanupPolicy.MaximumEntries -eq 16384 -and
+    [long]$stageCleanupPolicy.MaximumAggregateBytes -eq 1GB -and
+    [int]$rollbackCleanupPolicy.MaximumEntries -eq 16384 -and
+    [long]$rollbackCleanupPolicy.MaximumAggregateBytes -eq 1GB -and
+    [int]$defaultCleanupPolicy.MaximumEntries -eq 4096 -and
+    [long]$defaultCleanupPolicy.MaximumAggregateBytes -eq 256MB) `
+    'initialize stage/rollback fit two retail trees; other purposes retain narrow limits'
+Add-Result 'initializer preserves cleanup and original failures' (
+    $initializerSource.Contains(
+        'Combat-canary initialization cleanup retained evidence.') -and
+    $initializerSource.Contains('Cleanup errors: ') -and
+    $initializerSource.Contains('. Original error: ')) `
+    'cleanup failures retain their exact cause without masking the staging failure'
 $shouldProcessIndex = $initializerSource.IndexOf(
     '$PSCmdlet.ShouldProcess(', [StringComparison]::Ordinal)
 $firstFullVerificationIndex = $initializerSource.IndexOf(

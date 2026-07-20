@@ -1184,6 +1184,7 @@ try {
         -Root $layout.EnvironmentRoot
     $processed = [System.Collections.Generic.List[object]]::new()
     $completed = $false
+    $failure = $null
     $stageTransaction = $null
     $rollbackTransaction = $null
     try {
@@ -1650,6 +1651,7 @@ try {
         }
         throw $failure
     } finally {
+        $cleanupErrors = [System.Collections.Generic.List[string]]::new()
         if (Test-Path -LiteralPath $stageRoot) {
             try {
                 if ($null -eq $stageTransaction) {
@@ -1659,7 +1661,8 @@ try {
                     -Transaction $stageTransaction `
                     -RoleLabel 'combat-canary initialization staging cleanup'
             } catch {
-                throw 'Combat-canary initialization staging cleanup retained identity-mismatched evidence'
+                $cleanupErrors.Add(
+                    'staging: ' + [string]$_.Exception.Message)
             }
         }
         if (Test-Path -LiteralPath $rollbackRoot) {
@@ -1671,8 +1674,19 @@ try {
                     -Transaction $rollbackTransaction `
                     -RoleLabel 'combat-canary initialization rollback cleanup'
             } catch {
-                throw 'Combat-canary initialization rollback cleanup retained identity-mismatched evidence'
+                $cleanupErrors.Add(
+                    'rollback: ' + [string]$_.Exception.Message)
             }
+        }
+        if ($cleanupErrors.Count -ne 0) {
+            $cleanupMessage =
+                'Combat-canary initialization cleanup retained evidence. ' +
+                'Cleanup errors: ' + ($cleanupErrors -join '; ')
+            if ($null -ne $failure) {
+                $cleanupMessage += '. Original error: ' +
+                    [string]$failure.Exception.Message
+            }
+            throw $cleanupMessage
         }
     }
 } finally {

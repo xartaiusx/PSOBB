@@ -985,6 +985,10 @@ function Remove-PSOBBCombatCanaryOwnedTree {
         [Parameter(Mandatory)][uint32]$ExpectedVolumeSerialNumber,
         [Parameter(Mandatory)][uint64]$ExpectedFileId,
         [Parameter(Mandatory)][string]$RoleLabel,
+        [ValidateRange(1, 65536)]
+        [int]$MaximumEntries = 4096,
+        [ValidateRange(1, 4294967296)]
+        [long]$MaximumAggregateBytes = 256MB,
         $Transaction
     )
 
@@ -1038,7 +1042,7 @@ function Remove-PSOBBCombatCanaryOwnedTree {
             foreach ($child in @(Get-ChildItem -Force -LiteralPath $directory `
                         -ErrorAction Stop)) {
                 $entries++
-                if ($entries -gt 4096) {
+                if ($entries -gt $MaximumEntries) {
                     throw "The $RoleLabel cleanup inventory exceeds its count bound"
                 }
                 $childPath = Assert-PathWithinRoot `
@@ -1063,7 +1067,7 @@ function Remove-PSOBBCombatCanaryOwnedTree {
                             throw "The $RoleLabel cleanup aggregate overflowed"
                         }
                         $aggregate += [uint64]$identity.Length
-                        if ($aggregate -gt 256MB) {
+                        if ($aggregate -gt [uint64]$MaximumAggregateBytes) {
                             throw "The $RoleLabel cleanup aggregate exceeds its bound"
                         }
                     }
@@ -1122,6 +1126,26 @@ function Remove-PSOBBCombatCanaryOwnedTree {
     }
 }
 
+function Get-PSOBBCombatCanaryTransactionCleanupPolicy {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-z][a-z0-9-]{2,63}$')]
+        [string]$Purpose
+    )
+
+    if ($Purpose -in @('initialize-stage', 'initialize-rollback')) {
+        return [pscustomobject]@{
+            MaximumEntries = 16384
+            MaximumAggregateBytes = [long]1GB
+        }
+    }
+    [pscustomobject]@{
+        MaximumEntries = 4096
+        MaximumAggregateBytes = [long]256MB
+    }
+}
+
 function Remove-PSOBBCombatCanaryTransactionTree {
     [CmdletBinding()]
     param(
@@ -1129,10 +1153,14 @@ function Remove-PSOBBCombatCanaryTransactionTree {
         [Parameter(Mandatory)][string]$RoleLabel
     )
 
+    $policy = Get-PSOBBCombatCanaryTransactionCleanupPolicy `
+        -Purpose ([string]$Transaction.Purpose)
     Remove-PSOBBCombatCanaryOwnedTree `
         -Path $Transaction.Path -Root $Transaction.Root `
         -ExpectedVolumeSerialNumber $Transaction.VolumeSerialNumber `
         -ExpectedFileId $Transaction.FileId -RoleLabel $RoleLabel `
+        -MaximumEntries ([int]$policy.MaximumEntries) `
+        -MaximumAggregateBytes ([long]$policy.MaximumAggregateBytes) `
         -Transaction $Transaction
 }
 
