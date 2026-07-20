@@ -5,6 +5,9 @@ param(
     [Parameter(Mandatory)]
     [string]$SnapshotPath,
 
+    [ValidateSet('CurrentUpstream', 'StableShadow')]
+    [string]$ServerArtifact = 'CurrentUpstream',
+
     [ValidatePattern('^[a-fA-F0-9]{64}$')]
     [string]$ExpectedBuildContractSha256,
 
@@ -15,7 +18,7 @@ param(
     [string]$ExpectedSigningPublicKeySpkiSha256,
 
     [Parameter(DontShow = $true)]
-    [ValidateRange(0, 11)]
+    [ValidateRange(0, 12)]
     [int]$InternalTestFailAfterSwap = 0,
 
     [Parameter(DontShow = $true)]
@@ -25,7 +28,7 @@ param(
     [switch]$InternalTestLeaveCompensationIncomplete,
 
     [Parameter(DontShow = $true)]
-    [ValidateRange(0, 11)]
+    [ValidateRange(0, 12)]
     [int]$InternalTestCreateUnexpectedTargetBeforeSwap = 0,
 
     [Parameter(DontShow = $true)]
@@ -301,6 +304,124 @@ function Copy-PSOBBCombatInitializeTree {
     }
 }
 
+function Publish-PSOBBCombatInitializeTarget {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)][string]$StageRoot,
+        [Parameter(Mandatory)][string]$RollbackRoot,
+        [Parameter(Mandatory)][string]$EnvironmentRoot,
+        [Parameter(Mandatory)][bool]$Replacement,
+        [Parameter(Mandatory)][AllowEmptyCollection()]
+        [System.Collections.Generic.List[object]]$Processed
+    )
+
+    $stagedItem = Get-Item -Force -LiteralPath $Target.Staged `
+        -ErrorAction Stop
+    $stagedIsDirectory = [bool]$stagedItem.PSIsContainer
+    $stagedIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $Target.Staged -Root $StageRoot `
+        -Directory $stagedIsDirectory `
+        -RoleLabel ("staged initialization target '$($Target.Name)'")
+    $hasCurrent = Test-Path -LiteralPath $Target.Current
+    if ($Replacement -and -not $hasCurrent) {
+        throw "The existing combat-canary target '$($Target.Name)' disappeared before replacement"
+    }
+    if (-not $Replacement -and $hasCurrent) {
+        throw 'First combat-canary initialization detected an unexpected target before publication'
+    }
+    $record = [pscustomobject]@{
+        Item = $Target
+        HadCurrent = $hasCurrent
+        OldMoved = $false
+        NewPublished = $false
+        NeedsCompensation = $false
+        Directory = $stagedIsDirectory
+        VolumeSerialNumber = [uint32]$stagedIdentity.VolumeSerialNumber
+        FileId = [uint64]$stagedIdentity.FileId
+        OldDirectory = $false
+        OldVolumeSerialNumber = [uint32]0
+        OldFileId = [uint64]0
+    }
+    $Processed.Add($record)
+    if ($hasCurrent) {
+        $currentItem = Get-Item -Force -LiteralPath $Target.Current `
+            -ErrorAction Stop
+        if ([bool]$currentItem.PSIsContainer -ne $stagedIsDirectory) {
+            throw "The existing combat-canary target '$($Target.Name)' has the wrong type"
+        }
+        $oldIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $Target.Current -Root $EnvironmentRoot `
+            -Directory $stagedIsDirectory `
+            -RoleLabel ("existing initialization target '$($Target.Name)'")
+        $record.OldDirectory = $stagedIsDirectory
+        $record.OldVolumeSerialNumber = [uint32]$oldIdentity.VolumeSerialNumber
+        $record.OldFileId = [uint64]$oldIdentity.FileId
+        Move-PSOBBCombatInitializeNoClobber `
+            -Source $Target.Current -Destination $Target.Rollback `
+            -Label ("$($Target.Name) rollback")
+        $record.OldMoved = $true
+        $record.NeedsCompensation = $true
+        $rollbackIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $Target.Rollback -Root $RollbackRoot `
+            -Directory $record.OldDirectory `
+            -RoleLabel ("rollback initialization target '$($Target.Name)'")
+        if ([uint32]$rollbackIdentity.VolumeSerialNumber -ne
+                $record.OldVolumeSerialNumber -or
+            [uint64]$rollbackIdentity.FileId -ne $record.OldFileId) {
+            throw "Initialization target '$($Target.Name)' changed identity while entering rollback"
+        }
+    }
+    Move-PSOBBCombatInitializeNoClobber -Source $Target.Staged `
+        -Destination $Target.Current -Label $Target.Name
+    $record.NewPublished = $true
+    $record.NeedsCompensation = $true
+    $record
+}
+
+function Undo-PSOBBCombatInitializeTarget {
+    param(
+        [Parameter(Mandatory)]$Record,
+        [Parameter(Mandatory)][string]$EnvironmentRoot
+    )
+
+    if ($Record.NewPublished -and
+        (Test-Path -LiteralPath $Record.Item.Current)) {
+        if ([bool]$Record.Directory) {
+            Remove-PSOBBCombatCanaryOwnedTree `
+                -Path $Record.Item.Current -Root $EnvironmentRoot `
+                -ExpectedVolumeSerialNumber $Record.VolumeSerialNumber `
+                -ExpectedFileId $Record.FileId `
+                -RoleLabel ("initialization compensation '$($Record.Item.Name)'")
+        } else {
+            Remove-PSOBBCombatCanaryOwnedFile `
+                -Path $Record.Item.Current -Root $EnvironmentRoot `
+                -ExpectedVolumeSerialNumber $Record.VolumeSerialNumber `
+                -ExpectedFileId $Record.FileId `
+                -RoleLabel ("initialization compensation '$($Record.Item.Name)'")
+        }
+    }
+    if ($Record.HadCurrent -and $Record.OldMoved -and
+        (Test-Path -LiteralPath $Record.Item.Rollback)) {
+        Move-PSOBBCombatInitializeNoClobber `
+            -Source $Record.Item.Rollback `
+            -Destination $Record.Item.Current `
+            -Label $Record.Item.Name
+        $restoredIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+            -Path $Record.Item.Current -Root $EnvironmentRoot `
+            -Directory ([bool]$Record.OldDirectory) `
+            -RoleLabel ("restored initialization target '$($Record.Item.Name)'")
+        if ([uint32]$restoredIdentity.VolumeSerialNumber -ne
+                [uint32]$Record.OldVolumeSerialNumber -or
+            [uint64]$restoredIdentity.FileId -ne [uint64]$Record.OldFileId) {
+            throw "Initialization target '$($Record.Item.Name)' changed identity during compensation"
+        }
+        $Record.OldMoved = $false
+    }
+    $Record.NewPublished = $false
+    $Record.NeedsCompensation = $false
+    $true
+}
+
 function Get-PSOBBCombatInitializeBuild {
     param(
         [Parameter(Mandatory)]$Layout,
@@ -389,12 +510,257 @@ function Get-PSOBBCombatInitializeBuild {
         throw 'The server-base executable differs from the build contract'
     }
     [pscustomobject]@{
+        Artifact = 'CurrentUpstream'
+        ComponentId = 'newserv-combat-canary-build'
         Path = $path
         Hash = $hash
         Value = $build
         ManifestPath = $manifestPath
         ManifestHash = [string]$manifestSnapshot.Sha256
     }
+}
+
+function Get-PSOBBCombatInitializeStableShadowBuild {
+    param(
+        [Parameter(Mandatory)]$RootLayout,
+        [Parameter(Mandatory)]$StableLayout,
+        [string]$ExplicitHash
+    )
+
+    $expectedHash = if ([string]::IsNullOrWhiteSpace($ExplicitHash)) {
+        (Get-LowerSha256 (Join-Path $script:RepositoryRoot `
+                'config\combat-stable-shadow.json'))
+    } else {
+        $ExplicitHash.ToLowerInvariant()
+    }
+    $selection = Get-PSOBBCombatCanaryBuildContractSelection `
+        -RepositoryRoot $script:RepositoryRoot `
+        -ExpectedSha256 $expectedHash
+    if ([string]$selection.Artifact -cne 'StableShadow') {
+        throw 'The selected build contract is not StableShadow'
+    }
+    $contract = $selection.Value
+
+    $sourceLockPath = Join-Path $script:RepositoryRoot 'config\sources.lock.json'
+    $sourceLock = Get-Content -Raw -LiteralPath $sourceLockPath |
+        ConvertFrom-Json -Depth 30 -DateKind String
+    $serverComponents = @($sourceLock.components | Where-Object {
+            [string]$_.id -ceq [string]$contract.source.serverComponentId
+        })
+    $clientComponents = @($sourceLock.components | Where-Object {
+            [string]$_.id -ceq [string]$contract.source.clientComponentId
+        })
+    $serverMembers = if ($serverComponents.Count -eq 1) {
+        @($serverComponents[0].members | Where-Object {
+                [string]$_.path -ceq 'release/newserv-windows.exe'
+            })
+    } else { @() }
+    $clientMembers = if ($clientComponents.Count -eq 1) {
+        @($clientComponents[0].members | Where-Object {
+                [string]$_.path -ceq 'Psobb.exe'
+            })
+    } else { @() }
+    if ($serverComponents.Count -ne 1 -or $clientComponents.Count -ne 1 -or
+        $serverMembers.Count -ne 1 -or $clientMembers.Count -ne 1 -or
+        [string]$serverComponents[0].commit -cne
+            [string]$contract.source.serverCommit -or
+        [string]$serverComponents[0].sha256 -cne
+            [string]$contract.source.serverArchiveSha256 -or
+        [int64]$serverMembers[0].size -ne
+            [int64]$contract.source.serverExecutable.size -or
+        [string]$serverMembers[0].sha256 -cne
+            [string]$contract.source.serverExecutable.sha256) {
+        throw 'StableShadow does not match the tracked source lock'
+    }
+
+    $installSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $StableLayout.InstallRecord `
+        -Root $StableLayout.EnvironmentRoot -MaximumBytes 256KB `
+        -RoleLabel 'Stable installation record' -PassThruSnapshot
+    if (-not (Test-PSOBBProtectedAcl -Path $StableLayout.InstallRecord)) {
+        throw 'The Stable installation record is not protected'
+    }
+    $install = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $installSnapshot.Value -RoleLabel 'Stable installation record'
+    Assert-PSOBBCombatInitializeExactProperties -Value $install `
+        -Label 'Stable installation record' `
+        -Expected @('schemaVersion', 'installationId', 'initializedAtUtc',
+            'runtimeRoot', 'serverVersion', 'serverArchiveSha256',
+            'serverExecutableSha256', 'serverBaseManifestSha256',
+            'clientVersion', 'clientArchiveSha256',
+            'baseClientExecutableSha256', 'baseClientManifestSha256',
+            'clientExecutableSha256', 'rendererVersion',
+            'rendererArchiveSha256', 'rendererWrapperSha256',
+            'rendererConfigurationSha256', 'patchManifestSha256',
+            'synchronizedPatchFiles', 'clientPatchProfile',
+            'clientPatchPolicySha256', 'networkScope')
+    $marker = Get-PSOBBCombatCanaryStrictRuntimeMarker -Layout $RootLayout
+    if ([int]$install.schemaVersion -ne 2 -or
+        [string]$install.installationId -cne [string]$marker.installationId -or
+        [string]$install.runtimeRoot -cne [string]$RootLayout.Root -or
+        [string]$install.serverArchiveSha256 -cne
+            [string]$contract.source.serverArchiveSha256 -or
+        [string]$install.serverExecutableSha256 -cne
+            [string]$contract.source.serverExecutable.sha256 -or
+        [string]$install.clientArchiveSha256 -cne
+            [string]$clientComponents[0].sha256 -or
+        [string]$install.baseClientExecutableSha256 -cne
+            [string]$clientMembers[0].sha256 -or
+        [string]$install.baseClientManifestSha256 -cnotmatch
+            '^[a-f0-9]{64}$' -or
+        [int]$install.synchronizedPatchFiles -ne
+            [int]$contract.source.patchDataFileCount -or
+        [string]$install.clientPatchProfile -cne 'baseline' -or
+        [string]$install.networkScope -cne 'loopback-only') {
+        throw 'Stable is not the accepted StableShadow source'
+    }
+
+    $serverBaseManifestPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.serverBaseManifestRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    $baseSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $serverBaseManifestPath `
+        -Root $StableLayout.EnvironmentRoot -MaximumBytes 16MB `
+        -ExpectedSha256 ([string]$install.serverBaseManifestSha256) `
+        -RoleLabel 'Stable server-base manifest' -PassThruSnapshot
+    $baseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $baseSnapshot.Value `
+        -RoleLabel 'Stable server-base manifest'
+    if ([int]$baseManifest.schemaVersion -ne 1 -or
+        [string]$baseManifest.sourceArchiveSha256 -cne
+            [string]$contract.source.serverArchiveSha256 -or
+        -not (Test-PSOBBDirectoryManifest `
+            -Root (Split-Path -Parent $StableLayout.ServerBase) `
+            -Files @($baseManifest.files))) {
+        throw 'Stable server-base differs from its accepted release manifest'
+    }
+
+    $patchManifestPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.patchManifestRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    $patchSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $patchManifestPath -Root $StableLayout.EnvironmentRoot `
+        -MaximumBytes 4MB `
+        -ExpectedSha256 ([string]$install.patchManifestSha256) `
+        -RoleLabel 'Stable BB patch-data manifest' -PassThruSnapshot
+    $patchManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $patchSnapshot.Value `
+        -RoleLabel 'Stable BB patch-data manifest'
+    $patchDataPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.patchDataRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    if ([int]$patchManifest.schemaVersion -ne 1 -or
+        [string]$patchManifest.sourceClientArchiveSha256 -cne
+            [string]$clientComponents[0].sha256 -or
+        @($patchManifest.files).Count -ne
+            [int]$contract.source.patchDataFileCount -or
+        -not (Test-PSOBBDirectoryManifest `
+            -Root $patchDataPath -Files @($patchManifest.files))) {
+        throw 'Stable BB patch-data differs from its accepted manifest'
+    }
+
+    $releaseEntries = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($baseManifest.files)) {
+        $path = [string]$entry.path
+        if (-not $path.StartsWith(
+                'release/', [System.StringComparison]::Ordinal)) { continue }
+        $relative = $path.Substring('release/'.Length)
+        if ($relative -cmatch '^system/patch-bb/data/') { continue }
+        if (-not $seen.Add($relative)) {
+            throw 'Stable server-base release contains a colliding path'
+        }
+        $releaseEntries.Add([pscustomobject]@{
+                path = $relative
+                size = [int64]$entry.size
+                sha256 = [string]$entry.sha256
+            })
+    }
+    foreach ($entry in @($patchManifest.files)) {
+        $relative = [string]$contract.source.patchDataTargetRelativePath +
+            '/' + [string]$entry.path
+        if (-not $seen.Add($relative)) {
+            throw 'Stable BB patch-data contains a colliding path'
+        }
+        $releaseEntries.Add([pscustomobject]@{
+                path = $relative
+                size = [int64]$entry.size
+                sha256 = [string]$entry.sha256
+            })
+    }
+    [pscustomobject]@{
+        Artifact = 'StableShadow'
+        ComponentId = 'newserv-stable-release'
+        Path = [string]$selection.Path
+        Hash = [string]$selection.Hash
+        Value = $contract
+        ManifestPath = $null
+        ManifestHash = $null
+        StableServerBase = [string]$StableLayout.ServerBase
+        StableInstallRecordSha256 = [string]$installSnapshot.Sha256
+        StableBaseClientManifestSha256 =
+            [string]$install.baseClientManifestSha256
+        StableBaseClientExecutableSha256 =
+            [string]$install.baseClientExecutableSha256
+        StableServerBaseManifestSha256 = [string]$baseSnapshot.Sha256
+        StablePatchData = $patchDataPath
+        StablePatchManifestSha256 = [string]$patchSnapshot.Sha256
+        ReleaseEntries = $releaseEntries.ToArray()
+    }
+}
+
+function New-PSOBBCombatInitializeStableShadowServerBase {
+    param(
+        [Parameter(Mandatory)]$Build,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$DestinationRoot
+    )
+
+    Copy-PSOBBCombatInitializeTree `
+        -Source $Build.StableServerBase -Destination $Destination `
+        -DestinationRoot $DestinationRoot
+    $patchTarget = Assert-PathWithinRoot `
+        -Path (Join-Path $Destination (
+            ([string]$Build.Value.source.patchDataTargetRelativePath).Replace('/', '\'))) `
+        -Root $Destination
+    if (Test-Path -LiteralPath $patchTarget) {
+        Remove-Item -LiteralPath $patchTarget -Recurse -Force
+    }
+    Copy-PSOBBCombatInitializeTree `
+        -Source $Build.StablePatchData -Destination $patchTarget `
+        -DestinationRoot $DestinationRoot
+    $manifest = [ordered]@{
+        schemaVersion = 1
+        profileId = [string]$Build.Value.profileId
+        serverComponentId = [string]$Build.Value.source.serverComponentId
+        serverCommit = [string]$Build.Value.source.serverCommit
+        serverBaseManifestSha256 =
+            [string]$Build.StableServerBaseManifestSha256
+        patchDataManifestSha256 =
+            [string]$Build.StablePatchManifestSha256
+        files = @($Build.ReleaseEntries)
+    }
+    $manifestPath = Join-Path $Destination `
+        ([string]$Build.Value.output.releaseManifestName)
+    [System.IO.File]::WriteAllText(
+        $manifestPath, ($manifest | ConvertTo-Json -Depth 8),
+        [System.Text.UTF8Encoding]::new($false))
+    if (-not (Test-PSOBBDirectoryManifest `
+            -Root $Destination -Files (@($Build.ReleaseEntries) +
+                @([pscustomobject]@{
+                    path = [string]$Build.Value.output.releaseManifestName
+                    size = (Get-Item -Force -LiteralPath $manifestPath).Length
+                    sha256 = Get-LowerSha256 $manifestPath
+                })))) {
+        throw 'The staged StableShadow server-base failed exact readback'
+    }
+    $Build.ManifestPath = $manifestPath
+    $Build.ManifestHash = Get-LowerSha256 $manifestPath
+    $Build
 }
 
 function Get-PSOBBCombatInitializeNativeProfile {
@@ -597,8 +963,14 @@ $layout = Assert-PSOBBCombatInitializeLayout -Value (
 $stableLayout = Get-PSOBBServerEnvironmentLayout -Layout $rootLayout -Environment Stable
 [void](Assert-PSOBBServerEnvironmentIsolation -Layout $rootLayout)
 [void](Assert-PSOBBCombatInitializeStopped)
-$build = Get-PSOBBCombatInitializeBuild `
-    -Layout $layout -ExplicitHash $ExpectedBuildContractSha256
+$build = if ($ServerArtifact -ceq 'StableShadow') {
+    Get-PSOBBCombatInitializeStableShadowBuild `
+        -RootLayout $rootLayout -StableLayout $stableLayout `
+        -ExplicitHash $ExpectedBuildContractSha256
+} else {
+    Get-PSOBBCombatInitializeBuild `
+        -Layout $layout -ExplicitHash $ExpectedBuildContractSha256
+}
 $snapshot = & (Join-Path $PSScriptRoot 'Test-PSOBBCombatCanary.ps1') `
     -RuntimeRoot $rootLayout.Root -Target Snapshot -SnapshotPath $SnapshotPath `
     -ExpectedTwillsContractSha256 $ExpectedTwillsContractSha256 `
@@ -627,10 +999,19 @@ $baselinePolicyHash = Get-PSOBBCombatInitializeBaselinePolicyHash
 [void](Assert-PSOBBCombatInitializeOrdinaryTree `
         -Path $stableLayout.BaseClient -Root $stableLayout.Root `
         -Label 'Stable immutable base client')
+$stableBaseManifestParameters = @{
+    LiteralPath = $stableLayout.BaseClientManifest
+    Root = $stableLayout.Root
+    MaximumBytes = 16MB
+    PassThruSnapshot = $true
+    RoleLabel = 'stable base client manifest'
+}
+if ($ServerArtifact -ceq 'StableShadow') {
+    $stableBaseManifestParameters.ExpectedSha256 =
+        [string]$build.StableBaseClientManifestSha256
+}
 $stableBaseManifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
-    -LiteralPath $stableLayout.BaseClientManifest `
-    -Root $stableLayout.Root -MaximumBytes 16MB -PassThruSnapshot `
-    -RoleLabel 'stable base client manifest'
+    @stableBaseManifestParameters
 $stableBaseManifestJson = $stableBaseManifestSnapshot.Value
 $stableBaseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
     -JsonObject $stableBaseManifestJson -RoleLabel 'stable base client manifest'
@@ -640,7 +1021,12 @@ if ([int]$stableBaseManifest.schemaVersion -ne 1 -or
     (Get-Item -Force -LiteralPath (
         Join-Path $stableLayout.BaseClient 'Psobb.exe')).Length -ne $approvedClient.Size -or
     (Get-LowerSha256 (Join-Path $stableLayout.BaseClient 'Psobb.exe')) -cne
-        $approvedClient.Sha256) {
+        $approvedClient.Sha256 -or
+    ($ServerArtifact -ceq 'StableShadow' -and
+        ([string]$stableBaseManifestSnapshot.Sha256 -cne
+            [string]$build.StableBaseClientManifestSha256 -or
+        [string]$approvedClient.Sha256 -cne
+            [string]$build.StableBaseClientExecutableSha256))) {
     throw 'The Stable immutable 59NL base client failed manifest verification'
 }
 $stableBaseManifestHash = [string]$stableBaseManifestSnapshot.Sha256
@@ -661,34 +1047,65 @@ try {
     if (-not $ownsMutex) { throw 'Another PSOBB lifecycle operation is in progress' }
     [void](Assert-PSOBBCombatInitializeStopped)
 
+    $replacement = $false
+    $existing = $null
+    $previousBuildContractSha256 = $null
     if (Test-Path -LiteralPath $layout.InstallRecord -PathType Leaf) {
-        $existing = & (Join-Path $PSScriptRoot 'Test-PSOBBCombatCanary.ps1') `
-            -RuntimeRoot $rootLayout.Root -Target Installed `
-            -SnapshotPath $snapshotRoot `
-            -ExpectedBuildContractSha256 $build.Hash `
-            -ExpectedTwillsContractSha256 $snapshot.TwillsContractSha256 `
-            -ExpectedSigningPublicKeySpkiSha256 $snapshot.SigningPublicKeySpkiSha256
+        $existingExpectations =
+            Get-PSOBBCombatCanaryInstallationBindingExpectations `
+                -Layout $rootLayout
+        $previousBuildContractSha256 =
+            [string]$existingExpectations.BuildContractSha256
+        $existingParameters = @{
+            RuntimeRoot = $rootLayout.Root
+            Target = 'Installed'
+            ExpectedBuildContractSha256 = $previousBuildContractSha256
+            ExpectedTwillsContractSha256 = $snapshot.TwillsContractSha256
+            ExpectedSigningPublicKeySpkiSha256 =
+                $snapshot.SigningPublicKeySpkiSha256
+        }
+        if ($previousBuildContractSha256 -ceq [string]$build.Hash) {
+            $existingParameters.SnapshotPath = $snapshotRoot
+        }
+        $existing = & (Join-Path $PSScriptRoot `
+            'Test-PSOBBCombatCanary.ps1') @existingParameters
         if (-not [bool]$existing.Valid) {
-            throw 'The existing combat-canary installation failed idempotent verification'
+            throw 'The existing combat-canary installation failed exact verification'
         }
-        return [pscustomobject]@{
-            Initialized = $true
-            Changed = $false
-            Environment = 'CombatCanary'
-            SnapshotId = [string]$snapshot.SnapshotId
-            BuildContractSha256 = $build.Hash
-            TwillsContractSha256 = [string]$snapshot.TwillsContractSha256
+        if ($previousBuildContractSha256 -ceq [string]$build.Hash) {
+            return [pscustomobject]@{
+                Initialized = $true
+                Changed = $false
+                Environment = 'CombatCanary'
+                ServerArtifact = [string]$build.Artifact
+                SnapshotId = [string]$snapshot.SnapshotId
+                BuildContractSha256 = $build.Hash
+                TwillsContractSha256 = [string]$snapshot.TwillsContractSha256
+            }
         }
+        if ($ServerArtifact -cne 'StableShadow' -or
+            [string]$existing.ServerArtifact -cne 'CurrentUpstream' -or
+            [string]$existing.ServerComponentId -cne
+                'newserv-combat-canary-build') {
+            throw 'Only exact CurrentUpstream-to-StableShadow replacement is permitted'
+        }
+        $replacement = $true
+    } else {
+        if ($ServerArtifact -ceq 'StableShadow') {
+            throw 'StableShadow requires one fully verified CurrentUpstream combat-canary installation'
+        }
+        [void](Assert-PSOBBCombatInitializeFirstInstallEmpty -Layout $layout)
     }
-    [void](Assert-PSOBBCombatInitializeFirstInstallEmpty -Layout $layout)
     if (-not $PSCmdlet.ShouldProcess(
             $layout.EnvironmentRoot,
-            'Atomically materialize the isolated combat-canary runtime')) {
+            'Atomically materialize the selected combat-canary server artifact')) {
         return [pscustomobject]@{
             Initialized = $false
             Changed = $false
             WhatIf = $true
             Environment = 'CombatCanary'
+            ServerArtifact = [string]$build.Artifact
+            Replacement = $replacement
             SnapshotId = [string]$snapshot.SnapshotId
             BuildContractSha256 = $build.Hash
         }
@@ -710,27 +1127,56 @@ try {
             -Path $stageRoot -Root $layout.EnvironmentRoot `
             -TransactionId $transactionId -Purpose 'initialize-stage'
         Set-PSOBBProtectedAcl -Path $stageRoot
+        $stageServerBase = Join-Path $stageRoot 'server-base\release'
         $stageServer = Join-Path $stageRoot 'server\release'
-        $stageBaseClient = Join-Path $stageRoot 'client'
-        $stageClient = Join-Path $stageRoot 'runtime\client'
-        Copy-PSOBBCombatInitializeTree `
-            -Source $layout.ServerBase -Destination $stageServer `
-            -DestinationRoot $stageRoot
-        [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
-                -Build $build.Value -Root $stageServer)
-        Copy-PSOBBCombatInitializeTree `
-            -Source $stableLayout.BaseClient -Destination $stageBaseClient `
-            -DestinationRoot $stageRoot
-        Copy-PSOBBCombatInitializeTree `
-            -Source $stageBaseClient -Destination $stageClient `
-            -DestinationRoot $stageRoot
-        $stageBaseManifestPath = Join-Path $stageRoot 'base-client.manifest.json'
-        Copy-Item -LiteralPath $stableLayout.BaseClientManifest `
-            -Destination $stageBaseManifestPath
-        if ((Get-LowerSha256 $stageBaseManifestPath) -cne $stableBaseManifestHash -or
-            -not (Test-PSOBBDirectoryManifest `
-                -Root $stageBaseClient -Files @($stableBaseManifest.files))) {
-            throw 'The staged immutable base client failed exact readback'
+        $stageBaseClient = $null
+        $stageClient = $null
+        $stageBaseManifestPath = $null
+        $stageClientBindingPath = $null
+        $baseClientManifestHashForInstall = $stableBaseManifestHash
+        $clientBindingHashForInstall = $null
+        if ($ServerArtifact -ceq 'StableShadow') {
+            $build = New-PSOBBCombatInitializeStableShadowServerBase `
+                -Build $build -Destination $stageServerBase `
+                -DestinationRoot $stageRoot
+            Copy-PSOBBCombatInitializeTree `
+                -Source $stageServerBase -Destination $stageServer `
+                -DestinationRoot $stageRoot
+        } else {
+            Copy-PSOBBCombatInitializeTree `
+                -Source $layout.ServerBase -Destination $stageServer `
+                -DestinationRoot $stageRoot
+            [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                    -Build $build.Value -Root $stageServer)
+        }
+        if ($replacement) {
+            if ([string]$existing.BaseClientManifestSha256 -cne
+                    $stableBaseManifestHash) {
+                throw 'The verified CombatCanary and Stable clients are not byte-identical'
+            }
+            $baseClientManifestHashForInstall =
+                [string]$existing.BaseClientManifestSha256
+            $clientBindingHashForInstall =
+                [string]$existing.ClientBindingSha256
+        } else {
+            $stageBaseClient = Join-Path $stageRoot 'client'
+            $stageClient = Join-Path $stageRoot 'runtime\client'
+            Copy-PSOBBCombatInitializeTree `
+                -Source $stableLayout.BaseClient -Destination $stageBaseClient `
+                -DestinationRoot $stageRoot
+            Copy-PSOBBCombatInitializeTree `
+                -Source $stageBaseClient -Destination $stageClient `
+                -DestinationRoot $stageRoot
+            $stageBaseManifestPath = Join-Path $stageRoot `
+                'base-client.manifest.json'
+            Copy-Item -LiteralPath $stableLayout.BaseClientManifest `
+                -Destination $stageBaseManifestPath
+            if ((Get-LowerSha256 $stageBaseManifestPath) -cne
+                    $stableBaseManifestHash -or
+                -not (Test-PSOBBDirectoryManifest `
+                    -Root $stageBaseClient -Files @($stableBaseManifest.files))) {
+                throw 'The staged immutable base client failed exact readback'
+            }
         }
 
         $stageSystem = Join-Path $stageServer 'system'
@@ -815,34 +1261,40 @@ try {
             -MaximumBytes 16MB `
             -RoleLabel 'staged combat canary configuration' | Out-Null
 
-        $clientProfilePath = Join-Path $stageClient 'client-profile.json'
-        $profile = Get-PSOBBCombatInitializeNativeProfile -ApprovedClient $approvedClient
-        [System.IO.File]::WriteAllText(
-            $clientProfilePath,
-            ($profile | ConvertTo-Json -Depth 10),
-            [System.Text.UTF8Encoding]::new($false))
-        $clientProfileHash = Get-LowerSha256 $clientProfilePath
-        $clientBinding = [ordered]@{
-            schemaVersion = 1
-            environment = 'CombatCanary'
-            environmentId = 'combat-canary'
-            profile = 'baseline'
-            renderer = 'Native'
-            serverAddress = '127.0.0.1'
-            patchPort = 11000
-            gamePorts = @(12000, 12001)
-            clientExecutablePath = 'runtime/client/Psobb.exe'
-            clientExecutableSize = $approvedClient.Size
-            clientExecutableSha256 = $approvedClient.Sha256
-            clientProfileSha256 = $clientProfileHash
-            baseClientManifestSha256 = $stableBaseManifestHash
-            createdAtUtc = [DateTime]::UtcNow.ToString('o')
+        if (-not $replacement) {
+            $clientProfilePath = Join-Path $stageClient 'client-profile.json'
+            $profile = Get-PSOBBCombatInitializeNativeProfile `
+                -ApprovedClient $approvedClient
+            [System.IO.File]::WriteAllText(
+                $clientProfilePath,
+                ($profile | ConvertTo-Json -Depth 10),
+                [System.Text.UTF8Encoding]::new($false))
+            $clientProfileHash = Get-LowerSha256 $clientProfilePath
+            $clientBinding = [ordered]@{
+                schemaVersion = 1
+                environment = 'CombatCanary'
+                environmentId = 'combat-canary'
+                profile = 'baseline'
+                renderer = 'Native'
+                serverAddress = '127.0.0.1'
+                patchPort = 11000
+                gamePorts = @(12000, 12001)
+                clientExecutablePath = 'runtime/client/Psobb.exe'
+                clientExecutableSize = $approvedClient.Size
+                clientExecutableSha256 = $approvedClient.Sha256
+                clientProfileSha256 = $clientProfileHash
+                baseClientManifestSha256 = $stableBaseManifestHash
+                createdAtUtc = [DateTime]::UtcNow.ToString('o')
+            }
+            $stageClientBindingPath = Join-Path $stageRoot `
+                'client-binding.json'
+            [System.IO.File]::WriteAllText(
+                $stageClientBindingPath,
+                ($clientBinding | ConvertTo-Json -Depth 8),
+                [System.Text.UTF8Encoding]::new($false))
+            $clientBindingHashForInstall =
+                Get-LowerSha256 $stageClientBindingPath
         }
-        $stageClientBindingPath = Join-Path $stageRoot 'client-binding.json'
-        [System.IO.File]::WriteAllText(
-            $stageClientBindingPath,
-            ($clientBinding | ConvertTo-Json -Depth 8),
-            [System.Text.UTF8Encoding]::new($false))
 
         $stateBinding = [ordered]@{
             schemaVersion = 1
@@ -879,8 +1331,11 @@ try {
             }
             Set-PSOBBLifecyclePathAcl `
                 -Path $stageControl -Root $stageRoot | Out-Null
-            foreach ($protectedFile in @(
-                    $stageClientBindingPath, $stageStateBindingPath)) {
+            $protectedFiles = @($stageStateBindingPath)
+            if (-not $replacement) {
+                $protectedFiles += $stageClientBindingPath
+            }
+            foreach ($protectedFile in $protectedFiles) {
                 Set-PSOBBProtectedAcl -Path $protectedFile
             }
         } catch {
@@ -895,8 +1350,8 @@ try {
             initializedAtUtc = [DateTime]::UtcNow.ToString('o')
             buildContractSha256 = $build.Hash
             serverReleaseManifestSha256 = $build.ManifestHash
-            baseClientManifestSha256 = $stableBaseManifestHash
-            clientBindingSha256 = Get-LowerSha256 $stageClientBindingPath
+            baseClientManifestSha256 = $baseClientManifestHashForInstall
+            clientBindingSha256 = $clientBindingHashForInstall
             snapshotDirectoryName = $snapshotDirectoryName
             snapshotId = [string]$snapshot.SnapshotId
             snapshotManifestSha256 = [string]$snapshot.ManifestSha256
@@ -911,6 +1366,26 @@ try {
             ($install | ConvertTo-Json -Depth 8),
             [System.Text.UTF8Encoding]::new($false))
         Set-PSOBBProtectedAcl -Path $stageInstallPath
+        if ($ServerArtifact -ceq 'StableShadow') {
+            $sourceReadback = Get-PSOBBCombatInitializeStableShadowBuild `
+                -RootLayout $rootLayout -StableLayout $stableLayout `
+                -ExplicitHash $build.Hash
+            if ([string]$sourceReadback.StableInstallRecordSha256 -cne
+                    [string]$build.StableInstallRecordSha256 -or
+                [string]$sourceReadback.StableBaseClientManifestSha256 -cne
+                    [string]$build.StableBaseClientManifestSha256 -or
+                [string]$sourceReadback.StableBaseClientExecutableSha256 -cne
+                    [string]$build.StableBaseClientExecutableSha256 -or
+                [string]$sourceReadback.StableServerBaseManifestSha256 -cne
+                    [string]$build.StableServerBaseManifestSha256 -or
+                [string]$sourceReadback.StablePatchManifestSha256 -cne
+                    [string]$build.StablePatchManifestSha256 -or
+                -not (Test-PSOBBManifestEntriesEqual `
+                    -Left @($sourceReadback.ReleaseEntries) `
+                    -Right @($build.ReleaseEntries))) {
+                throw 'Stable changed while the StableShadow candidate was staged'
+            }
+        }
         [void](Assert-PSOBBCombatInitializeStopped)
 
         $rollbackTransaction = New-PSOBBCombatCanaryTransactionTree `
@@ -919,16 +1394,23 @@ try {
             -Purpose 'initialize-rollback'
         Set-PSOBBProtectedAcl -Path $rollbackRoot
         $targets = @(
-            [pscustomobject]@{ Name = 'server'; Current = Split-Path -Parent $layout.Server; Staged = Split-Path -Parent $stageServer },
-            [pscustomobject]@{ Name = 'base-client'; Current = $layout.BaseClient; Staged = $stageBaseClient },
-            [pscustomobject]@{ Name = 'runtime'; Current = Split-Path -Parent $layout.Client; Staged = Split-Path -Parent $stageClient },
-            [pscustomobject]@{ Name = 'control'; Current = $layout.ControlDirectory; Staged = $stageControl },
-            [pscustomobject]@{ Name = 'backups'; Current = $layout.Backups; Staged = $stageBackups },
-            [pscustomobject]@{ Name = 'logs'; Current = $layout.Logs; Staged = $stageLogs },
-            [pscustomobject]@{ Name = 'secrets'; Current = $layout.Secrets; Staged = $stageSecrets },
-            [pscustomobject]@{ Name = 'base-client-manifest'; Current = $layout.BaseClientManifest; Staged = $stageBaseManifestPath },
-            [pscustomobject]@{ Name = 'client-binding'; Current = Join-Path $layout.EnvironmentRoot 'client-binding.json'; Staged = $stageClientBindingPath },
-            [pscustomobject]@{ Name = 'state-binding'; Current = Join-Path $layout.EnvironmentRoot 'state-binding.json'; Staged = $stageStateBindingPath },
+            if ($replacement) {
+                [pscustomobject]@{ Name = 'server-base'; Current = Split-Path -Parent $layout.ServerBase; Staged = Split-Path -Parent $stageServerBase }
+            }
+            [pscustomobject]@{ Name = 'server'; Current = Split-Path -Parent $layout.Server; Staged = Split-Path -Parent $stageServer }
+            if (-not $replacement) {
+                [pscustomobject]@{ Name = 'base-client'; Current = $layout.BaseClient; Staged = $stageBaseClient }
+                [pscustomobject]@{ Name = 'runtime'; Current = Split-Path -Parent $layout.Client; Staged = Split-Path -Parent $stageClient }
+            }
+            [pscustomobject]@{ Name = 'control'; Current = $layout.ControlDirectory; Staged = $stageControl }
+            [pscustomobject]@{ Name = 'backups'; Current = $layout.Backups; Staged = $stageBackups }
+            [pscustomobject]@{ Name = 'logs'; Current = $layout.Logs; Staged = $stageLogs }
+            [pscustomobject]@{ Name = 'secrets'; Current = $layout.Secrets; Staged = $stageSecrets }
+            if (-not $replacement) {
+                [pscustomobject]@{ Name = 'base-client-manifest'; Current = $layout.BaseClientManifest; Staged = $stageBaseManifestPath }
+                [pscustomobject]@{ Name = 'client-binding'; Current = Join-Path $layout.EnvironmentRoot 'client-binding.json'; Staged = $stageClientBindingPath }
+            }
+            [pscustomobject]@{ Name = 'state-binding'; Current = Join-Path $layout.EnvironmentRoot 'state-binding.json'; Staged = $stageStateBindingPath }
             [pscustomobject]@{ Name = 'installation'; Current = $layout.InstallRecord; Staged = $stageInstallPath })
         if ($InternalTestFailAfterSwap -gt $targets.Count -or
             $InternalTestCreateUnexpectedTargetBeforeSwap -gt $targets.Count) {
@@ -952,28 +1434,11 @@ try {
                         [System.Text.UTF8Encoding]::new($false))
                 }
             }
-            if (Test-Path -LiteralPath $target.Current) {
-                throw 'First combat-canary initialization detected an unexpected target before publication'
-            }
-            $stagedItem = Get-Item -Force -LiteralPath $target.Staged `
-                -ErrorAction Stop
-            $stagedIsDirectory = [bool]$stagedItem.PSIsContainer
-            $stagedIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
-                -Path $target.Staged -Root $stageRoot `
-                -Directory $stagedIsDirectory `
-                -RoleLabel ("staged initialization target '$($target.Name)'")
-            $record = [pscustomobject]@{
-                Item = $target
-                HadCurrent = $false
-                NeedsCompensation = $false
-                Directory = $stagedIsDirectory
-                VolumeSerialNumber = [uint32]$stagedIdentity.VolumeSerialNumber
-                FileId = [uint64]$stagedIdentity.FileId
-            }
-            $processed.Add($record)
-            Move-PSOBBCombatInitializeNoClobber -Source $target.Staged `
-                -Destination $target.Current -Label $target.Name
-            $record.NeedsCompensation = $true
+            $record = Publish-PSOBBCombatInitializeTarget `
+                -Target $target -StageRoot $stageRoot `
+                -RollbackRoot $rollbackRoot `
+                -EnvironmentRoot $layout.EnvironmentRoot `
+                -Replacement $replacement -Processed $processed
             if ($null -ne $InternalTestAfterPublishedMove) {
                 & $InternalTestAfterPublishedMove $target.Current $target.Name
             }
@@ -1000,11 +1465,83 @@ try {
         if (-not [bool]$readback.Valid) {
             throw 'The materialized combat-canary failed exact installed readback'
         }
+        $stableClientExecutable = Join-Path $stableLayout.BaseClient 'Psobb.exe'
+        if ((Get-LowerSha256 $stableLayout.BaseClientManifest) -cne
+                $stableBaseManifestHash -or
+            -not (Test-PSOBBDirectoryManifest `
+                -Root $stableLayout.BaseClient `
+                -Files @($stableBaseManifest.files)) -or
+            (Get-Item -Force -LiteralPath $stableClientExecutable).Length -ne
+                $approvedClient.Size -or
+            (Get-LowerSha256 $stableClientExecutable) -cne
+                $approvedClient.Sha256) {
+            throw 'Stable client changed during combat-canary materialization'
+        }
+        $frozenInstallationPath = $null
+        if ($replacement) {
+            $stableReadback = Get-PSOBBCombatInitializeStableShadowBuild `
+                -RootLayout $rootLayout -StableLayout $stableLayout `
+                -ExplicitHash $build.Hash
+            if ([string]$stableReadback.StableInstallRecordSha256 -cne
+                    [string]$build.StableInstallRecordSha256 -or
+                [string]$stableReadback.StableBaseClientManifestSha256 -cne
+                    [string]$build.StableBaseClientManifestSha256 -or
+                [string]$stableReadback.StableBaseClientExecutableSha256 -cne
+                    [string]$build.StableBaseClientExecutableSha256 -or
+                [string]$stableReadback.StableServerBaseManifestSha256 -cne
+                    [string]$build.StableServerBaseManifestSha256 -or
+                [string]$stableReadback.StablePatchManifestSha256 -cne
+                    [string]$build.StablePatchManifestSha256 -or
+                -not (Test-PSOBBManifestEntriesEqual `
+                    -Left @($stableReadback.ReleaseEntries) `
+                    -Right @($build.ReleaseEntries))) {
+                throw 'Stable changed during StableShadow replacement'
+            }
+            $frozenReceiptPath = Join-Path $rollbackRoot 'frozen-installation.json'
+            $frozenReceipt = [ordered]@{
+                schemaVersion = 1
+                environment = 'CombatCanary'
+                frozenArtifact = [string]$existing.ServerArtifact
+                frozenBuildContractSha256 = $previousBuildContractSha256
+                replacementArtifact = [string]$build.Artifact
+                replacementBuildContractSha256 = [string]$build.Hash
+                replacedAtUtc = [DateTime]::UtcNow.ToString('o')
+                targets = @($targets.Name)
+            }
+            [System.IO.File]::WriteAllText(
+                $frozenReceiptPath,
+                ($frozenReceipt | ConvertTo-Json -Depth 6),
+                [System.Text.UTF8Encoding]::new($false))
+            Set-PSOBBProtectedTreeAcl -Path $rollbackRoot `
+                -Root $layout.EnvironmentRoot
+            $evidenceRoot = Assert-PathWithinRoot `
+                -Path (Join-Path $layout.EnvironmentRoot 'evidence') `
+                -Root $layout.EnvironmentRoot
+            if (-not (Test-Path -LiteralPath $evidenceRoot)) {
+                New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
+            }
+            [void](Assert-PSOBBCombatInitializeOrdinaryTree `
+                    -Path $evidenceRoot -Root $layout.EnvironmentRoot `
+                    -Label 'Combat-canary evidence root')
+            Set-PSOBBProtectedAcl -Path $evidenceRoot
+            $frozenName = 'frozen-current-upstream-{0}-{1}' -f
+                ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')),
+                $transactionId.Substring(0, 8)
+            $frozenInstallationPath = Assert-PathWithinRoot `
+                -Path (Join-Path $evidenceRoot $frozenName) `
+                -Root $layout.EnvironmentRoot
+            Move-PSOBBCombatInitializeNoClobber `
+                -Source $rollbackRoot -Destination $frozenInstallationPath `
+                -Label 'frozen CurrentUpstream installation'
+        }
         $completed = $true
         [pscustomobject]@{
             Initialized = $true
             Changed = $true
             Environment = 'CombatCanary'
+            ServerArtifact = [string]$build.Artifact
+            ReplacedExisting = $replacement
+            FrozenInstallationPath = $frozenInstallationPath
             SnapshotId = [string]$snapshot.SnapshotId
             SnapshotDirectoryName = $snapshotDirectoryName
             SnapshotManifestSha256 = [string]$snapshot.ManifestSha256
@@ -1035,33 +1572,9 @@ try {
                 continue
             }
             try {
-                if (Test-Path -LiteralPath $record.Item.Current) {
-                    if ([bool]$record.Directory) {
-                        Remove-PSOBBCombatCanaryOwnedTree `
-                            -Path $record.Item.Current `
-                            -Root $layout.EnvironmentRoot `
-                            -ExpectedVolumeSerialNumber `
-                                $record.VolumeSerialNumber `
-                            -ExpectedFileId $record.FileId `
-                            -RoleLabel ("initialization compensation '$($record.Item.Name)'")
-                    } else {
-                        Remove-PSOBBCombatCanaryOwnedFile `
-                            -Path $record.Item.Current `
-                            -Root $layout.EnvironmentRoot `
-                            -ExpectedVolumeSerialNumber `
-                                $record.VolumeSerialNumber `
-                            -ExpectedFileId $record.FileId `
-                            -RoleLabel ("initialization compensation '$($record.Item.Name)'")
-                    }
-                }
-                if ($record.HadCurrent -and
-                    (Test-Path -LiteralPath $record.Item.Rollback)) {
-                    Move-PSOBBCombatInitializeNoClobber `
-                        -Source $record.Item.Rollback `
-                        -Destination $record.Item.Current `
-                        -Label $record.Item.Name
-                }
-                $record.NeedsCompensation = $false
+                [void](Undo-PSOBBCombatInitializeTarget `
+                        -Record $record `
+                        -EnvironmentRoot $layout.EnvironmentRoot)
             } catch {
                 $rollbackErrors.Add($record.Item.Name)
             }

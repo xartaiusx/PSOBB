@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psobb.local/schemas/combat-stable-shadow.schema.json",
+  "title": "PSOBB Stable-derived isolated combat fixture contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "profileId", "source", "output"],
+  "properties": {
+    "$schema": { "const": "./schemas/combat-stable-shadow.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "profileId": { "const": "newserv-stable-shadow" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serverComponentId",
+        "serverCommit",
+        "serverArchiveSha256",
+        "serverExecutable",
+        "clientComponentId",
+        "serverBaseManifestRelativePath",
+        "patchManifestRelativePath",
+        "patchDataRelativePath",
+        "patchDataTargetRelativePath",
+        "patchDataFileCount"
+      ],
+      "properties": {
+        "serverComponentId": { "const": "newserv-stable-release" },
+        "serverCommit": { "const": "a649a4a146d04dba320bb579ac291527db0febb5" },
+        "serverArchiveSha256": { "const": "aee0696b4392407d46ef584e1b8117307474b791ef09a02282458d1444655869" },
+        "serverExecutable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "size", "sha256"],
+          "properties": {
+            "path": { "const": "newserv-windows.exe" },
+            "size": { "const": 31162999 },
+            "sha256": { "const": "7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd" }
+          }
+        },
+        "clientComponentId": { "const": "tethealla-59nl-english" },
+        "serverBaseManifestRelativePath": { "const": "stable/server-base.manifest.json" },
+        "patchManifestRelativePath": { "const": "stable/patch-bb-data.manifest.json" },
+        "patchDataRelativePath": { "const": "stable/server/release/system/patch-bb/data" },
+        "patchDataTargetRelativePath": { "const": "system/patch-bb/data" },
+        "patchDataFileCount": { "const": 108 }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rootRelative", "releaseManifestName", "generatedMetadataCaches"],
+      "properties": {
+        "rootRelative": { "const": "combat-canary/server-base/release" },
+        "releaseManifestName": { "const": "release-manifest.json" },
+        "generatedMetadataCaches": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/cache" },
+                {
+                  "properties": {
+                    "path": { "const": "system/patch-bb/.metadata-cache.json" },
+                    "maximumBytes": { "const": 4194304 },
+                    "keyPrefix": { "const": "./data/" }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/cache" },
+                {
+                  "properties": {
+                    "path": { "const": "system/patch-pc/.metadata-cache.json" },
+                    "maximumBytes": { "const": 1048576 },
+                    "keyPrefix": { "const": "./Media/PSO/" }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "maximumBytes", "keyPrefix"],
+      "properties": {
+        "path": { "type": "string" },
+        "maximumBytes": { "type": "integer", "minimum": 1 },
+        "keyPrefix": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

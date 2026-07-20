@@ -20,12 +20,22 @@ internal sealed partial class ExactRuntimeIdentityProbe
         string GraphicCtrlSha256);
 
     private sealed record CombatInstallationSeal(
+        string ServerArtifact,
+        string ServerComponentId,
+        ApprovedFileIdentity ServerExecutable,
         string BuildContractSha256,
         string ClientBindingSha256,
         string StateBindingSha256,
         string BaseClientManifestSha256,
         string TwillsContractSha256,
         string SigningPublicKeySpkiSha256);
+
+    private sealed record CombatBuildContractSelection(
+        string Artifact,
+        string ContractPath,
+        string ProfileId,
+        string ServerComponentId,
+        ApprovedFileIdentity ServerExecutable);
 
     private sealed record ServerProcessRecord(
         int SchemaVersion,

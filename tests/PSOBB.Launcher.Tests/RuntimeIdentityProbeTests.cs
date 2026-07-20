@@ -870,6 +870,45 @@ public sealed class RuntimeIdentityProbeTests
     }
 
     [TestMethod]
+    public async Task ObserveAsync_CombatCanarySelectsStableShadowFromInstalledBuildHash()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.ConfigureValidStableShadowCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Running, result.State, result.Detail);
+        Assert.IsTrue(result.IdentityAuthenticated);
+        Assert.HasCount(1, fixture.Verifier.Requests);
+        Assert.AreEqual(
+            fixture.RepositoryFileSha256("config/combat-stable-shadow.json"),
+            fixture.Verifier.Requests[0].BuildContractSha256);
+    }
+
+    [TestMethod]
+    public async Task ObserveAsync_CombatCanaryRejectsUnknownInstalledBuildHash()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+        fixture.MutateJson(
+            "combat-canary/installation.json",
+            document => document["buildContractSha256"] = new string('f', 64));
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Faulted, result.State);
+        Assert.IsFalse(result.IdentityAuthenticated);
+        StringAssert.Contains(result.Detail, "not an approved CurrentUpstream or StableShadow artifact");
+        Assert.IsEmpty(fixture.Verifier.Requests);
+    }
+
+    [TestMethod]
     public async Task ObserveAsync_CombatCanaryFailsClosedWhenAuthoritativeVerifierRejects()
     {
         using var fixture = new IdentityFixture();
@@ -988,6 +1027,7 @@ public sealed class RuntimeIdentityProbeTests
         private readonly ECDsa _signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly object _nativeGraphics;
         private CombatHashes? _combatHashes;
+        private bool _stableShadowActive;
 
         public IdentityFixture()
         {
@@ -1034,6 +1074,8 @@ public sealed class RuntimeIdentityProbeTests
 
         public string CombatClientPath { get; }
 
+        public string RepositoryFileSha256(string relativePath) => RepositoryFileHash(relativePath);
+
         public static IEnumerable<RuntimeTcpListener> ExactListeners(int processId) =>
         [
             new(IPAddress.Loopback, 11000, processId),
@@ -1072,6 +1114,9 @@ public sealed class RuntimeIdentityProbeTests
 
         public ServerIdentity ConfigureValidCombatCanaryServer(int processId)
         {
+            _stableShadowActive = false;
+            _combatHashes = null;
+            File.WriteAllBytes(CombatServerPath, _combatServerBytes);
             var hashes = EnsureCombatSeal();
             return WriteServerRecord(
                 "combat-canary",
@@ -1081,6 +1126,26 @@ public sealed class RuntimeIdentityProbeTests
                 processId,
                 CombatServerPath,
                 Hash(_combatServerBytes),
+                hashes.BuildContractSha256,
+                hashes.ClientBindingSha256,
+                hashes.StateBindingSha256,
+                publishLiveProcesses: true);
+        }
+
+        public ServerIdentity ConfigureValidStableShadowCombatCanaryServer(int processId)
+        {
+            _stableShadowActive = true;
+            _combatHashes = null;
+            File.WriteAllBytes(CombatServerPath, _stableServerBytes);
+            var hashes = EnsureCombatSeal();
+            return WriteServerRecord(
+                "combat-canary",
+                "CombatCanary",
+                "combat-canary",
+                "newserv-stable-release",
+                processId,
+                CombatServerPath,
+                Hash(_stableServerBytes),
                 hashes.BuildContractSha256,
                 hashes.ClientBindingSha256,
                 hashes.StateBindingSha256,
@@ -1356,7 +1421,9 @@ public sealed class RuntimeIdentityProbeTests
             var releaseManifestBytes = JsonSerializer.SerializeToUtf8Bytes(new
             {
                 schemaVersion = 1,
-                profileId = "newserv-combat-canary-build",
+                profileId = _stableShadowActive
+                    ? "newserv-stable-shadow"
+                    : "newserv-combat-canary-build",
                 sourceCommit = new string('a', 40),
                 patchSeriesSha256 = new string('b', 64),
                 files = Array.Empty<object>(),
@@ -1424,7 +1491,9 @@ public sealed class RuntimeIdentityProbeTests
             Runtime.CreateFile("combat-canary/client-binding.json", bindingBytes);
 
             var hashes = new CombatHashes(
-                RepositoryFileHash("config/combat-canary-build.json"),
+                RepositoryFileHash(_stableShadowActive
+                    ? "config/combat-stable-shadow.json"
+                    : "config/combat-canary-build.json"),
                 Hash(bindingBytes),
                 Hash(stateBindingBytes));
             Runtime.CreateFile(
@@ -1543,17 +1612,54 @@ public sealed class RuntimeIdentityProbeTests
                 }));
             Repository.CreateFile(
                 "config/combat-canary-build.json",
-                JsonSerializer.SerializeToUtf8Bytes(new
+                JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
                 {
-                    schemaVersion = 1,
-                    profileId = "newserv-combat-canary-build",
-                    output = new
+                    ["$schema"] = "./schemas/combat-canary-build.schema.json",
+                    ["schemaVersion"] = 1,
+                    ["profileId"] = "newserv-combat-canary-build",
+                    ["generatedAtUtc"] = StartTimeUtc.AddHours(-2).ToString("o"),
+                    ["source"] = new
                     {
+                        componentId = "newserv-canary-source",
+                    },
+                    ["patchSeries"] = new { },
+                    ["dependencies"] = Array.Empty<object>(),
+                    ["signatureVerification"] = new { },
+                    ["toolchain"] = new { },
+                    ["reproducibility"] = new { },
+                    ["validation"] = new { },
+                    ["output"] = new
+                    {
+                        rootRelative = "combat-canary/server-base/release",
                         executable = new
                         {
+                            path = "newserv-windows.exe",
                             size = _combatServerBytes.LongLength,
                             sha256 = Hash(_combatServerBytes),
                         },
+                    },
+                }));
+            Repository.CreateFile(
+                "config/combat-stable-shadow.json",
+                JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
+                {
+                    ["$schema"] = "./schemas/combat-stable-shadow.schema.json",
+                    ["schemaVersion"] = 1,
+                    ["profileId"] = "newserv-stable-shadow",
+                    ["source"] = new
+                    {
+                        serverComponentId = "newserv-stable-release",
+                        serverExecutable = new
+                        {
+                            path = "newserv-windows.exe",
+                            size = _stableServerBytes.LongLength,
+                            sha256 = Hash(_stableServerBytes),
+                        },
+                        clientComponentId = "tethealla-59nl-english",
+                    },
+                    ["output"] = new
+                    {
+                        rootRelative = "combat-canary/server-base/release",
                     },
                 }));
             Repository.CreateFile(

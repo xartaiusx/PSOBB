@@ -78,7 +78,263 @@ function Test-PSOBBCombatCanaryVerifierMutableServerExemptPath {
 
     $Path -cmatch (
         '^system/(?:config\.json|(?:licenses|players|teams)' +
-        '(?:/(?!\.{1,2}(?:/|$))[^/\\:]+)*)$')
+        '(?:/(?!\.{1,2}(?:/|$))[^/\\:]+)*|' +
+        'patch-(?:bb|pc)/\.metadata-cache\.json)$')
+}
+
+function Assert-PSOBBCombatCanaryMetadataCache {
+    param(
+        [Parameter(Mandatory)][string]$ServerRoot,
+        [Parameter(Mandatory)]$Policy
+    )
+
+    $path = Assert-PathWithinRoot `
+        -Path (Join-Path $ServerRoot (
+            ([string]$Policy.path).Replace('/', '\'))) `
+        -Root $ServerRoot
+    if (-not (Test-Path -LiteralPath $path)) { return $true }
+    $item = Get-Item -Force -LiteralPath $path -ErrorAction Stop
+    if ($item.PSIsContainer -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 1 -or
+        $item.Length -gt [int64]$Policy.maximumBytes) {
+        throw 'A generated newserv metadata cache is unsafe or out of bounds'
+    }
+    $json = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $path -Root $ServerRoot `
+        -MaximumBytes ([int64]$Policy.maximumBytes) `
+        -RoleLabel 'generated newserv metadata cache'
+    $properties = @($json.Properties())
+    if ($properties.Count -lt 1 -or $properties.Count -gt 16384) {
+        throw 'A generated newserv metadata cache has an invalid entry count'
+    }
+    $prefix = [string]$Policy.keyPrefix
+    foreach ($property in $properties) {
+        $name = [string]$property.Name
+        $value = $property.Value
+        if (-not $name.StartsWith(
+                $prefix, [System.StringComparison]::Ordinal) -or
+            $name.Length -le $prefix.Length -or $name.Length -gt 1024 -or
+            $name.Contains('\') -or $name.Contains(':') -or
+            $name.Contains('//') -or
+            $name.Substring(2) -match '(?:^|/)\.\.?(?:/|$)' -or
+            $value -isnot [Newtonsoft.Json.Linq.JArray] -or
+            $value.Count -ne 4 -or
+            $value[3] -isnot [Newtonsoft.Json.Linq.JArray] -or
+            $value[3].Count -lt 1 -or $value[3].Count -gt 16384) {
+            throw 'A generated newserv metadata cache entry is invalid'
+        }
+        foreach ($number in @($value[0], $value[1], $value[2]) +
+            @($value[3].Children())) {
+            if ($number -isnot [Newtonsoft.Json.Linq.JValue] -or
+                $number.Type -notin @(
+                    [Newtonsoft.Json.Linq.JTokenType]::Integer) -or
+                [System.Numerics.BigInteger]$number.Value -lt 0 -or
+                [System.Numerics.BigInteger]$number.Value -gt [int64]::MaxValue) {
+                throw 'A generated newserv metadata cache contains invalid metadata'
+            }
+        }
+    }
+    $true
+}
+
+function Get-PSOBBCombatStableShadowSource {
+    param(
+        [Parameter(Mandatory)]$RootLayout,
+        [Parameter(Mandatory)]$ContractSelection,
+        [switch]$VerifyPayload
+    )
+
+    $contract = $ContractSelection.Value
+    $sourceLockPath = Join-Path $script:RepositoryRoot `
+        'config\sources.lock.json'
+    $sourceLockJson = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $sourceLockPath -Root $script:RepositoryRoot `
+        -MaximumBytes 2MB -RoleLabel 'tracked source lock'
+    $sourceLock = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $sourceLockJson -RoleLabel 'tracked source lock'
+    $serverComponents = @($sourceLock.components | Where-Object {
+            [string]$_.id -ceq [string]$contract.source.serverComponentId
+        })
+    $clientComponents = @($sourceLock.components | Where-Object {
+            [string]$_.id -ceq [string]$contract.source.clientComponentId
+        })
+    $serverMembers = if ($serverComponents.Count -eq 1) {
+        @($serverComponents[0].members | Where-Object {
+                [string]$_.path -ceq 'release/newserv-windows.exe'
+            })
+    } else { @() }
+    $clientMembers = if ($clientComponents.Count -eq 1) {
+        @($clientComponents[0].members | Where-Object {
+                [string]$_.path -ceq 'Psobb.exe'
+            })
+    } else { @() }
+    if ($serverComponents.Count -ne 1 -or $clientComponents.Count -ne 1 -or
+        $serverMembers.Count -ne 1 -or $clientMembers.Count -ne 1 -or
+        [string]$serverComponents[0].commit -cne
+            [string]$contract.source.serverCommit -or
+        [string]$serverComponents[0].sha256 -cne
+            [string]$contract.source.serverArchiveSha256 -or
+        [int64]$serverMembers[0].size -ne
+            [int64]$contract.source.serverExecutable.size -or
+        [string]$serverMembers[0].sha256 -cne
+            [string]$contract.source.serverExecutable.sha256) {
+        throw 'StableShadow does not match the tracked source lock'
+    }
+    $stable = Get-PSOBBServerEnvironmentLayout `
+        -Layout $RootLayout -Environment Stable
+    $installSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $stable.InstallRecord -Root $stable.EnvironmentRoot `
+        -MaximumBytes 256KB -RoleLabel 'Stable installation record' `
+        -PassThruSnapshot
+    if (-not (Test-PSOBBProtectedAcl -Path $stable.InstallRecord)) {
+        throw 'The Stable installation record is not protected'
+    }
+    $install = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $installSnapshot.Value `
+        -RoleLabel 'Stable installation record'
+    Assert-PSOBBCombatCanaryVerifierExactProperties -Value $install `
+        -Label 'Stable installation record' `
+        -Expected @('schemaVersion', 'installationId', 'initializedAtUtc',
+            'runtimeRoot', 'serverVersion', 'serverArchiveSha256',
+            'serverExecutableSha256', 'serverBaseManifestSha256',
+            'clientVersion', 'clientArchiveSha256',
+            'baseClientExecutableSha256', 'baseClientManifestSha256',
+            'clientExecutableSha256', 'rendererVersion',
+            'rendererArchiveSha256', 'rendererWrapperSha256',
+            'rendererConfigurationSha256', 'patchManifestSha256',
+            'synchronizedPatchFiles', 'clientPatchProfile',
+            'clientPatchPolicySha256', 'networkScope')
+    $marker = Get-PSOBBCombatCanaryStrictRuntimeMarker -Layout $RootLayout
+    if ([int]$install.schemaVersion -ne 2 -or
+        [string]$install.installationId -cne [string]$marker.installationId -or
+        [string]$install.runtimeRoot -cne [string]$RootLayout.Root -or
+        [string]$install.serverArchiveSha256 -cne
+            [string]$contract.source.serverArchiveSha256 -or
+        [string]$install.serverExecutableSha256 -cne
+            [string]$contract.source.serverExecutable.sha256 -or
+        [string]$install.clientArchiveSha256 -cne
+            [string]$clientComponents[0].sha256 -or
+        [string]$install.baseClientExecutableSha256 -cne
+            [string]$clientMembers[0].sha256 -or
+        [string]$install.baseClientManifestSha256 -cnotmatch
+            '^[a-f0-9]{64}$' -or
+        [int]$install.synchronizedPatchFiles -ne
+            [int]$contract.source.patchDataFileCount -or
+        [string]$install.clientPatchProfile -cne 'baseline' -or
+        [string]$install.networkScope -cne 'loopback-only') {
+        throw 'Stable is not the exact accepted source for StableShadow'
+    }
+
+    $baseManifestPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.serverBaseManifestRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    $baseManifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $baseManifestPath -Root $stable.EnvironmentRoot `
+        -MaximumBytes 16MB `
+        -ExpectedSha256 ([string]$install.serverBaseManifestSha256) `
+        -RoleLabel 'Stable server base manifest' -PassThruSnapshot
+    $baseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $baseManifestSnapshot.Value `
+        -RoleLabel 'Stable server base manifest'
+    if ([int]$baseManifest.schemaVersion -ne 1 -or
+        [string]$baseManifest.sourceArchiveSha256 -cne
+            [string]$contract.source.serverArchiveSha256) {
+        throw 'Stable server-base provenance is invalid'
+    }
+
+    $patchManifestPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.patchManifestRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    $patchManifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $patchManifestPath -Root $stable.EnvironmentRoot `
+        -MaximumBytes 4MB `
+        -ExpectedSha256 ([string]$install.patchManifestSha256) `
+        -RoleLabel 'Stable BB patch-data manifest' -PassThruSnapshot
+    $patchManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $patchManifestSnapshot.Value `
+        -RoleLabel 'Stable BB patch-data manifest'
+    if ([int]$patchManifest.schemaVersion -ne 1 -or
+        [string]$patchManifest.sourceClientArchiveSha256 -cne
+            [string]$clientComponents[0].sha256 -or
+        @($patchManifest.files).Count -ne
+            [int]$contract.source.patchDataFileCount) {
+        throw 'Stable BB patch-data provenance is invalid'
+    }
+
+    $patchDataPath = Assert-PathWithinRoot `
+        -Path (Join-Path $RootLayout.Root (
+            ([string]$contract.source.patchDataRelativePath).Replace('/', '\'))) `
+        -Root $RootLayout.Root
+    if ($VerifyPayload.IsPresent) {
+        $serverBaseParent = Split-Path -Parent $stable.ServerBase
+        if (-not (Test-PSOBBDirectoryManifest `
+                -Root $serverBaseParent -Files @($baseManifest.files)) -or
+            -not (Test-PSOBBDirectoryManifest `
+                -Root $patchDataPath -Files @($patchManifest.files))) {
+            throw 'Stable source payload differs from its accepted manifests'
+        }
+    }
+
+    $releaseEntries = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($baseManifest.files)) {
+        $path = [string]$entry.path
+        if (-not $path.StartsWith(
+                'release/', [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        $relative = $path.Substring('release/'.Length)
+        if ($relative -cmatch '^system/patch-bb/data/') { continue }
+        if (-not $seen.Add($relative)) {
+            throw 'Stable server-base release manifest contains a collision'
+        }
+        $releaseEntries.Add([pscustomobject]@{
+                path = $relative
+                size = [int64]$entry.size
+                sha256 = [string]$entry.sha256
+            })
+    }
+    foreach ($entry in @($patchManifest.files)) {
+        $relative = [string]$contract.source.patchDataTargetRelativePath +
+            '/' + [string]$entry.path
+        if (-not $seen.Add($relative)) {
+            throw 'Stable BB patch-data overlay contains a collision'
+        }
+        $releaseEntries.Add([pscustomobject]@{
+                path = $relative
+                size = [int64]$entry.size
+                sha256 = [string]$entry.sha256
+            })
+    }
+    $executable = @($releaseEntries | Where-Object {
+            [string]$_.path -ceq
+                [string]$contract.source.serverExecutable.path
+        })
+    if ($executable.Count -ne 1 -or
+        [int64]$executable[0].size -ne
+            [int64]$contract.source.serverExecutable.size -or
+        [string]$executable[0].sha256 -cne
+            [string]$contract.source.serverExecutable.sha256) {
+        throw 'StableShadow source does not contain its exact server executable'
+    }
+    [pscustomobject]@{
+        StableLayout = $stable
+        StableInstallation = $install
+        ServerBaseManifestPath = $baseManifestPath
+        ServerBaseManifestSha256 = [string]$baseManifestSnapshot.Sha256
+        PatchManifestPath = $patchManifestPath
+        PatchManifestSha256 = [string]$patchManifestSnapshot.Sha256
+        BaseClientManifestSha256 =
+            [string]$install.baseClientManifestSha256
+        BaseClientExecutableSha256 =
+            [string]$install.baseClientExecutableSha256
+        PatchDataPath = $patchDataPath
+        ReleaseEntries = $releaseEntries.ToArray()
+    }
 }
 
 function Get-PSOBBCombatCanaryTrustedFingerprint {
@@ -676,48 +932,125 @@ function Get-PSOBBCombatCanaryInstallation {
         [string]$ExplicitBuildContractHash
     )
 
-    $buildContractPath = Join-Path $script:RepositoryRoot 'config\combat-canary-build.json'
-    $expectedBuildContractHash = if ([string]::IsNullOrWhiteSpace(
+    $requestedBuildContractHash = if ([string]::IsNullOrWhiteSpace(
             $ExplicitBuildContractHash)) { '' } else {
         $ExplicitBuildContractHash.ToLowerInvariant()
     }
-    $buildSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
-        -LiteralPath $buildContractPath -Root $script:RepositoryRoot `
-        -MaximumBytes 512KB -ExpectedSha256 $expectedBuildContractHash `
-        -RoleLabel 'combat canary build contract' -PassThruSnapshot
-    $buildContractHash = [string]$buildSnapshot.Sha256
-    $buildJson = $buildSnapshot.Value
-    $build = ConvertTo-PSOBBCombatCanaryPowerShellObject `
-        -JsonObject $buildJson -RoleLabel 'combat canary build contract'
-    [void](Assert-PSOBBCombatCanaryBuildContractIdentity -Build $build)
+    $explicitSelection = if ([string]::IsNullOrEmpty(
+            $requestedBuildContractHash)) { $null } else {
+        Get-PSOBBCombatCanaryBuildContractSelection `
+            -RepositoryRoot $script:RepositoryRoot `
+            -ExpectedSha256 $requestedBuildContractHash
+    }
+    $installItem = Get-Item -Force -LiteralPath $Layout.InstallRecord `
+        -ErrorAction Stop
+    if ($installItem.PSIsContainer -or
+        ($installItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not (Test-PSOBBProtectedAcl -Path $Layout.InstallRecord)) {
+        throw 'The combat-canary installation record is missing or unprotected'
+    }
+    $installationJson = Read-PSOBBCombatCanaryStrictJsonObject `
+        -LiteralPath $Layout.InstallRecord `
+        -Root $Layout.EnvironmentRoot -MaximumBytes 256KB `
+        -RoleLabel 'combat canary installation record'
+    $installation = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+        -JsonObject $installationJson `
+        -RoleLabel 'combat canary installation record'
+    Assert-PSOBBCombatCanaryVerifierExactProperties -Value $installation `
+        -Label 'Combat-canary installation record' `
+        -Expected @('schemaVersion', 'environment', 'environmentId',
+            'initializedAtUtc', 'buildContractSha256',
+            'serverReleaseManifestSha256', 'baseClientManifestSha256',
+            'clientBindingSha256', 'snapshotDirectoryName', 'snapshotId',
+            'snapshotManifestSha256', 'stateBindingSha256',
+            'twillsContractSha256', 'signingPublicKeySpkiSha256',
+            'configurationSha256')
+    $boundBuildContractHash = [string]$installation.buildContractSha256
+    if ($boundBuildContractHash -cnotmatch '^[a-f0-9]{64}$' -or
+        (-not [string]::IsNullOrEmpty($requestedBuildContractHash) -and
+            $boundBuildContractHash -cne $requestedBuildContractHash)) {
+        throw 'The combat-canary installation has an unexpected build contract'
+    }
+    $selection = if ($null -ne $explicitSelection) {
+        $explicitSelection
+    } else {
+        Get-PSOBBCombatCanaryBuildContractSelection `
+            -RepositoryRoot $script:RepositoryRoot `
+            -ExpectedSha256 $boundBuildContractHash
+    }
+    $buildContractHash = [string]$selection.Hash
+    $build = $selection.Value
+    $stableShadowSource = if ($selection.Artifact -ceq 'StableShadow') {
+        Get-PSOBBCombatStableShadowSource `
+            -RootLayout (Get-PSOBBLayout -RuntimeRoot $Layout.Root) `
+            -ContractSelection $selection
+    } else {
+        $null
+    }
 
     [void](Assert-PSOBBCombatCanaryOrdinaryTree `
             -Path $Layout.ServerBase -Root $Layout.EnvironmentRoot `
             -Label 'Combat-canary server base')
-    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
-            -Build $build -Root $Layout.ServerBase)
+    if ($selection.Artifact -ceq 'CurrentUpstream') {
+        [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                -Build $build -Root $Layout.ServerBase)
+    }
     $releaseManifestPath = Assert-PathWithinRoot `
         -Path (Join-Path $Layout.ServerBase 'release-manifest.json') `
         -Root $Layout.ServerBase
+    $releaseManifestParameters = @{
+        LiteralPath = $releaseManifestPath
+        Root = $Layout.ServerBase
+        MaximumBytes = 16MB
+        ExpectedSha256 = [string]$installation.serverReleaseManifestSha256
+        RoleLabel = 'built server release manifest'
+        PassThruSnapshot = $true
+    }
+    if ($selection.Artifact -ceq 'CurrentUpstream') {
+        $releaseManifestParameters.ExpectedLength =
+            [int64]$build.output.releaseManifest.size
+        if ([string]$build.output.releaseManifest.sha256 -cne
+                [string]$installation.serverReleaseManifestSha256) {
+            throw 'The current-upstream release manifest binding changed'
+        }
+    }
     $releaseManifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
-        -LiteralPath $releaseManifestPath -Root $Layout.ServerBase `
-        -MaximumBytes 16MB `
-        -ExpectedLength ([int64]$build.output.releaseManifest.size) `
-        -ExpectedSha256 ([string]$build.output.releaseManifest.sha256) `
-        -RoleLabel 'built server release manifest' -PassThruSnapshot
+        @releaseManifestParameters
     $releaseManifestJson = $releaseManifestSnapshot.Value
     $releaseManifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
         -JsonObject $releaseManifestJson -RoleLabel 'built server release manifest'
-    Assert-PSOBBCombatCanaryVerifierExactProperties -Value $releaseManifest `
-        -Label 'Combat-canary release manifest' `
-        -Expected @('schemaVersion', 'profileId', 'sourceCommit',
-            'patchSeriesSha256', 'files')
-    if ([int]$releaseManifest.schemaVersion -ne 1 -or
-        [string]$releaseManifest.profileId -cne [string]$build.profileId -or
-        [string]$releaseManifest.sourceCommit -cne [string]$build.source.commit -or
-        [string]$releaseManifest.patchSeriesSha256 -cne
-            [string]$build.patchSeries.sha256) {
-        throw 'The server release manifest is not bound to the tracked build contract'
+    if ($selection.Artifact -ceq 'CurrentUpstream') {
+        Assert-PSOBBCombatCanaryVerifierExactProperties -Value $releaseManifest `
+            -Label 'Combat-canary release manifest' `
+            -Expected @('schemaVersion', 'profileId', 'sourceCommit',
+                'patchSeriesSha256', 'files')
+        if ([int]$releaseManifest.schemaVersion -ne 1 -or
+            [string]$releaseManifest.profileId -cne [string]$build.profileId -or
+            [string]$releaseManifest.sourceCommit -cne
+                [string]$build.source.commit -or
+            [string]$releaseManifest.patchSeriesSha256 -cne
+                [string]$build.patchSeries.sha256) {
+            throw 'The server release manifest is not bound to the tracked build contract'
+        }
+    } else {
+        Assert-PSOBBCombatCanaryVerifierExactProperties -Value $releaseManifest `
+            -Label 'StableShadow release manifest' `
+            -Expected @('schemaVersion', 'profileId', 'serverComponentId',
+                'serverCommit', 'serverBaseManifestSha256',
+                'patchDataManifestSha256', 'files')
+        if ([int]$releaseManifest.schemaVersion -ne 1 -or
+            [string]$releaseManifest.profileId -cne
+                [string]$build.profileId -or
+            [string]$releaseManifest.serverComponentId -cne
+                [string]$build.source.serverComponentId -or
+            [string]$releaseManifest.serverCommit -cne
+                [string]$build.source.serverCommit -or
+            [string]$releaseManifest.serverBaseManifestSha256 -cne
+                [string]$stableShadowSource.ServerBaseManifestSha256 -or
+            [string]$releaseManifest.patchDataManifestSha256 -cne
+                [string]$stableShadowSource.PatchManifestSha256) {
+            throw 'The StableShadow release manifest is not source-bound'
+        }
     }
     $releaseEntries = @($releaseManifest.files)
     $releasePaths = [System.Collections.Generic.HashSet[string]]::new(
@@ -750,8 +1083,15 @@ function Get-PSOBBCombatCanaryInstallation {
             [System.IO.Path]::GetRelativePath(
                 $Layout.ServerBase, $_.FullName).Replace('\', '/')
         } | Where-Object { $_ -cne 'release-manifest.json' })
-    if ($releaseEntries.Count -ne [int]$build.output.fileCount -or
-        $releaseBytes -ne [int64]$build.output.totalBytes -or
+    $manifestClaimsInvalid = if ($selection.Artifact -ceq 'CurrentUpstream') {
+        $releaseEntries.Count -ne [int]$build.output.fileCount -or
+            $releaseBytes -ne [int64]$build.output.totalBytes
+    } else {
+        -not (Test-PSOBBManifestEntriesEqual `
+            -Left @($stableShadowSource.ReleaseEntries) `
+            -Right $releaseEntries)
+    }
+    if ($manifestClaimsInvalid -or
         $actualReleasePaths.Count -ne $releasePaths.Count -or
         @($actualReleasePaths | Where-Object {
                 -not $releasePaths.Contains($_)
@@ -759,35 +1099,17 @@ function Get-PSOBBCombatCanaryInstallation {
         throw 'The server-base release inventory differs from its build contract'
     }
     $baseExecutablePath = Join-Path $Layout.ServerBase 'newserv-windows.exe'
+    $expectedExecutable = if ($selection.Artifact -ceq 'CurrentUpstream') {
+        $build.output.executable
+    } else {
+        $build.source.serverExecutable
+    }
     if ((Get-Item -Force -LiteralPath $baseExecutablePath).Length -ne
-            [int64]$build.output.executable.size -or
+            [int64]$expectedExecutable.size -or
         (Get-LowerSha256 $baseExecutablePath) -cne
-            [string]$build.output.executable.sha256) {
+            [string]$expectedExecutable.sha256) {
         throw 'The server-base executable does not match its build contract'
     }
-
-    $installItem = Get-Item -Force -LiteralPath $Layout.InstallRecord -ErrorAction Stop
-    if ($installItem.PSIsContainer -or
-        ($installItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
-        -not (Test-PSOBBProtectedAcl -Path $Layout.InstallRecord)) {
-        throw 'The combat-canary installation record is missing or unprotected'
-    }
-    $installationJson = Read-PSOBBCombatCanaryStrictJsonObject `
-        -LiteralPath $Layout.InstallRecord `
-        -Root $Layout.EnvironmentRoot -MaximumBytes 256KB `
-        -RoleLabel 'combat canary installation record'
-    $installation = ConvertTo-PSOBBCombatCanaryPowerShellObject `
-        -JsonObject $installationJson `
-        -RoleLabel 'combat canary installation record'
-    Assert-PSOBBCombatCanaryVerifierExactProperties -Value $installation `
-        -Label 'Combat-canary installation record' `
-        -Expected @('schemaVersion', 'environment', 'environmentId',
-            'initializedAtUtc', 'buildContractSha256',
-            'serverReleaseManifestSha256', 'baseClientManifestSha256',
-            'clientBindingSha256', 'snapshotDirectoryName', 'snapshotId',
-            'snapshotManifestSha256', 'stateBindingSha256',
-            'twillsContractSha256', 'signingPublicKeySpkiSha256',
-            'configurationSha256')
     $initializedAt = [DateTimeOffset]::MinValue
     if ([int]$installation.schemaVersion -ne 1 -or
         [string]$installation.environment -cne 'CombatCanary' -or
@@ -811,8 +1133,10 @@ function Get-PSOBBCombatCanaryInstallation {
     [void](Assert-PSOBBCombatCanaryOrdinaryTree `
             -Path $Layout.Server -Root $Layout.EnvironmentRoot `
             -Label 'Mutable combat-canary server')
-    [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
-            -Build $build -Root $Layout.Server)
+    if ($selection.Artifact -ceq 'CurrentUpstream') {
+        [void](Assert-PSOBBCombatCanaryRequiredReleaseDirectories `
+                -Build $build -Root $Layout.Server)
+    }
     $expectedMutableEntries = @(
         @($releaseEntries | Where-Object {
                 -not (Test-PSOBBCombatCanaryVerifierMutableServerExemptPath `
@@ -831,6 +1155,19 @@ function Get-PSOBBCombatCanaryInstallation {
     if (-not (Test-PSOBBManifestEntriesEqual `
             -Left $expectedMutableEntries -Right $comparableMutableEntries)) {
         throw 'The mutable combat-canary server inventory differs from server-base outside its sealed state and configuration'
+    }
+    $cacheContract = @(
+        (Get-PSOBBCombatCanaryBuildContractSelection `
+            -RepositoryRoot $script:RepositoryRoot) | Where-Object {
+                [string]$_.Artifact -ceq 'StableShadow'
+            })
+    if ($cacheContract.Count -ne 1) {
+        throw 'The generated metadata-cache policy is unavailable'
+    }
+    foreach ($cachePolicy in @(
+            $cacheContract[0].Value.output.generatedMetadataCaches)) {
+        [void](Assert-PSOBBCombatCanaryMetadataCache `
+                -ServerRoot $Layout.Server -Policy $cachePolicy)
     }
 
     $configurationPath = Join-Path $Layout.Server 'system\config.json'
@@ -917,9 +1254,9 @@ function Get-PSOBBCombatCanaryInstallation {
     }
     $mutableExecutablePath = Join-Path $Layout.Server 'newserv-windows.exe'
     if ((Get-Item -Force -LiteralPath $mutableExecutablePath).Length -ne
-            [int64]$build.output.executable.size -or
+            [int64]$expectedExecutable.size -or
         (Get-LowerSha256 $mutableExecutablePath) -cne
-            [string]$build.output.executable.sha256) {
+            [string]$expectedExecutable.sha256) {
         throw 'The mutable combat-canary server executable differs from server-base'
     }
 
@@ -929,6 +1266,11 @@ function Get-PSOBBCombatCanaryInstallation {
     [void](Assert-PSOBBCombatCanaryOrdinaryTree `
             -Path $Layout.Client -Root $Layout.EnvironmentRoot `
             -Label 'Mutable combat-canary runtime client')
+    if ($selection.Artifact -ceq 'StableShadow' -and
+        [string]$installation.baseClientManifestSha256 -cne
+            [string]$stableShadowSource.BaseClientManifestSha256) {
+        throw 'The StableShadow client manifest is not bound to Stable'
+    }
     $baseManifestSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
         -LiteralPath $Layout.BaseClientManifest -Root $Layout.EnvironmentRoot `
         -MaximumBytes 16MB `
@@ -995,6 +1337,9 @@ function Get-PSOBBCombatCanaryInstallation {
         [string]$binding.clientExecutablePath -cne 'runtime/client/Psobb.exe' -or
         [int64]$binding.clientExecutableSize -ne $approvedClient.Size -or
         [string]$binding.clientExecutableSha256 -cne $approvedClient.Sha256 -or
+        ($selection.Artifact -ceq 'StableShadow' -and
+            [string]$approvedClient.Sha256 -cne
+                [string]$stableShadowSource.BaseClientExecutableSha256) -or
         [string]$binding.clientProfileSha256 -cnotmatch '^[a-f0-9]{64}$' -or
         [string]$binding.baseClientManifestSha256 -cne
             [string]$baseManifestSnapshot.Sha256 -or
@@ -1025,6 +1370,8 @@ function Get-PSOBBCombatCanaryInstallation {
         Valid = $true
         Installation = $installation
         Build = $build
+        ServerArtifact = [string]$selection.Artifact
+        ServerComponentId = [string]$selection.ComponentId
         BuildContractSha256 = $buildContractHash
         ReleaseManifest = $releaseManifest
         ReleaseManifestSha256 = [string]$releaseManifestSnapshot.Sha256
@@ -1083,13 +1430,12 @@ if ($Target -in @('Snapshot', 'Installed', 'Both')) {
             $SnapshotPath = Join-Path $layout.Snapshots (
                 [string]$installationResult.Installation.snapshotDirectoryName)
         } else {
-            $candidates = if (Test-Path -LiteralPath $layout.Snapshots -PathType Container) {
-                @(Get-ChildItem -Force -LiteralPath $layout.Snapshots -Directory |
-                    Where-Object { $_.Name -cmatch '^twills-slot0-' } |
-                    Sort-Object Name -Descending)
-            } else {
-                @()
-            }
+            $candidates = @(if (Test-Path -LiteralPath $layout.Snapshots `
+                        -PathType Container) {
+                    Get-ChildItem -Force -LiteralPath $layout.Snapshots -Directory |
+                        Where-Object { $_.Name -cmatch '^twills-slot0-' } |
+                        Sort-Object Name -Descending
+                })
             if ($candidates.Count -eq 0) {
                 throw 'No sealed combat-canary Twills snapshot is available'
             }
@@ -1247,6 +1593,8 @@ if ($Target -in @('Installed', 'Both')) {
         Environment = 'CombatCanary'
         SnapshotId = $snapshotResult.SnapshotId
         SnapshotManifestSha256 = $snapshotResult.ManifestSha256
+        ServerArtifact = $installationResult.ServerArtifact
+        ServerComponentId = $installationResult.ServerComponentId
         BuildContractSha256 = $installationResult.BuildContractSha256
         ServerReleaseManifestSha256 = $installationResult.ReleaseManifestSha256
         BaseClientManifestSha256 = $installationResult.BaseClientManifestSha256
@@ -1264,6 +1612,8 @@ elseif ($Target -ceq 'Installation') {
         Valid = $true
         Target = 'Installation'
         Environment = 'CombatCanary'
+        ServerArtifact = $installationResult.ServerArtifact
+        ServerComponentId = $installationResult.ServerComponentId
         BuildContractSha256 = $installationResult.BuildContractSha256
         ServerReleaseManifestSha256 = $installationResult.ReleaseManifestSha256
         BaseClientManifestSha256 = $installationResult.BaseClientManifestSha256

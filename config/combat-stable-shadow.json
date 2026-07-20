@@ -1,0 +1,37 @@
+{
+  "$schema": "./schemas/combat-stable-shadow.schema.json",
+  "schemaVersion": 1,
+  "profileId": "newserv-stable-shadow",
+  "source": {
+    "serverComponentId": "newserv-stable-release",
+    "serverCommit": "a649a4a146d04dba320bb579ac291527db0febb5",
+    "serverArchiveSha256": "aee0696b4392407d46ef584e1b8117307474b791ef09a02282458d1444655869",
+    "serverExecutable": {
+      "path": "newserv-windows.exe",
+      "size": 31162999,
+      "sha256": "7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd"
+    },
+    "clientComponentId": "tethealla-59nl-english",
+    "serverBaseManifestRelativePath": "stable/server-base.manifest.json",
+    "patchManifestRelativePath": "stable/patch-bb-data.manifest.json",
+    "patchDataRelativePath": "stable/server/release/system/patch-bb/data",
+    "patchDataTargetRelativePath": "system/patch-bb/data",
+    "patchDataFileCount": 108
+  },
+  "output": {
+    "rootRelative": "combat-canary/server-base/release",
+    "releaseManifestName": "release-manifest.json",
+    "generatedMetadataCaches": [
+      {
+        "path": "system/patch-bb/.metadata-cache.json",
+        "maximumBytes": 4194304,
+        "keyPrefix": "./data/"
+      },
+      {
+        "path": "system/patch-pc/.metadata-cache.json",
+        "maximumBytes": 1048576,
+        "keyPrefix": "./Media/PSO/"
+      }
+    ]
+  }
+}

@@ -140,11 +140,6 @@ internal sealed partial class ExactRuntimeIdentityProbe : IRuntimeIdentityProbe
                     IdentityAuthenticated: true);
             }
 
-            var approvedServer = await ReadApprovedIdentityAsync(
-                contract.ServerComponentId,
-                "release/newserv-windows.exe",
-                sealedFiles,
-                cancellationToken).ConfigureAwait(false);
             var approvedClient = await ReadApprovedIdentityAsync(
                 "tethealla-59nl-english",
                 "Psobb.exe",
@@ -154,9 +149,27 @@ internal sealed partial class ExactRuntimeIdentityProbe : IRuntimeIdentityProbe
                 ? await ReadCombatInstallationSealAsync(
                     contract,
                     approvedClient,
-                    sealedFiles,
-                    cancellationToken).ConfigureAwait(false)
+                     sealedFiles,
+                     cancellationToken).ConfigureAwait(false)
                 : null;
+            if (combatSeal is not null)
+            {
+                contract = contract with { ServerComponentId = combatSeal.ServerComponentId };
+            }
+            var approvedServer = await ReadApprovedIdentityAsync(
+                contract.ServerComponentId,
+                "release/newserv-windows.exe",
+                sealedFiles,
+                cancellationToken).ConfigureAwait(false);
+            if (combatSeal is not null
+                && (approvedServer.Size != combatSeal.ServerExecutable.Size
+                    || !approvedServer.Sha256.Equals(
+                        combatSeal.ServerExecutable.Sha256,
+                        StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException(
+                    "The selected combat-canary build contract executable does not match its approved source-lock identity.");
+            }
             var record = await ReadServerRecordAsync(
                 contract,
                 sealedFiles,

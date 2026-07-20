@@ -5,6 +5,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 . (Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
+$currentBuildContractHash = Get-LowerSha256 (
+    Join-Path $repositoryRoot 'config\combat-canary-build.json')
+$stableShadowContractHash = Get-LowerSha256 (
+    Join-Path $repositoryRoot 'config\combat-stable-shadow.json')
 
 $results = [System.Collections.Generic.List[object]]::new()
 
@@ -44,7 +48,7 @@ function New-InstallationRecord {
         environment = 'CombatCanary'
         environmentId = 'combat-canary'
         initializedAtUtc = '2026-07-20T12:00:00.0000000Z'
-        buildContractSha256 = 'a' * 64
+        buildContractSha256 = $currentBuildContractHash
         serverReleaseManifestSha256 = 'b' * 64
         baseClientManifestSha256 = 'c' * 64
         clientBindingSha256 = 'd' * 64
@@ -91,12 +95,27 @@ try {
         -Path $combat.InstallRecord -Value $record -Protect
     $expectations = Get-PSOBBCombatCanaryInstallationBindingExpectations `
         -Layout $layout
-    Add-Result 'protected exact installation record yields only three expectations' (
-        @($expectations.PSObject.Properties.Name).Count -eq 3 -and
-        [string]$expectations.BuildContractSha256 -ceq ('a' * 64) -and
+    Add-Result 'protected exact installation record yields exact startup expectations' (
+        @($expectations.PSObject.Properties.Name).Count -eq 4 -and
+        [string]$expectations.ServerComponentId -ceq
+            'newserv-combat-canary-build' -and
+        [string]$expectations.BuildContractSha256 -ceq
+            $currentBuildContractHash -and
         [string]$expectations.ClientBindingSha256 -ceq ('d' * 64) -and
         [string]$expectations.StateBindingSha256 -ceq ('f' * 64)) `
-        'outer startup receives build, client, and state hashes without exhaustive verification'
+        'outer startup receives component, build, client, and state bindings without exhaustive verification'
+
+    $record.buildContractSha256 = $stableShadowContractHash
+    Write-InstallationRecord `
+        -Path $combat.InstallRecord -Value $record -Protect
+    $shadowExpectations =
+        Get-PSOBBCombatCanaryInstallationBindingExpectations -Layout $layout
+    Add-Result 'StableShadow binding selects the Stable executable component' (
+        [string]$shadowExpectations.ServerComponentId -ceq
+            'newserv-stable-release' -and
+        [string]$shadowExpectations.BuildContractSha256 -ceq
+            $stableShadowContractHash) `
+        'the existing CombatCanary lifecycle selects its server identity from the sealed build contract'
 
     $record.environmentId = 'stable'
     Write-InstallationRecord `

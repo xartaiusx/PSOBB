@@ -742,6 +742,36 @@ function Get-PSOBBServerComponentId {
     }
 }
 
+function Get-PSOBBCombatCanaryServerComponentIdFromBuildContractHash {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-fA-F0-9]{64}$')]
+        [string]$BuildContractSha256
+    )
+
+    $expected = $BuildContractSha256.ToLowerInvariant()
+    $contracts = @(
+        [pscustomobject]@{
+            Path = Join-Path $script:PSOBBRepositoryRoot `
+                'config\combat-canary-build.json'
+            ComponentId = 'newserv-combat-canary-build'
+        },
+        [pscustomobject]@{
+            Path = Join-Path $script:PSOBBRepositoryRoot `
+                'config\combat-stable-shadow.json'
+            ComponentId = 'newserv-stable-release'
+        })
+    $matches = @($contracts | Where-Object {
+            (Test-Path -LiteralPath $_.Path -PathType Leaf) -and
+                (Get-LowerSha256 $_.Path) -ceq $expected
+        })
+    if ($matches.Count -ne 1) {
+        throw 'The combat-canary installation references an unknown build contract'
+    }
+    [string]$matches[0].ComponentId
+}
+
 function Get-PSOBBApprovedNewservExecutableIdentity {
     [CmdletBinding()]
     param(
@@ -756,6 +786,12 @@ function Get-PSOBBApprovedNewservExecutableIdentity {
         -Layout $Layout -Environment $ServerEnvironment
     $componentId = Get-PSOBBServerComponentId `
         -ServerEnvironment $environmentLayout.Environment
+    if ($environmentLayout.Environment -ceq 'CombatCanary' -and
+        (Test-Path -LiteralPath $environmentLayout.InstallRecord -PathType Leaf)) {
+        $expectations = Get-PSOBBCombatCanaryInstallationBindingExpectations `
+            -Layout $Layout
+        $componentId = [string]$expectations.ServerComponentId
+    }
     if (-not (Test-Path -LiteralPath $SourcesLockPath -PathType Leaf)) {
         throw "The source lock is missing: $SourcesLockPath"
     }
@@ -778,18 +814,29 @@ function Get-PSOBBApprovedNewservExecutableIdentity {
     }
 
     if ($environmentLayout.Environment -ceq 'CombatCanary') {
-        if (-not (Test-Path -LiteralPath $CombatCanaryBuildContractPath -PathType Leaf)) {
+        $selectedContractPath = if ($componentId -ceq
+                'newserv-stable-release') {
+            Join-Path $script:PSOBBRepositoryRoot `
+                'config\combat-stable-shadow.json'
+        } else {
+            $CombatCanaryBuildContractPath
+        }
+        if (-not (Test-Path -LiteralPath $selectedContractPath -PathType Leaf)) {
             throw 'The tracked combat-canary build contract is missing'
         }
-        $buildContract = Get-Content -Raw -LiteralPath $CombatCanaryBuildContractPath |
+        $buildContract = Get-Content -Raw -LiteralPath $selectedContractPath |
             ConvertFrom-Json -Depth 20 -DateKind String
-        if ([string]$buildContract.output.rootRelative -cne
-                'combat-canary/server-base/release' -or
-            [string]$buildContract.output.executable.path -cne
-                'newserv-windows.exe' -or
-            [long]$buildContract.output.executable.size -ne
-                [long]$members[0].size -or
-            [string]$buildContract.output.executable.sha256 -cne
+        $contractExecutable = if ($componentId -ceq
+                'newserv-stable-release') {
+            $buildContract.source.serverExecutable
+        } else {
+            $buildContract.output.executable
+        }
+        $contractRoot = [string]$buildContract.output.rootRelative
+        if ($contractRoot -cne 'combat-canary/server-base/release' -or
+            [string]$contractExecutable.path -cne 'newserv-windows.exe' -or
+            [long]$contractExecutable.size -ne [long]$members[0].size -or
+            [string]$contractExecutable.sha256 -cne
                 [string]$members[0].sha256) {
             throw 'The combat-canary build contract does not match its exact source-lock executable member'
         }
@@ -886,6 +933,8 @@ function Get-PSOBBCombatCanaryInstallationBindingExpectations {
     }
 
     [pscustomobject]@{
+        ServerComponentId = Get-PSOBBCombatCanaryServerComponentIdFromBuildContractHash `
+            -BuildContractSha256 ([string]$installation.buildContractSha256)
         BuildContractSha256 = [string]$installation.buildContractSha256
         ClientBindingSha256 = [string]$installation.clientBindingSha256
         StateBindingSha256 = [string]$installation.stateBindingSha256
@@ -920,6 +969,17 @@ function Get-PSOBBCombatCanaryInstalledBinding {
         if ([string]$verification.$propertyName -cnotmatch '^[a-f0-9]{64}$') {
             throw "The combat-canary installed-state verifier returned an invalid $propertyName"
         }
+    }
+    $expectedComponent =
+        Get-PSOBBCombatCanaryServerComponentIdFromBuildContractHash `
+            -BuildContractSha256 ([string]$verification.BuildContractSha256)
+    $expectedArtifact = if ($expectedComponent -ceq
+            'newserv-stable-release') { 'StableShadow' } else {
+        'CurrentUpstream'
+    }
+    if ([string]$verification.ServerComponentId -cne $expectedComponent -or
+        [string]$verification.ServerArtifact -cne $expectedArtifact) {
+        throw 'The combat-canary installed-state verifier returned an invalid server component'
     }
     $verification
 }
@@ -2056,11 +2116,10 @@ function Wait-PSOBBRecordedSupervisorHostQuiescence {
     }
     $environmentName = Resolve-PSOBBServerEnvironmentName `
         -Environment ([string]$Layout.Environment)
-    $componentId = Get-PSOBBServerComponentId `
-        -ServerEnvironment $environmentName
     $rootLayout = Get-PSOBBLayout -RuntimeRoot ([string]$Layout.Root)
     $approved = Get-PSOBBApprovedNewservExecutableIdentity `
         -Layout $rootLayout -ServerEnvironment $environmentName
+    $componentId = [string]$approved.ComponentId
     $marker = Assert-PSOBBRuntimeMarker -Layout $rootLayout
     try {
         $expectedControlIdentity = Get-PSOBBServerControlIdentity `
@@ -2307,11 +2366,12 @@ function Get-PSOBBServerEnvironmentProcessRecords {
     foreach ($environmentName in @('Stable', 'CombatCanary')) {
         $environmentLayout = Get-PSOBBServerEnvironmentLayout `
             -Layout $Layout -Environment $environmentName
+        $approved = Get-PSOBBApprovedNewservExecutableIdentity `
+            -Layout $Layout -ServerEnvironment $environmentName
         $approvedPaths.Add([pscustomobject]@{
             ServerEnvironment = $environmentLayout.Environment
             EnvironmentId = $environmentLayout.EnvironmentId
-            ComponentId = Get-PSOBBServerComponentId `
-                -ServerEnvironment $environmentLayout.Environment
+            ComponentId = [string]$approved.ComponentId
             ExecutablePath = Join-Path $environmentLayout.Server 'newserv-windows.exe'
         })
     }
@@ -4683,8 +4743,6 @@ function Get-NewservProcess {
     } else {
         'stable'
     }
-    $componentId = Get-PSOBBServerComponentId `
-        -ServerEnvironment $environmentName
     try {
         $rootLayout = if ($Layout.PSObject.Properties['Environment']) {
             Get-PSOBBLayout -RuntimeRoot ([string]$Layout.Root)
@@ -4693,6 +4751,7 @@ function Get-NewservProcess {
         }
         $approvedIdentity = Get-PSOBBApprovedNewservExecutableIdentity `
             -Layout $rootLayout -ServerEnvironment $environmentName
+        $componentId = [string]$approvedIdentity.ComponentId
     } catch {
         return $null
     }

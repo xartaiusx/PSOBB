@@ -2799,3 +2799,151 @@ function Assert-PSOBBCombatCanaryExactDirectoryInventory {
         throw "The $RoleLabel directory inventory is unreadable or inexact"
     }
 }
+
+function Assert-PSOBBCombatStableShadowContractIdentity {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Contract)
+
+    $invalid = 'The StableShadow assembly contract is not exact'
+    try {
+        [void](Assert-PSOBBCombatCanaryExactProperties -Value $Contract `
+                -RoleLabel 'StableShadow assembly contract' `
+                -Expected @('$schema', 'schemaVersion', 'profileId',
+                    'source', 'output'))
+        [void](Assert-PSOBBCombatCanaryExactProperties -Value $Contract.source `
+                -RoleLabel 'StableShadow source contract' `
+                -Expected @('serverComponentId', 'serverCommit',
+                    'serverArchiveSha256', 'serverExecutable',
+                    'clientComponentId', 'serverBaseManifestRelativePath',
+                    'patchManifestRelativePath', 'patchDataRelativePath',
+                    'patchDataTargetRelativePath', 'patchDataFileCount'))
+        [void](Assert-PSOBBCombatCanaryExactProperties `
+                -Value $Contract.source.serverExecutable `
+                -RoleLabel 'StableShadow executable contract' `
+                -Expected @('path', 'size', 'sha256'))
+        [void](Assert-PSOBBCombatCanaryExactProperties -Value $Contract.output `
+                -RoleLabel 'StableShadow output contract' `
+                -Expected @('rootRelative', 'releaseManifestName',
+                    'generatedMetadataCaches'))
+        if ($Contract.output.generatedMetadataCaches -isnot [System.Array] -or
+            @($Contract.output.generatedMetadataCaches).Count -ne 2) {
+            throw $invalid
+        }
+        foreach ($cache in @($Contract.output.generatedMetadataCaches)) {
+            [void](Assert-PSOBBCombatCanaryExactProperties -Value $cache `
+                    -RoleLabel 'StableShadow metadata cache contract' `
+                    -Expected @('path', 'maximumBytes', 'keyPrefix'))
+        }
+        $caches = @($Contract.output.generatedMetadataCaches)
+        if ([int]$Contract.schemaVersion -ne 1 -or
+            [string]$Contract.'$schema' -cne
+                './schemas/combat-stable-shadow.schema.json' -or
+            [string]$Contract.profileId -cne 'newserv-stable-shadow' -or
+            [string]$Contract.source.serverComponentId -cne
+                'newserv-stable-release' -or
+            [string]$Contract.source.serverCommit -cne
+                'a649a4a146d04dba320bb579ac291527db0febb5' -or
+            [string]$Contract.source.serverArchiveSha256 -cne
+                'aee0696b4392407d46ef584e1b8117307474b791ef09a02282458d1444655869' -or
+            [string]$Contract.source.serverExecutable.path -cne
+                'newserv-windows.exe' -or
+            [int64]$Contract.source.serverExecutable.size -ne 31162999 -or
+            [string]$Contract.source.serverExecutable.sha256 -cne
+                '7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd' -or
+            [string]$Contract.source.clientComponentId -cne
+                'tethealla-59nl-english' -or
+            [string]$Contract.source.serverBaseManifestRelativePath -cne
+                'stable/server-base.manifest.json' -or
+            [string]$Contract.source.patchManifestRelativePath -cne
+                'stable/patch-bb-data.manifest.json' -or
+            [string]$Contract.source.patchDataRelativePath -cne
+                'stable/server/release/system/patch-bb/data' -or
+            [string]$Contract.source.patchDataTargetRelativePath -cne
+                'system/patch-bb/data' -or
+            [int]$Contract.source.patchDataFileCount -ne 108 -or
+            [string]$Contract.output.rootRelative -cne
+                'combat-canary/server-base/release' -or
+            [string]$Contract.output.releaseManifestName -cne
+                'release-manifest.json' -or
+            [string]$caches[0].path -cne
+                'system/patch-bb/.metadata-cache.json' -or
+            [int64]$caches[0].maximumBytes -ne 4MB -or
+            [string]$caches[0].keyPrefix -cne './data/' -or
+            [string]$caches[1].path -cne
+                'system/patch-pc/.metadata-cache.json' -or
+            [int64]$caches[1].maximumBytes -ne 1MB -or
+            [string]$caches[1].keyPrefix -cne './Media/PSO/') {
+            throw $invalid
+        }
+        $true
+    } catch {
+        throw $invalid
+    }
+}
+
+function Get-PSOBBCombatCanaryBuildContractSelection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [ValidatePattern('^[a-fA-F0-9]{64}$')]
+        [string]$ExpectedSha256
+    )
+
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\')
+    $candidates = @(
+        [pscustomobject]@{
+            Artifact = 'CurrentUpstream'
+            ComponentId = 'newserv-combat-canary-build'
+            RelativePath = 'config/combat-canary-build.json'
+            MaximumBytes = 512KB
+        },
+        [pscustomobject]@{
+            Artifact = 'StableShadow'
+            ComponentId = 'newserv-stable-release'
+            RelativePath = 'config/combat-stable-shadow.json'
+            MaximumBytes = 64KB
+        })
+    $expected = if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+        ''
+    } else {
+        $ExpectedSha256.ToLowerInvariant()
+    }
+    $matches = [System.Collections.Generic.List[object]]::new()
+    foreach ($candidate in $candidates) {
+        $path = Assert-PathWithinRoot `
+            -Path (Join-Path $root $candidate.RelativePath.Replace('/', '\')) `
+            -Root $root
+        $snapshot = Read-PSOBBCombatCanaryStrictJsonObject `
+            -LiteralPath $path -Root $root `
+            -MaximumBytes ([int64]$candidate.MaximumBytes) `
+            -PassThruSnapshot `
+            -RoleLabel ($candidate.Artifact + ' build contract')
+        if (-not [string]::IsNullOrEmpty($expected) -and
+            [string]$snapshot.Sha256 -cne $expected) {
+            continue
+        }
+        $value = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+            -JsonObject $snapshot.Value `
+            -RoleLabel ($candidate.Artifact + ' build contract')
+        if ($candidate.Artifact -ceq 'CurrentUpstream') {
+            [void](Assert-PSOBBCombatCanaryBuildContractIdentity -Build $value)
+        } else {
+            [void](Assert-PSOBBCombatStableShadowContractIdentity `
+                    -Contract $value)
+        }
+        $matches.Add([pscustomobject]@{
+                Artifact = [string]$candidate.Artifact
+                ComponentId = [string]$candidate.ComponentId
+                Path = $path
+                Hash = [string]$snapshot.Sha256
+                Value = $value
+            })
+    }
+    if ([string]::IsNullOrEmpty($expected)) {
+        return @($matches)
+    }
+    if ($matches.Count -ne 1) {
+        throw 'The installed combat-canary build contract is unknown or ambiguous'
+    }
+    $matches[0]
+}

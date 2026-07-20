@@ -486,6 +486,7 @@ if ($buildHash -cne $ExpectedBuildSha256.ToLowerInvariant()) {
             'graphics-profiles.json',
             'client-patch-profiles.json',
             'release-trust.json',
+            'combat-stable-shadow.json',
             'sources.lock.json')) {
         Copy-Item -LiteralPath (Join-Path $RepositoryRoot "config\$name") `
             -Destination (Join-Path $harnessConfig $name)
@@ -494,6 +495,10 @@ if ($buildHash -cne $ExpectedBuildSha256.ToLowerInvariant()) {
             'config\schemas\combat-canary-snapshot.schema.json') `
         -Destination (Join-Path $harnessSchemas `
             'combat-canary-snapshot.schema.json')
+    Copy-Item -LiteralPath (Join-Path $RepositoryRoot `
+            'config\schemas\combat-stable-shadow.schema.json') `
+        -Destination (Join-Path $harnessSchemas `
+            'combat-stable-shadow.schema.json')
 
     $serverBase = [string]$CanaryLayout.ServerBase
     $serverSystem = Join-Path $serverBase 'system'
@@ -813,6 +818,179 @@ function New-TestSyntheticRecoveryBackup {
         Path = $backupPath
         Files = $files.Count
         ServerSha256 = $serverHash
+    }
+}
+
+function New-TestSyntheticStableShadowSource {
+    param(
+        [Parameter(Mandatory)]$RootLayout,
+        [Parameter(Mandatory)]$StableLayout,
+        [Parameter(Mandatory)][string]$HarnessRoot,
+        [Parameter(Mandatory)][string]$ConfigurationSourcePath,
+        [Parameter(Mandatory)][string]$InstallationId
+    )
+
+    $contractPath = Join-Path $HarnessRoot `
+        'config\combat-stable-shadow.json'
+    $contract = Get-Content -Raw -LiteralPath $contractPath |
+        ConvertFrom-Json -Depth 30 -DateKind String
+    $harnessLockPath = Join-Path $HarnessRoot 'config\sources.lock.json'
+    $harnessLock = Get-Content -Raw -LiteralPath $harnessLockPath |
+        ConvertFrom-Json -Depth 50 -DateKind String
+    $stableComponents = @($harnessLock.components | Where-Object {
+            [string]$_.id -ceq 'newserv-stable-release'
+        })
+    $clientComponents = @($harnessLock.components | Where-Object {
+            [string]$_.id -ceq 'tethealla-59nl-english'
+        })
+    $stableMembers = if ($stableComponents.Count -eq 1) {
+        @($stableComponents[0].members | Where-Object {
+                [string]$_.path -ceq 'release/newserv-windows.exe'
+            })
+    } else { @() }
+    if ($stableComponents.Count -ne 1 -or $stableMembers.Count -ne 1 -or
+        $clientComponents.Count -ne 1) {
+        throw 'The synthetic StableShadow source lock is incomplete'
+    }
+
+    New-Item -ItemType Directory -Path $StableLayout.ServerBase -Force |
+        Out-Null
+    $syntheticStableExecutable = Join-Path $StableLayout.ServerBase `
+        'newserv-windows.exe'
+    [System.IO.File]::WriteAllBytes(
+        $syntheticStableExecutable,
+        [System.Text.Encoding]::ASCII.GetBytes(
+            "synthetic StableShadow server fixture`n"))
+    $syntheticStableItem = Get-Item -Force -LiteralPath $syntheticStableExecutable
+    $syntheticStableHash = Get-LowerSha256 $syntheticStableExecutable
+    $contract.source.serverExecutable.size = [int64]$syntheticStableItem.Length
+    $contract.source.serverExecutable.sha256 = $syntheticStableHash
+    [System.IO.File]::WriteAllText(
+        $contractPath, ($contract | ConvertTo-Json -Depth 30),
+        [System.Text.UTF8Encoding]::new($false))
+    $stableMembers[0].size = [int64]$syntheticStableItem.Length
+    $stableMembers[0].sha256 = $syntheticStableHash
+    $stableMembers[0].authenticode = 'NotSigned'
+    [System.IO.File]::WriteAllText(
+        $harnessLockPath, ($harnessLock | ConvertTo-Json -Depth 50),
+        [System.Text.UTF8Encoding]::new($false))
+
+    $schemaPath = Join-Path $HarnessRoot `
+        'config\schemas\combat-stable-shadow.schema.json'
+    $schema = Get-Content -Raw -LiteralPath $schemaPath |
+        ConvertFrom-Json -Depth 30 -DateKind String
+    $schema.properties.source.properties.serverExecutable.properties.size.'const' =
+        [int64]$syntheticStableItem.Length
+    $schema.properties.source.properties.serverExecutable.properties.sha256.'const' =
+        $syntheticStableHash
+    [System.IO.File]::WriteAllText(
+        $schemaPath, ($schema | ConvertTo-Json -Depth 30),
+        [System.Text.UTF8Encoding]::new($false))
+
+    $commonPath = Join-Path $HarnessRoot `
+        'scripts\PSOBB.CombatCanary.Common.ps1'
+    $commonSource = [System.IO.File]::ReadAllText($commonPath)
+    $sizeNeedle = '[int64]$Contract.source.serverExecutable.size -ne 31162999'
+    $hashNeedle =
+        "'7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd'"
+    if ([regex]::Matches($commonSource, [regex]::Escape($sizeNeedle)).Count -ne 1 -or
+        [regex]::Matches($commonSource, [regex]::Escape($hashNeedle)).Count -ne 1) {
+        throw 'The synthetic StableShadow verifier rewrite anchors are inexact'
+    }
+    $commonSource = $commonSource.Replace(
+        $sizeNeedle,
+        ('[int64]$Contract.source.serverExecutable.size -ne {0}' -f
+            [int64]$syntheticStableItem.Length)).Replace(
+        $hashNeedle, ("'{0}'" -f $syntheticStableHash))
+    [System.IO.File]::WriteAllText(
+        $commonPath, $commonSource, [System.Text.UTF8Encoding]::new($false))
+
+    $baseSystem = Join-Path $StableLayout.ServerBase 'system'
+    New-Item -ItemType Directory -Path $baseSystem -Force | Out-Null
+    Copy-Item -LiteralPath $ConfigurationSourcePath -Destination (
+        Join-Path $baseSystem 'config.json')
+    $baseManifestPath = Join-Path $StableLayout.EnvironmentRoot `
+        'server-base.manifest.json'
+    $baseManifest = [ordered]@{
+        schemaVersion = 1
+        sourceArchiveSha256 = [string]$contract.source.serverArchiveSha256
+        generatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        files = @(Get-PSOBBDirectoryManifest `
+            -Root (Split-Path -Parent $StableLayout.ServerBase))
+    }
+    [System.IO.File]::WriteAllText(
+        $baseManifestPath, ($baseManifest | ConvertTo-Json -Depth 10),
+        [System.Text.UTF8Encoding]::new($false))
+
+    $patchDataPath = Join-Path $StableLayout.Server `
+        'system\patch-bb\data'
+    New-Item -ItemType Directory -Path $patchDataPath -Force | Out-Null
+    foreach ($index in 0..107) {
+        [System.IO.File]::WriteAllText(
+            (Join-Path $patchDataPath ('fixture-{0:d3}.bin' -f $index)),
+            ('stable-shadow-{0:d3}' -f $index),
+            [System.Text.UTF8Encoding]::new($false))
+    }
+    $patchManifestPath = Join-Path $StableLayout.EnvironmentRoot `
+        'patch-bb-data.manifest.json'
+    $patchManifest = [ordered]@{
+        schemaVersion = 1
+        sourceClientArchiveSha256 = [string]$clientComponents[0].sha256
+        generatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        files = @(Get-PSOBBDirectoryManifest -Root $patchDataPath)
+    }
+    [System.IO.File]::WriteAllText(
+        $patchManifestPath, ($patchManifest | ConvertTo-Json -Depth 10),
+        [System.Text.UTF8Encoding]::new($false))
+
+    $clientMember = @($clientComponents[0].members | Where-Object {
+            [string]$_.path -ceq 'Psobb.exe'
+        })
+    if ($clientMember.Count -ne 1) {
+        throw 'The synthetic StableShadow client identity is incomplete'
+    }
+    $zeroHash = '0' * 64
+    $installRecord = [ordered]@{
+        schemaVersion = 2
+        installationId = $InstallationId
+        initializedAtUtc = [DateTime]::UtcNow.ToString('o')
+        runtimeRoot = $RootLayout.Root
+        serverVersion = 'synthetic-stable-shadow'
+        serverArchiveSha256 = [string]$contract.source.serverArchiveSha256
+        serverExecutableSha256 =
+            [string]$contract.source.serverExecutable.sha256
+        serverBaseManifestSha256 = Get-LowerSha256 $baseManifestPath
+        clientVersion = 'synthetic-59nl'
+        clientArchiveSha256 = [string]$clientComponents[0].sha256
+        baseClientExecutableSha256 = [string]$clientMember[0].sha256
+        baseClientManifestSha256 =
+            Get-LowerSha256 $StableLayout.BaseClientManifest
+        clientExecutableSha256 = [string]$clientMember[0].sha256
+        rendererVersion = 'synthetic-native'
+        rendererArchiveSha256 = $zeroHash
+        rendererWrapperSha256 = $zeroHash
+        rendererConfigurationSha256 = $zeroHash
+        patchManifestSha256 = Get-LowerSha256 $patchManifestPath
+        synchronizedPatchFiles = 108
+        clientPatchProfile = 'baseline'
+        clientPatchPolicySha256 = Get-LowerSha256 (
+            Join-Path $HarnessRoot 'config\client-patch-profiles.json')
+        networkScope = 'loopback-only'
+    }
+    [System.IO.File]::WriteAllText(
+        $StableLayout.InstallRecord,
+        ($installRecord | ConvertTo-Json -Depth 10),
+        [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedAcl -Path $StableLayout.InstallRecord
+    [pscustomobject]@{
+        ContractSha256 = Get-LowerSha256 $contractPath
+        InstallRecordPath = $StableLayout.InstallRecord
+        InstallRecordSha256 = Get-LowerSha256 $StableLayout.InstallRecord
+        StableExecutableSha256 =
+            $syntheticStableHash
+        StableExecutableSize = [int64]$syntheticStableItem.Length
+        BaseManifestSha256 = Get-LowerSha256 $baseManifestPath
+        PatchManifestSha256 = Get-LowerSha256 $patchManifestPath
     }
 }
 
@@ -2329,6 +2507,34 @@ try {
         -ExpectedTwillsContractSha256 $contractHash `
         -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint `
         -MaximumBackupAgeMinutes 15 -Confirm:$false
+    $autoSelectedSnapshot = & (Join-Path $snapshotScriptsRoot `
+        'Test-PSOBBCombatCanary.ps1') `
+        -RuntimeRoot $layout.Root -Target Snapshot `
+        -ExpectedTwillsContractSha256 $contractHash `
+        -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+    Add-Result 'snapshot verifier auto-selects one sealed snapshot' (
+        [bool]$autoSelectedSnapshot.Valid -and
+        [string]$autoSelectedSnapshot.SnapshotPath -ieq
+            [string]$created.SnapshotPath) `
+        'StrictMode preserves a one-element candidate collection'
+    $stableShadowFixture = $null
+    if ($Mode -ceq 'SyntheticTransactions') {
+        $stableShadowFixture = New-TestSyntheticStableShadowSource `
+            -RootLayout $layout -StableLayout $stable `
+            -HarnessRoot ([string]$syntheticHarness.RepositoryRoot) `
+            -ConfigurationSourcePath $syntheticConfigSource `
+            -InstallationId $fixtureInstallationId
+        Add-Result 'synthetic StableShadow source is exact and independently sealed' (
+            [int64]$stableShadowFixture.StableExecutableSize -gt 0 -and
+            [string]$stableShadowFixture.StableExecutableSha256 -cmatch
+                '^[a-f0-9]{64}$' -and
+            [string]$stableShadowFixture.ContractSha256 -ceq
+                (Get-LowerSha256 (Join-Path `
+                    $syntheticHarness.RepositoryRoot `
+                    'config\combat-stable-shadow.json'))) `
+            'exact Stable server, 108-file patch overlay, and client binding sealed'
+        $stableBefore = Get-PSOBBDirectoryManifest -Root $stable.EnvironmentRoot
+    }
     Complete-TestSection
     if ($Mode -eq 'All') {
         Start-TestSection 'SnapshotVerification'
@@ -2910,7 +3116,9 @@ try {
             'system/licenses/account.json',
             'system/players/player_fixture_0.psochar',
             'system/players/nested/file.bin',
-            'system/teams/team_fixture.json')
+            'system/teams/team_fixture.json',
+            'system/patch-bb/.metadata-cache.json',
+            'system/patch-pc/.metadata-cache.json')
         $rejectedExemptPaths = @(
             'system/config.json/extra',
             'system/licenses-evil/account.json',
@@ -2923,6 +3131,10 @@ try {
             'system/licenses/a/../../account.json',
             'system/licenses/account:name.json',
             'System/licenses/account.json',
+            'system/patch-bb/data/.metadata-cache.json',
+            'system/patch-bb/.metadata-cache.json.extra',
+            'system/patch-pc/.metadata-cache.json/extra',
+            'system/patch-gc/.metadata-cache.json',
             'other/system/licenses/account.json')
         $predicateExact =
             @($acceptedExemptPaths | Where-Object {
@@ -2948,7 +3160,11 @@ try {
             -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
         Add-Result 'Installed verifier reaches the shared build gate in script scope' (
             [bool]$initialized.Initialized -and [bool]$initialized.Changed -and
-            [bool]$validInstalled.Valid) 'valid synthetic frozen contract accepted'
+            [bool]$validInstalled.Valid -and
+            [string]$validInstalled.ServerArtifact -ceq 'CurrentUpstream' -and
+            [string]$validInstalled.ServerComponentId -ceq
+                'newserv-combat-canary-build') `
+            'valid synthetic frozen contract and public identity accepted'
 
         $syntheticBuildPath = [string]$syntheticHarness.BuildContractPath
         $originalBuildBytes = [System.IO.File]::ReadAllBytes($syntheticBuildPath)
@@ -3316,10 +3532,24 @@ try {
         -ExpectedBuildContractSha256 $buildContractHash `
         -ExpectedTwillsContractSha256 $contractHash `
         -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+    $installationBeforeMutation = & (
+        Join-Path $transactionScriptsRoot 'Test-PSOBBCombatCanary.ps1') `
+        -RuntimeRoot $layout.Root -Target Installation `
+        -ExpectedBuildContractSha256 $buildContractHash `
+        -ExpectedTwillsContractSha256 $contractHash `
+        -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
     Add-Result 'isolated Initialize succeeds and is an exact idempotent no-op' (
         [bool]$initialized.Initialized -and [bool]$initialized.Changed -and
         [bool]$idempotent.Initialized -and -not [bool]$idempotent.Changed -and
         [bool]$installedBeforeMutation.Valid) 'changed=true then changed=false'
+    Add-Result 'public verifier results expose exact CurrentUpstream identity' (
+        [string]$installedBeforeMutation.ServerArtifact -ceq 'CurrentUpstream' -and
+        [string]$installedBeforeMutation.ServerComponentId -ceq
+            'newserv-combat-canary-build' -and
+        [string]$installationBeforeMutation.ServerArtifact -ceq 'CurrentUpstream' -and
+        [string]$installationBeforeMutation.ServerComponentId -ceq
+            'newserv-combat-canary-build') `
+        'Installed and Installation outputs retain artifact and component'
     $installedRequiredDirectory = Join-Path $canary.Server (
         ([string]$syntheticHarness.RequiredDirectoryRelativePath).Replace('/', '\'))
     Add-Result 'Initialize preserves the exact empty required release directory' (
@@ -3892,6 +4122,189 @@ try {
         $resetSubstitutionRetained `
         'replacement, published, and rollback identities were retained'
     Complete-TestSection
+
+    if ($Mode -ceq 'SyntheticTransactions') {
+        Start-TestSection 'StableShadowTransition'
+        if (-not $resetSubstitutionRetained) {
+            throw 'StableShadow transition requires exact reset substitution evidence'
+        }
+        Remove-Item -LiteralPath $resetSubstitution.Published -Recurse -Force
+        [System.IO.Directory]::Move(
+            $resetSubstitution.Saved, $resetSubstitution.Published)
+        foreach ($retainedRollback in $resetSubstitutionRollback) {
+            Remove-Item -LiteralPath $retainedRollback.FullName -Recurse -Force
+        }
+        Set-PSOBBProtectedTreeAcl -Path $resetSubstitution.Published `
+            -Root $canary.EnvironmentRoot
+        $currentReadback = & (Join-Path $transactionScriptsRoot `
+            'Test-PSOBBCombatCanary.ps1') `
+            -RuntimeRoot $layout.Root -Target Installed `
+            -SnapshotPath $created.SnapshotPath `
+            -ExpectedBuildContractSha256 $buildContractHash `
+            -ExpectedTwillsContractSha256 $contractHash `
+            -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+        Add-Result 'retained reset evidence repairs to exact CurrentUpstream state' (
+            [bool]$currentReadback.Valid -and
+            [string]$currentReadback.ServerArtifact -ceq 'CurrentUpstream' -and
+            [string]$currentReadback.ServerComponentId -ceq
+                'newserv-combat-canary-build') `
+            'owned replacement restored and retained rollback evidence removed'
+
+        $shadowHash = [string]$stableShadowFixture.ContractSha256
+        $shadowParameters = @{
+            RuntimeRoot = $layout.Root
+            SnapshotPath = $created.SnapshotPath
+            ServerArtifact = 'StableShadow'
+            ExpectedBuildContractSha256 = $shadowHash
+            ExpectedTwillsContractSha256 = $contractHash
+            ExpectedSigningPublicKeySpkiSha256 = $spkiFingerprint
+            Confirm = $false
+        }
+        $canaryBeforeShadow = Get-TestTreeFingerprint `
+            -Root $canary.EnvironmentRoot `
+            -ExcludedTopLevel @('snapshots', 'builds', 'evidence')
+        $baseClientBefore = Get-TestTreeFingerprint -Root $canary.BaseClient
+        $runtimeClientBefore = Get-TestTreeFingerprint `
+            -Root (Split-Path -Parent $canary.Client)
+        $baseManifestBefore = Get-LowerSha256 $canary.BaseClientManifest
+        $clientBindingPath = Join-Path $canary.EnvironmentRoot `
+            'client-binding.json'
+        $clientBindingBefore = Get-LowerSha256 $clientBindingPath
+        $serverBaseBefore = Get-TestTreeFingerprint `
+            -Root (Split-Path -Parent $canary.ServerBase)
+        $serverBefore = Get-TestTreeFingerprint `
+            -Root (Split-Path -Parent $canary.Server)
+
+        $stableInstallBytes = [System.IO.File]::ReadAllBytes(
+            $stable.InstallRecord)
+        $stableBindingRejected = $false
+        try {
+            $tamperedStableInstall = [System.Text.Encoding]::UTF8.GetString(
+                $stableInstallBytes) |
+                ConvertFrom-Json -Depth 20 -DateKind String
+            $tamperedStableInstall.baseClientManifestSha256 = 'f' * 64
+            [System.IO.File]::WriteAllText(
+                $stable.InstallRecord,
+                ($tamperedStableInstall | ConvertTo-Json -Depth 20),
+                [System.Text.UTF8Encoding]::new($false))
+            Set-PSOBBProtectedAcl -Path $stable.InstallRecord
+            try {
+                & (Join-Path $transactionScriptsRoot `
+                    'Initialize-PSOBBCombatCanary.ps1') `
+                    @shadowParameters | Out-Null
+            } catch {
+                $stableBindingRejected = $true
+            }
+        } finally {
+            [System.IO.File]::WriteAllBytes(
+                $stable.InstallRecord, $stableInstallBytes)
+            Set-PSOBBProtectedAcl -Path $stable.InstallRecord
+        }
+        Add-Result 'StableShadow rejects a tampered Stable base-client binding' (
+            $stableBindingRejected -and
+            (Get-TestTreeFingerprint -Root $canary.EnvironmentRoot `
+                -ExcludedTopLevel @('snapshots', 'builds', 'evidence')) -ceq
+                    $canaryBeforeShadow) `
+            'rejected before any CombatCanary publication and restored source bytes'
+
+        $shadowBoundaryRejected = $false
+        try {
+            & (Join-Path $transactionScriptsRoot `
+                'Initialize-PSOBBCombatCanary.ps1') `
+                @shadowParameters -InternalTestFailAfterSwap 8 `
+                -InternalTestFaultToken $fixtureInstallationId | Out-Null
+        } catch {
+            $shadowBoundaryRejected = $_.Exception.Message -ceq
+                'Injected temporary-fixture initialization swap failure'
+        }
+        $currentAfterShadowFailure = & (Join-Path $transactionScriptsRoot `
+            'Test-PSOBBCombatCanary.ps1') `
+            -RuntimeRoot $layout.Root -Target Installed `
+            -SnapshotPath $created.SnapshotPath `
+            -ExpectedBuildContractSha256 $buildContractHash `
+            -ExpectedTwillsContractSha256 $contractHash `
+            -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+        $shadowFailureExact = $shadowBoundaryRejected -and
+            [bool]$currentAfterShadowFailure.Valid -and
+            [string]$currentAfterShadowFailure.ServerArtifact -ceq
+                'CurrentUpstream' -and
+            (Get-TestTreeFingerprint -Root $canary.EnvironmentRoot `
+                -ExcludedTopLevel @('snapshots', 'builds', 'evidence')) -ceq
+                    $canaryBeforeShadow -and
+            @(Get-ChildItem -Force -LiteralPath $canary.EnvironmentRoot `
+                -Directory | Where-Object {
+                    $_.Name -like '.initialize-stage-*' -or
+                    $_.Name -like '.initialize-rollback-*'
+                }).Count -eq 0
+        Add-Result 'StableShadow replacement compensates its final swap boundary' `
+            $shadowFailureExact `
+            'all eight replacement targets restored with no transaction debris'
+
+        $shadowResult = & (Join-Path $transactionScriptsRoot `
+            'Initialize-PSOBBCombatCanary.ps1') @shadowParameters
+        $shadowReadback = & (Join-Path $transactionScriptsRoot `
+            'Test-PSOBBCombatCanary.ps1') `
+            -RuntimeRoot $layout.Root -Target Installed `
+            -SnapshotPath $created.SnapshotPath `
+            -ExpectedBuildContractSha256 $shadowHash `
+            -ExpectedTwillsContractSha256 $contractHash `
+            -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+        $stableExecutableHash =
+            [string]$stableShadowFixture.StableExecutableSha256
+        $frozenPath = [string]$shadowResult.FrozenInstallationPath
+        $frozenReceiptPath = Join-Path $frozenPath 'frozen-installation.json'
+        $frozenReceipt = Get-Content -Raw -LiteralPath $frozenReceiptPath |
+            ConvertFrom-Json -Depth 10 -DateKind String
+        $frozenTargets = @($frozenReceipt.targets)
+        $expectedFrozenTargets = @('server-base', 'server', 'control',
+            'backups', 'logs', 'secrets', 'state-binding', 'installation')
+        $frozenExact =
+            (Test-Path -LiteralPath $frozenPath -PathType Container) -and
+            (Test-PSOBBProtectedAcl -Path $frozenPath) -and
+            @(Compare-Object -CaseSensitive `
+                -ReferenceObject $expectedFrozenTargets `
+                -DifferenceObject $frozenTargets).Count -eq 0 -and
+            (Get-TestTreeFingerprint -Root (Join-Path $frozenPath 'server-base')) `
+                -ceq $serverBaseBefore -and
+            (Get-TestTreeFingerprint -Root (Join-Path $frozenPath 'server')) `
+                -ceq $serverBefore -and
+            -not (Test-Path -LiteralPath (Join-Path $frozenPath 'base-client')) -and
+            -not (Test-Path -LiteralPath (Join-Path $frozenPath 'runtime')) -and
+            -not (Test-Path -LiteralPath (
+                Join-Path $frozenPath 'base-client-manifest')) -and
+            -not (Test-Path -LiteralPath (
+                Join-Path $frozenPath 'client-binding'))
+        Add-Result 'CurrentUpstream evidence freezes only replaced identities' `
+            $frozenExact `
+            'server/state/control evidence retained; immutable client identities not recopied'
+
+        $clientPreserved =
+            (Get-TestTreeFingerprint -Root $canary.BaseClient) -ceq
+                $baseClientBefore -and
+            (Get-TestTreeFingerprint -Root (
+                Split-Path -Parent $canary.Client)) -ceq $runtimeClientBefore -and
+            (Get-LowerSha256 $canary.BaseClientManifest) -ceq
+                $baseManifestBefore -and
+            (Get-LowerSha256 $clientBindingPath) -ceq $clientBindingBefore
+        Add-Result 'StableShadow replacement preserves exact CombatCanary client identity' `
+            $clientPreserved `
+            'base client, runtime client, manifest, and binding remained byte-identical'
+        Add-Result 'CurrentUpstream transitions once to verified StableShadow' (
+            [bool]$shadowResult.Initialized -and
+            [bool]$shadowResult.Changed -and
+            [bool]$shadowResult.ReplacedExisting -and
+            [string]$shadowResult.ServerArtifact -ceq 'StableShadow' -and
+            [bool]$shadowReadback.Valid -and
+            [string]$shadowReadback.ServerArtifact -ceq 'StableShadow' -and
+            [string]$shadowReadback.ServerComponentId -ceq
+                'newserv-stable-release' -and
+            (Get-LowerSha256 (Join-Path $canary.ServerBase `
+                    'newserv-windows.exe')) -ceq $stableExecutableHash -and
+            (Get-LowerSha256 (Join-Path $canary.Server `
+                    'newserv-windows.exe')) -ceq $stableExecutableHash) `
+            'exact Stable executable and 108-file retail patch overlay read back'
+        Complete-TestSection
+    }
     }
 
     Start-TestSection 'StableInvariance'

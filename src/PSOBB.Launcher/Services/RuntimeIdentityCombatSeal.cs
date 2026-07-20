@@ -56,25 +56,10 @@ internal sealed partial class ExactRuntimeIdentityProbe
             throw new InvalidDataException("The combat-canary installation snapshot identity is invalid.");
         }
 
-        await RequireFileHashAsync(
-            Path.Combine(_repositoryRoot, "config", "combat-canary-build.json"),
-            _repositoryRoot,
+        var buildSelection = await ReadCombatBuildContractSelectionAsync(
             buildHash,
             sealedFiles,
             cancellationToken).ConfigureAwait(false);
-        using (var buildFile = await ReadJsonFileAsync(
-                   Path.Combine(_repositoryRoot, "config", "combat-canary-build.json"),
-                   _repositoryRoot,
-                   sealedFiles,
-                   cancellationToken).ConfigureAwait(false))
-        {
-            if (RequiredInt32(buildFile.Document.RootElement, "schemaVersion") != 1
-                || !RequiredString(buildFile.Document.RootElement, "profileId").Equals(
-                    "newserv-combat-canary-build", StringComparison.Ordinal))
-            {
-                throw new InvalidDataException("The tracked combat-canary build contract identity is invalid.");
-            }
-        }
 
         var twillsPath = Path.Combine(_repositoryRoot, "config", "twills-fonewearl-build.json");
         await RequireFileHashAsync(
@@ -191,12 +176,124 @@ internal sealed partial class ExactRuntimeIdentityProbe
 
         _ = approvedClient;
         return new(
+            buildSelection.Artifact,
+            buildSelection.ServerComponentId,
+            buildSelection.ServerExecutable,
             buildHash,
             clientBindingHash,
             stateBindingHash,
             baseManifestHash,
             twillsHash,
             signingHash);
+    }
+
+    private async Task<CombatBuildContractSelection> ReadCombatBuildContractSelectionAsync(
+        string installedBuildHash,
+        Dictionary<string, SealedFileIdentity> sealedFiles,
+        CancellationToken cancellationToken)
+    {
+        foreach (var artifact in new[] { "CurrentUpstream", "StableShadow" })
+        {
+            var fileName = artifact.Equals("CurrentUpstream", StringComparison.Ordinal)
+                ? "combat-canary-build.json"
+                : "combat-stable-shadow.json";
+            var path = Path.Combine(_repositoryRoot, "config", fileName);
+            using var buildFile = await ReadJsonFileAsync(
+                path,
+                _repositoryRoot,
+                sealedFiles,
+                cancellationToken).ConfigureAwait(false);
+            if (!buildFile.Identity.Sha256.Equals(installedBuildHash, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var build = buildFile.Document.RootElement;
+            if (RequiredInt32(build, "schemaVersion") != 1)
+            {
+                throw new InvalidDataException("The selected combat-canary build contract schema version is invalid.");
+            }
+
+            if (artifact.Equals("CurrentUpstream", StringComparison.Ordinal))
+            {
+                RequireExactProperties(
+                    build,
+                    [
+                        "$schema", "schemaVersion", "profileId", "generatedAtUtc", "source",
+                        "patchSeries", "dependencies", "signatureVerification", "toolchain",
+                        "reproducibility", "validation", "output",
+                    ],
+                    "current-upstream combat-canary build contract");
+                var source = RequiredObject(build, "source");
+                var output = RequiredObject(build, "output");
+                var executable = RequiredObject(output, "executable");
+                if (!RequiredString(build, "$schema").Equals(
+                        "./schemas/combat-canary-build.schema.json", StringComparison.Ordinal)
+                    || !RequiredString(build, "profileId").Equals(
+                        "newserv-combat-canary-build", StringComparison.Ordinal)
+                    || !RequiredString(source, "componentId").Equals(
+                        "newserv-canary-source", StringComparison.Ordinal)
+                    || !RequiredString(output, "rootRelative").Equals(
+                        "combat-canary/server-base/release", StringComparison.Ordinal)
+                    || !RequiredString(executable, "path").Equals(
+                        "newserv-windows.exe", StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "The tracked current-upstream combat-canary build contract identity is invalid.");
+                }
+                var size = RequiredInt64(executable, "size");
+                if (size <= 0)
+                {
+                    throw new InvalidDataException(
+                        "The tracked current-upstream server executable size is invalid.");
+                }
+                return new(
+                    artifact,
+                    path,
+                    "newserv-combat-canary-build",
+                    "newserv-combat-canary-build",
+                    new(size, RequiredSha256(executable, "sha256")));
+            }
+
+            RequireExactProperties(
+                build,
+                ["$schema", "schemaVersion", "profileId", "source", "output"],
+                "StableShadow combat-canary build contract");
+            var stableSource = RequiredObject(build, "source");
+            var stableExecutable = RequiredObject(stableSource, "serverExecutable");
+            var stableOutput = RequiredObject(build, "output");
+            if (!RequiredString(build, "$schema").Equals(
+                    "./schemas/combat-stable-shadow.schema.json", StringComparison.Ordinal)
+                || !RequiredString(build, "profileId").Equals(
+                    "newserv-stable-shadow", StringComparison.Ordinal)
+                || !RequiredString(stableSource, "serverComponentId").Equals(
+                    "newserv-stable-release", StringComparison.Ordinal)
+                || !RequiredString(stableSource, "clientComponentId").Equals(
+                    "tethealla-59nl-english", StringComparison.Ordinal)
+                || !RequiredString(stableOutput, "rootRelative").Equals(
+                    "combat-canary/server-base/release", StringComparison.Ordinal)
+                || !RequiredString(stableExecutable, "path").Equals(
+                    "newserv-windows.exe", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "The tracked StableShadow combat-canary build contract identity is invalid.");
+            }
+            var stableSize = RequiredInt64(stableExecutable, "size");
+            if (stableSize <= 0)
+            {
+                throw new InvalidDataException(
+                    "The tracked StableShadow server executable size is invalid.");
+            }
+            return new(
+                artifact,
+                path,
+                "newserv-stable-shadow",
+                "newserv-stable-release",
+                new(stableSize, RequiredSha256(stableExecutable, "sha256")));
+        }
+
+        throw new InvalidDataException(
+            "The installed combat-canary build contract hash is not an approved CurrentUpstream or StableShadow artifact.");
     }
 
     private async Task ValidateStateBindingAsync(
