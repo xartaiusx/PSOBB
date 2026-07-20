@@ -1,0 +1,445 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psobb.local/schemas/combat-canary-snapshot.schema.json",
+  "title": "PSOBB combat-canary sealed Twills snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "snapshotId",
+    "createdAtUtc",
+    "sourceBackup",
+    "twillsContract",
+    "character",
+    "semanticSummary",
+    "files",
+    "signing"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://psobb.local/schemas/combat-canary-snapshot.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "snapshotId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "createdAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backupId",
+        "backupKind",
+        "createdAtUtc",
+        "manifestSha256",
+        "clientPatchProfile"
+      ],
+      "properties": {
+        "backupId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "backupKind": {
+          "const": "state"
+        },
+        "createdAtUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "manifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "clientPatchProfile": {
+          "const": "baseline"
+        }
+      }
+    },
+    "twillsContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size",
+        "sha256",
+        "profileId"
+      ],
+      "properties": {
+        "path": {
+          "const": "contract/twills-fonewearl-build.json"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "classId",
+        "className",
+        "slotIndex"
+      ],
+      "properties": {
+        "name": {
+          "const": "Twills"
+        },
+        "classId": {
+          "const": 8
+        },
+        "className": {
+          "const": "FOnewearl"
+        },
+        "slotIndex": {
+          "const": 0
+        }
+      }
+    },
+    "semanticSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "displayedLevel",
+        "profileId",
+        "activeLoadoutId",
+        "characterSha256",
+        "bankSha256",
+        "inventoryItems",
+        "embeddedBankItems",
+        "authoritativeBankItems",
+        "exactOwnedItems",
+        "characterChecksPassed",
+        "bankUniqueItemIds"
+      ],
+      "properties": {
+        "displayedLevel": {
+          "const": 200
+        },
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activeLoadoutId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "characterSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bankSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "inventoryItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "embeddedBankItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "authoritativeBankItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "exactOwnedItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 230
+        },
+        "characterChecksPassed": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bankUniqueItemIds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "role",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "enum": [
+              "twills-contract",
+              "signing-public-key",
+              "license-state",
+              "twills-character",
+              "twills-bank",
+              "twills-system",
+              "twills-card",
+              "team-state"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "path": {
+                "const": "contract/twills-fonewearl-build.json"
+              },
+              "role": {
+                "const": "twills-contract"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "const": "trust/signing-public-key.pem"
+              },
+              "role": {
+                "const": "signing-public-key"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/licenses/[^/\\\\:]+\\.json$"
+              },
+              "role": {
+                "const": "license-state"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/players/player_[a-z][a-z0-9_-]{2,15}_0\\.psochar$"
+              },
+              "role": {
+                "const": "twills-character"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/players/player_[a-z][a-z0-9_-]{2,15}_0\\.psobank$"
+              },
+              "role": {
+                "const": "twills-bank"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/players/system_[a-z][a-z0-9_-]{2,15}\\.psosys$"
+              },
+              "role": {
+                "const": "twills-system"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/players/guild_cards_[a-z][a-z0-9_-]{2,15}\\.psocard$"
+              },
+              "role": {
+                "const": "twills-card"
+              }
+            }
+          },
+          {
+            "properties": {
+              "path": {
+                "pattern": "^state/system/teams/[^/\\\\:]+\\.json$"
+              },
+              "role": {
+                "const": "team-state"
+              }
+            }
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "twills-contract"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "signing-public-key"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "license-state"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "twills-character"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "twills-bank"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "twills-system"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "twills-card"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "team-state"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "publicKeyPath",
+        "publicKeySpkiSha256",
+        "signaturePath"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "ECDSA-P256-SHA256-P1363"
+        },
+        "publicKeyPath": {
+          "const": "trust/signing-public-key.pem"
+        },
+        "publicKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signaturePath": {
+          "const": "manifest.sig"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}
