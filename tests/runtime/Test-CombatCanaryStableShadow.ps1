@@ -115,12 +115,92 @@ $initializerPath = Join-Path $repositoryRoot `
     -Name 'Test-PSOBBCombatCanaryVerifierMutableServerExemptPath')
 . (Import-FunctionDefinition -Path $verifierPath `
     -Name 'Assert-PSOBBCombatCanaryMetadataCache')
+. (Import-FunctionDefinition -Path $verifierPath `
+    -Name 'Test-PSOBBCombatCanaryConfigKeyUnique')
+. (Import-FunctionDefinition -Path $verifierPath `
+    -Name 'Test-PSOBBCombatCanaryConfigScalar')
+. (Import-FunctionDefinition -Path $verifierPath `
+    -Name 'Test-PSOBBCombatCanaryArtifactConfigurationPolicy')
 . (Import-FunctionDefinition -Path $initializerPath `
     -Name 'Move-PSOBBCombatInitializeNoClobber')
 . (Import-FunctionDefinition -Path $initializerPath `
     -Name 'Publish-PSOBBCombatInitializeTarget')
 . (Import-FunctionDefinition -Path $initializerPath `
     -Name 'Undo-PSOBBCombatInitializeTarget')
+. (Import-FunctionDefinition -Path $initializerPath `
+    -Name 'Get-PSOBBCombatInitializeFinalConfigurationText')
+
+$stableConfiguration = @'
+{
+  "DefaultDropModeV4Battle": "CLIENT",
+  "DefaultDropModeV4Challenge": "CLIENT",
+  "End": true
+}
+'@.Replace("`r`n", "`n").Replace("`r", "`n")
+$currentConfiguration = @'
+{
+  "DefaultDropModeV4Battle": "CLIENT",
+  "DefaultDropModeV4Challenge": "CLIENT",
+  "CensorCredentials": false,
+  "AllowSameAccountConcurrentLogins": true,
+  "End": true
+}
+'@.Replace("`r`n", "`n").Replace("`r", "`n")
+$stableFinal = Get-PSOBBCombatInitializeFinalConfigurationText `
+    -Text $stableConfiguration -ServerArtifact StableShadow
+$currentFinal = Get-PSOBBCombatInitializeFinalConfigurationText `
+    -Text $currentConfiguration -ServerArtifact CurrentUpstream
+$escapedStableConfiguration = $currentConfiguration.Replace(
+    '"CensorCredentials"', '"\u0043ensorCredentials"')
+$stableUnexpectedKeyRejected = $false
+try {
+    Get-PSOBBCombatInitializeFinalConfigurationText `
+        -Text $currentConfiguration -ServerArtifact StableShadow | Out-Null
+} catch {
+    $stableUnexpectedKeyRejected =
+        $_.Exception.Message -ceq
+        'StableShadow configuration unexpectedly contains unsupported key CensorCredentials'
+}
+$stableEscapedKeyRejected = $false
+try {
+    Get-PSOBBCombatInitializeFinalConfigurationText `
+        -Text $escapedStableConfiguration -ServerArtifact StableShadow |
+        Out-Null
+} catch {
+    $stableEscapedKeyRejected =
+        $_.Exception.Message -ceq
+        'StableShadow configuration unexpectedly contains unsupported key CensorCredentials'
+}
+Add-Result 'configuration capabilities remain artifact-specific' (
+    [regex]::Matches(
+        $stableFinal, '(?m)^\s*"CensorCredentials"\s*:').Count -eq 0 -and
+    [regex]::Matches(
+        $stableFinal,
+        '(?m)^\s*"AllowSameAccountConcurrentLogins"\s*:').Count -eq 0 -and
+    [regex]::Matches(
+        $stableFinal,
+        '(?m)^\s*"DefaultDropModeV4Battle"\s*:\s*"SERVER_SHARED"').Count -eq 1 -and
+    [regex]::Matches(
+        $stableFinal,
+        '(?m)^\s*"DefaultDropModeV4Challenge"\s*:\s*"SERVER_SHARED"').Count -eq 1 -and
+    [regex]::Matches(
+        $currentFinal,
+        '(?m)^\s*"CensorCredentials"\s*:\s*true').Count -eq 1 -and
+    [regex]::Matches(
+        $currentFinal,
+        '(?m)^\s*"AllowSameAccountConcurrentLogins"\s*:\s*false').Count -eq 1 -and
+    (Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+        -Text $stableFinal -ServerArtifact StableShadow) -and
+    -not (Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+        -Text $stableFinal -ServerArtifact CurrentUpstream) -and
+    (Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+        -Text $currentFinal -ServerArtifact CurrentUpstream) -and
+    -not (Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+        -Text $currentFinal -ServerArtifact StableShadow) -and
+    -not (Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+        -Text $escapedStableConfiguration -ServerArtifact StableShadow) -and
+    $stableUnexpectedKeyRejected -and $stableEscapedKeyRejected) `
+    'Stable omits unsupported keys; current upstream requires exact safe values'
 
 $exactCachePaths = @(
     'system/patch-bb/.metadata-cache.json',

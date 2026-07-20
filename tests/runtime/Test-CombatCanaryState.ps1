@@ -623,7 +623,9 @@ if ($buildHash -cne $ExpectedBuildSha256.ToLowerInvariant()) {
 }
 
 function Get-TestSyntheticNewservConfiguration {
-    @'
+    param([switch]$StableShadow)
+
+    $text = @'
 {
   "ServerName": "Synthetic",
   "LocalAddress": "127.0.0.1",
@@ -654,6 +656,17 @@ function Get-TestSyntheticNewservConfiguration {
   // Where to listen for IP
 }
 '@
+    if ($StableShadow) {
+        $text = [regex]::Replace(
+            $text,
+            '(?m)^  "(?:CensorCredentials|AllowSameAccountConcurrentLogins)": (?:false|true),\r?\n',
+            '')
+        if ($text -match
+            '(?m)^\s*"(?:CensorCredentials|AllowSameAccountConcurrentLogins)"\s*:') {
+            throw 'Synthetic StableShadow configuration retained an unsupported key'
+        }
+    }
+    $text
 }
 
 function New-TestSyntheticRecoveryBackup {
@@ -701,7 +714,7 @@ function New-TestSyntheticRecoveryBackup {
     $configurationPath = Join-Path $systemRoot 'config.json'
     [System.IO.File]::WriteAllText(
         $configurationPath,
-        (Get-TestSyntheticNewservConfiguration),
+        (Get-TestSyntheticNewservConfiguration -StableShadow),
         [System.Text.UTF8Encoding]::new($false))
     $account = 'fixtureacct'
     $payloadText = [ordered]@{
@@ -2558,10 +2571,16 @@ try {
         'StrictMode preserves a one-element candidate collection'
     $stableShadowFixture = $null
     if ($Mode -ceq 'SyntheticTransactions') {
+        $syntheticStableConfigSource = Join-Path $temporaryRoot `
+            'synthetic-stable-newserv-config.json'
+        [System.IO.File]::WriteAllText(
+            $syntheticStableConfigSource,
+            (Get-TestSyntheticNewservConfiguration -StableShadow),
+            [System.Text.UTF8Encoding]::new($false))
         $stableShadowFixture = New-TestSyntheticStableShadowSource `
             -RootLayout $layout -StableLayout $stable `
             -HarnessRoot ([string]$syntheticHarness.RepositoryRoot) `
-            -ConfigurationSourcePath $syntheticConfigSource `
+            -ConfigurationSourcePath $syntheticStableConfigSource `
             -InstallationId $fixtureInstallationId
         Add-Result 'synthetic StableShadow source is exact and independently sealed' (
             [int64]$stableShadowFixture.StableExecutableSize -gt 0 -and
@@ -4290,6 +4309,19 @@ try {
             -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
         $stableExecutableHash =
             [string]$stableShadowFixture.StableExecutableSha256
+        $shadowConfigurationJson =
+            Read-PSOBBCombatCanaryStrictJsonObject -LiteralPath (
+                Join-Path $canary.Server 'system\config.json') `
+                -Root $canary.Server -MaximumBytes 16MB `
+                -RoleLabel 'synthetic StableShadow configuration readback'
+        $shadowConfigurationProperties = @(
+            $shadowConfigurationJson.Properties())
+        $shadowUnsupportedKeys = @(
+            $shadowConfigurationProperties | Where-Object {
+                [string]$_.Name -in @(
+                    'CensorCredentials',
+                    'AllowSameAccountConcurrentLogins')
+            })
         $frozenPath = [string]$shadowResult.FrozenInstallationPath
         $frozenReceiptPath = Join-Path $frozenPath 'frozen-installation.json'
         $frozenReceipt = Get-Content -Raw -LiteralPath $frozenReceiptPath |
@@ -4337,6 +4369,7 @@ try {
             [string]$shadowReadback.ServerArtifact -ceq 'StableShadow' -and
             [string]$shadowReadback.ServerComponentId -ceq
                 'newserv-stable-release' -and
+            $shadowUnsupportedKeys.Count -eq 0 -and
             (Get-LowerSha256 (Join-Path $canary.ServerBase `
                     'newserv-windows.exe')) -ceq $stableExecutableHash -and
             (Get-LowerSha256 (Join-Path $canary.Server `

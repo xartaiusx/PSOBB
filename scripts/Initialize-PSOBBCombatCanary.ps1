@@ -961,6 +961,43 @@ function Set-PSOBBCombatInitializeLocalConfiguration {
         $ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Get-PSOBBCombatInitializeFinalConfigurationText {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)]
+        [ValidateSet('CurrentUpstream', 'StableShadow')]
+        [string]$ServerArtifact
+    )
+
+    $result = Set-ConfigScalar -Text $Text `
+        -Key 'DefaultDropModeV4Battle' -JsonValue '"SERVER_SHARED"'
+    $result = Set-ConfigScalar -Text $result `
+        -Key 'DefaultDropModeV4Challenge' -JsonValue '"SERVER_SHARED"'
+    if ($ServerArtifact -ceq 'CurrentUpstream') {
+        $result = Set-ConfigScalar -Text $result `
+            -Key 'CensorCredentials' -JsonValue 'true'
+        $result = Set-ConfigScalar -Text $result `
+            -Key 'AllowSameAccountConcurrentLogins' -JsonValue 'false'
+    } else {
+        $configurationJson = Read-PSOBBCombatCanaryStrictJsonObject `
+            -Text $result -RoleLabel 'StableShadow configuration'
+        $configurationProperties = @($configurationJson.Properties())
+        foreach ($unsupportedKey in @(
+                'CensorCredentials',
+                'AllowSameAccountConcurrentLogins')) {
+            if (@($configurationProperties | Where-Object {
+                        [string]$_.Name -ceq $unsupportedKey
+                    }).Count -ne 0) {
+                throw "StableShadow configuration unexpectedly contains unsupported key $unsupportedKey"
+            }
+        }
+    }
+    if ($result.StartsWith([char]0xFEFF) -or $result.Contains("`r")) {
+        throw 'The finalized combat-canary configuration is not LF-only UTF-8'
+    }
+    $result
+}
+
 function Test-PSOBBCombatInitializeSemantic {
     param(
         [Parameter(Mandatory)][string]$CharacterPath,
@@ -1306,18 +1343,8 @@ try {
             -LiteralPath $configurationPath -Root $stageRoot `
             -MaximumBytes 16MB `
             -RoleLabel 'staged combat canary configuration'
-        $configurationText = Set-ConfigScalar -Text $configurationText `
-            -Key 'DefaultDropModeV4Battle' -JsonValue '"SERVER_SHARED"'
-        $configurationText = Set-ConfigScalar -Text $configurationText `
-            -Key 'DefaultDropModeV4Challenge' -JsonValue '"SERVER_SHARED"'
-        $configurationText = Set-ConfigScalar -Text $configurationText `
-            -Key 'CensorCredentials' -JsonValue 'true'
-        $configurationText = Set-ConfigScalar -Text $configurationText `
-            -Key 'AllowSameAccountConcurrentLogins' -JsonValue 'false'
-        if ($configurationText.StartsWith([char]0xFEFF) -or
-            $configurationText.Contains("`r")) {
-            throw 'The finalized combat-canary configuration is not LF-only UTF-8'
-        }
+        $configurationText = Get-PSOBBCombatInitializeFinalConfigurationText `
+            -Text $configurationText -ServerArtifact $ServerArtifact
         [System.IO.File]::WriteAllText(
             $configurationPath, $configurationText,
             [System.Text.UTF8Encoding]::new($false))

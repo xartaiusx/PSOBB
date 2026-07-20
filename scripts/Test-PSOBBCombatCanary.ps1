@@ -924,6 +924,41 @@ function Test-PSOBBCombatCanaryConfigScalar {
     [regex]::Matches($Text, $pattern).Count -eq 1
 }
 
+function Test-PSOBBCombatCanaryArtifactConfigurationPolicy {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)]
+        [ValidateSet('CurrentUpstream', 'StableShadow')]
+        [string]$ServerArtifact
+    )
+
+    if ($ServerArtifact -ceq 'CurrentUpstream') {
+        return (Test-PSOBBCombatCanaryConfigScalar `
+                -Text $Text -Key 'CensorCredentials' `
+                -JsonPattern 'true') -and
+            (Test-PSOBBCombatCanaryConfigScalar `
+                -Text $Text -Key 'AllowSameAccountConcurrentLogins' `
+                -JsonPattern 'false')
+    }
+    try {
+        $configurationJson = Read-PSOBBCombatCanaryStrictJsonObject `
+            -Text $Text -RoleLabel 'StableShadow configuration policy'
+        $configurationProperties = @($configurationJson.Properties())
+        foreach ($unsupportedKey in @(
+                'CensorCredentials',
+                'AllowSameAccountConcurrentLogins')) {
+            if (@($configurationProperties | Where-Object {
+                        [string]$_.Name -ceq $unsupportedKey
+                    }).Count -ne 0) {
+                return $false
+            }
+        }
+        $true
+    } catch {
+        $false
+    }
+}
+
 function Get-PSOBBCombatCanaryInstallation {
     param(
         [Parameter(Mandatory)]$Layout,
@@ -1176,8 +1211,12 @@ function Get-PSOBBCombatCanaryInstallation {
         -ExpectedSha256 ([string]$installation.configurationSha256) `
         -RoleLabel 'combat canary configuration' -PassThruSnapshot
     $configurationText = [string]$configurationSnapshot.Value
+    $credentialPolicyValid =
+        Test-PSOBBCombatCanaryArtifactConfigurationPolicy `
+            -Text $configurationText -ServerArtifact $selection.Artifact
     if (-not (Test-PSOBBCombatCanaryConfigStrictJson `
             -Text $configurationText) -or
+        -not $credentialPolicyValid -or
         -not (Test-PSOBBCombatCanaryConfigScalar `
             -Text $configurationText -Key 'ServerName' `
             -JsonPattern '"PSOBB Combat"') -or
@@ -1200,11 +1239,6 @@ function Get-PSOBBCombatCanaryInstallation {
         -not (Test-PSOBBCombatCanaryConfigScalar `
             -Text $configurationText -Key 'RunInteractiveShell' `
             -JsonPattern 'true') -or
-        -not (Test-PSOBBCombatCanaryConfigScalar `
-            -Text $configurationText -Key 'CensorCredentials' -JsonPattern 'true') -or
-        -not (Test-PSOBBCombatCanaryConfigScalar `
-            -Text $configurationText -Key 'AllowSameAccountConcurrentLogins' `
-            -JsonPattern 'false') -or
         -not (Test-PSOBBCombatCanaryConfigScalar `
             -Text $configurationText -Key 'AllowUnregisteredUsers' `
             -JsonPattern 'false') -or
