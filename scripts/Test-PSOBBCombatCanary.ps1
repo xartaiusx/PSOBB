@@ -82,6 +82,20 @@ function Test-PSOBBCombatCanaryVerifierMutableServerExemptPath {
         'patch-(?:bb|pc)/\.metadata-cache\.json)$')
 }
 
+function Test-PSOBBCombatCanaryReleaseExecutableIdentity {
+    param(
+        [Parameter(Mandatory)]$ManifestEntries,
+        [Parameter(Mandatory)]$ExpectedExecutable
+    )
+
+    $matches = @($ManifestEntries | Where-Object {
+            [string]$_.path -ceq [string]$ExpectedExecutable.path
+        })
+    $matches.Count -eq 1 -and
+        [int64]$matches[0].size -eq [int64]$ExpectedExecutable.size -and
+        [string]$matches[0].sha256 -ceq [string]$ExpectedExecutable.sha256
+}
+
 function Assert-PSOBBCombatCanaryMetadataCache {
     param(
         [Parameter(Mandatory)][string]$ServerRoot,
@@ -848,7 +862,7 @@ function Test-PSOBBCombatCanarySnapshot {
     }
 }
 
-function Assert-PSOBBCombatCanaryOrdinaryTree {
+function Get-PSOBBCombatCanaryOrdinaryTreeManifest {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Root,
@@ -858,6 +872,7 @@ function Assert-PSOBBCombatCanaryOrdinaryTree {
     try {
         $safeRoot = Assert-PathWithinRoot -Path $Path -Root $Root
         $pending = [System.Collections.Generic.Queue[string]]::new()
+        $files = [System.Collections.Generic.List[object]]::new()
         $pending.Enqueue($safeRoot)
         while ($pending.Count -gt 0) {
             $directory = Assert-PathWithinRoot -Path $pending.Dequeue() -Root $safeRoot
@@ -874,10 +889,19 @@ function Assert-PSOBBCombatCanaryOrdinaryTree {
                         [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
                     throw 'Unsafe tree item'
                 }
-                if ($child.PSIsContainer) { $pending.Enqueue($child.FullName) }
+                if ($child.PSIsContainer) {
+                    $pending.Enqueue($child.FullName)
+                } else {
+                    $files.Add([pscustomobject]@{
+                            path = [System.IO.Path]::GetRelativePath(
+                                $safeRoot, $child.FullName).Replace('\', '/')
+                            size = [int64]$child.Length
+                            sha256 = Get-LowerSha256 $child.FullName
+                        })
+                }
             }
         }
-        $safeRoot
+        @($files.ToArray() | Sort-Object path -CaseSensitive)
     } catch {
         throw "$Label is unreadable or contains an unsafe tree item"
     }
@@ -1023,7 +1047,8 @@ function Get-PSOBBCombatCanaryInstallation {
         $null
     }
 
-    [void](Assert-PSOBBCombatCanaryOrdinaryTree `
+    $actualServerBaseEntries = @(
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
             -Path $Layout.ServerBase -Root $Layout.EnvironmentRoot `
             -Label 'Combat-canary server base')
     if ($selection.Artifact -ceq 'CurrentUpstream') {
@@ -1103,21 +1128,20 @@ function Get-PSOBBCombatCanaryInstallation {
             [string]$entry.sha256 -cnotmatch '^[a-f0-9]{64}$') {
             throw 'The server release manifest contains an unsafe or colliding path'
         }
-        $file = Assert-PathWithinRoot `
-            -Path (Join-Path $Layout.ServerBase ($relative.Replace('/', '\'))) `
-            -Root $Layout.ServerBase
-        $item = Get-Item -Force -LiteralPath $file -ErrorAction Stop
-        if ($item.PSIsContainer -or $item.Length -ne [int64]$entry.size -or
-            (Get-LowerSha256 $file) -cne [string]$entry.sha256) {
-            throw 'The server-base release file does not match its exact manifest'
-        }
         $releaseBytes += [int64]$entry.size
     }
-    $actualReleasePaths = @(Get-ChildItem -Force -LiteralPath $Layout.ServerBase `
-        -Recurse -File | ForEach-Object {
-            [System.IO.Path]::GetRelativePath(
-                $Layout.ServerBase, $_.FullName).Replace('\', '/')
-        } | Where-Object { $_ -cne 'release-manifest.json' })
+    if ($selection.Artifact -ceq 'CurrentUpstream' -and
+        -not (Test-PSOBBCombatCanaryReleaseExecutableIdentity `
+            -ManifestEntries $releaseEntries `
+            -ExpectedExecutable $build.output.executable)) {
+        throw 'The server release executable differs from its build contract'
+    }
+    $expectedServerBaseEntries = @(
+        $releaseEntries + @([pscustomobject]@{
+                path = 'release-manifest.json'
+                size = [int64]$releaseManifestSnapshot.Length
+                sha256 = [string]$releaseManifestSnapshot.Sha256
+            }))
     $manifestClaimsInvalid = if ($selection.Artifact -ceq 'CurrentUpstream') {
         $releaseEntries.Count -ne [int]$build.output.fileCount -or
             $releaseBytes -ne [int64]$build.output.totalBytes
@@ -1127,23 +1151,9 @@ function Get-PSOBBCombatCanaryInstallation {
             -Right $releaseEntries)
     }
     if ($manifestClaimsInvalid -or
-        $actualReleasePaths.Count -ne $releasePaths.Count -or
-        @($actualReleasePaths | Where-Object {
-                -not $releasePaths.Contains($_)
-            }).Count -ne 0) {
+        -not (Test-PSOBBManifestEntriesEqual `
+            -Left $expectedServerBaseEntries -Right $actualServerBaseEntries)) {
         throw 'The server-base release inventory differs from its build contract'
-    }
-    $baseExecutablePath = Join-Path $Layout.ServerBase 'newserv-windows.exe'
-    $expectedExecutable = if ($selection.Artifact -ceq 'CurrentUpstream') {
-        $build.output.executable
-    } else {
-        $build.source.serverExecutable
-    }
-    if ((Get-Item -Force -LiteralPath $baseExecutablePath).Length -ne
-            [int64]$expectedExecutable.size -or
-        (Get-LowerSha256 $baseExecutablePath) -cne
-            [string]$expectedExecutable.sha256) {
-        throw 'The server-base executable does not match its build contract'
     }
     $initializedAt = [DateTimeOffset]::MinValue
     if ([int]$installation.schemaVersion -ne 1 -or
@@ -1165,7 +1175,8 @@ function Get-PSOBBCombatCanaryInstallation {
         throw 'The combat-canary installation record has an invalid fixed binding'
     }
 
-    [void](Assert-PSOBBCombatCanaryOrdinaryTree `
+    $actualMutableEntries = @(
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
             -Path $Layout.Server -Root $Layout.EnvironmentRoot `
             -Label 'Mutable combat-canary server')
     if ($selection.Artifact -ceq 'CurrentUpstream') {
@@ -1182,7 +1193,6 @@ function Get-PSOBBCombatCanaryInstallation {
                 size = [int64]$releaseManifestSnapshot.Length
                 sha256 = [string]$releaseManifestSnapshot.Sha256
             }))
-    $actualMutableEntries = @(Get-PSOBBDirectoryManifest -Root $Layout.Server)
     $comparableMutableEntries = @($actualMutableEntries | Where-Object {
             -not (Test-PSOBBCombatCanaryVerifierMutableServerExemptPath `
                 -Path ([string]$_.path))
@@ -1286,18 +1296,12 @@ function Get-PSOBBCombatCanaryInstallation {
             -JsonPattern '\[\["127\.0\.0\.1",\s*12001\],\s*"bb",\s*"game_server"\]')) {
         throw 'The combat-canary configuration is not the exact loopback baseline policy'
     }
-    $mutableExecutablePath = Join-Path $Layout.Server 'newserv-windows.exe'
-    if ((Get-Item -Force -LiteralPath $mutableExecutablePath).Length -ne
-            [int64]$expectedExecutable.size -or
-        (Get-LowerSha256 $mutableExecutablePath) -cne
-            [string]$expectedExecutable.sha256) {
-        throw 'The mutable combat-canary server executable differs from server-base'
-    }
-
-    [void](Assert-PSOBBCombatCanaryOrdinaryTree `
+    $actualBaseClientEntries = @(
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
             -Path $Layout.BaseClient -Root $Layout.EnvironmentRoot `
             -Label 'Immutable combat-canary base client')
-    [void](Assert-PSOBBCombatCanaryOrdinaryTree `
+    $actualRuntimeClientEntries = @(
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
             -Path $Layout.Client -Root $Layout.EnvironmentRoot `
             -Label 'Mutable combat-canary runtime client')
     if ($selection.Artifact -ceq 'StableShadow' -and
@@ -1315,8 +1319,8 @@ function Get-PSOBBCombatCanaryInstallation {
         -JsonObject $baseManifestJson `
         -RoleLabel 'combat canary base client manifest'
     if ([int]$baseManifest.schemaVersion -ne 1 -or
-        -not (Test-PSOBBDirectoryManifest `
-            -Root $Layout.BaseClient -Files @($baseManifest.files))) {
+        -not (Test-PSOBBManifestEntriesEqual `
+            -Left @($baseManifest.files) -Right $actualBaseClientEntries)) {
         throw 'The immutable combat-canary base client differs from its manifest'
     }
 
@@ -1343,7 +1347,6 @@ function Get-PSOBBCombatCanaryInstallation {
             'clientExecutablePath', 'clientExecutableSize',
             'clientExecutableSha256', 'clientProfileSha256',
             'baseClientManifestSha256', 'createdAtUtc')
-    $clientExecutable = Join-Path $Layout.Client 'Psobb.exe'
     $clientProfilePath = Join-Path $Layout.Client 'client-profile.json'
     $clientProfileSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
         -LiteralPath $clientProfilePath -Root $Layout.Client -MaximumBytes 256KB `
@@ -1354,12 +1357,15 @@ function Get-PSOBBCombatCanaryInstallation {
                 size = [int64]$clientProfileSnapshot.Length
                 sha256 = [string]$clientProfileSnapshot.Sha256
             }))
-    if (-not (Test-PSOBBDirectoryManifest `
-            -Root $Layout.Client -Files $runtimeClientEntries)) {
+    if (-not (Test-PSOBBManifestEntriesEqual `
+            -Left $runtimeClientEntries -Right $actualRuntimeClientEntries)) {
         throw 'The combat-canary runtime client is not an exact base-client copy plus client-profile.json'
     }
     $approvedClient = Get-PSOBBCombatCanaryApprovedClientIdentity `
         -RepositoryRoot $script:RepositoryRoot
+    $baseClientExecutables = @($baseManifest.files | Where-Object {
+            [string]$_.path -ceq 'Psobb.exe'
+        })
     if ([int]$binding.schemaVersion -ne 1 -or
         [string]$binding.environment -cne 'CombatCanary' -or
         [string]$binding.environmentId -cne 'combat-canary' -or
@@ -1371,15 +1377,15 @@ function Get-PSOBBCombatCanaryInstallation {
         [string]$binding.clientExecutablePath -cne 'runtime/client/Psobb.exe' -or
         [int64]$binding.clientExecutableSize -ne $approvedClient.Size -or
         [string]$binding.clientExecutableSha256 -cne $approvedClient.Sha256 -or
+        $baseClientExecutables.Count -ne 1 -or
+        [int64]$baseClientExecutables[0].size -ne $approvedClient.Size -or
+        [string]$baseClientExecutables[0].sha256 -cne $approvedClient.Sha256 -or
         ($selection.Artifact -ceq 'StableShadow' -and
             [string]$approvedClient.Sha256 -cne
                 [string]$stableShadowSource.BaseClientExecutableSha256) -or
         [string]$binding.clientProfileSha256 -cnotmatch '^[a-f0-9]{64}$' -or
         [string]$binding.baseClientManifestSha256 -cne
             [string]$baseManifestSnapshot.Sha256 -or
-        (Get-Item -Force -LiteralPath $clientExecutable).Length -ne
-            $approvedClient.Size -or
-        (Get-LowerSha256 $clientExecutable) -cne $approvedClient.Sha256 -or
         [string]$clientProfileSnapshot.Sha256 -cne
             [string]$binding.clientProfileSha256) {
         throw 'The combat-canary client is not the exact baseline/native 59NL binding'

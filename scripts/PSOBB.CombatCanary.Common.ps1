@@ -1443,14 +1443,33 @@ function Get-PSOBBCombatCanaryPhosgJsonTokens {
                         if ($index + 4 -ge $Text.Length) {
                             throw 'Incomplete JSON unicode escape'
                         }
+                        $unicodeByte = 0
                         for ($offset = 1; $offset -le 4; $offset++) {
-                            if ('0123456789abcdefABCDEF'.IndexOf(
-                                    $Text[$index + $offset]) -lt 0) {
+                            $digit = $Text[$index + $offset]
+                            $nibble = if ($digit -ge '0' -and $digit -le '9') {
+                                [int]$digit - [int][char]'0'
+                            } elseif ($digit -ge 'a' -and $digit -le 'f') {
+                                10 + [int]$digit - [int][char]'a'
+                            } elseif ($digit -ge 'A' -and $digit -le 'F') {
+                                10 + [int]$digit - [int][char]'A'
+                            } else {
                                 throw 'Invalid JSON unicode escape'
                             }
+                            $unicodeByte = ($unicodeByte -shl 4) -bor $nibble
+                        }
+                        if ($unicodeByte -gt 0xFF) {
+                            throw 'JSON unicode escape is not one phosg byte'
                         }
                         $index += 4
                     }
+                } elseif ([char]::IsHighSurrogate($stringCharacter)) {
+                    if ($index + 1 -ge $Text.Length -or
+                        -not [char]::IsLowSurrogate($Text[$index + 1])) {
+                        throw 'Unpaired surrogate in JSON string'
+                    }
+                    $index++
+                } elseif ([char]::IsLowSurrogate($stringCharacter)) {
+                    throw 'Unpaired surrogate in JSON string'
                 }
                 $index++
             }
@@ -1460,18 +1479,10 @@ function Get-PSOBBCombatCanaryPhosgJsonTokens {
                 -Budget $Budget -Policy $Policy `
                 -NormalizedCharacters $rawLength
             $raw = $Text.Substring($start, $rawLength)
-            try {
-                $decoded = [Newtonsoft.Json.JsonConvert]::DeserializeObject[string]($raw)
-            } catch {
-                throw 'Invalid JSON string'
-            }
-            $phosgBytes = ConvertFrom-PSOBBCombatCanaryPhosgStringBytes `
-                -RawToken $raw
             $tokens.Add([pscustomobject]@{
                     Kind = 'String'
                     Raw = $raw
-                    Decoded = $decoded
-                    PhosgBytes = $phosgBytes
+                    Decoded = $null
                     Normalized = $raw
                 })
             continue
@@ -1654,26 +1665,47 @@ function Read-PSOBBCombatCanaryPhosgJsonValue {
                 $Index.Value++
                 Add-PSOBBCombatCanaryJsonPropertyBudget `
                     -Budget $Budget -Policy $Policy
-                $keyBytes = [byte[]]$key.PhosgBytes
-                $normalizedKeyLength = 2 + (6 * $keyBytes.Length)
+                $keyInfo = $null
+                if (-not $Budget.KeyCache.TryGetValue(
+                        [string]$key.Raw, [ref]$keyInfo)) {
+                    $keyBytes = $null
+                    try {
+                        $keyBytes = [byte[]](
+                            ConvertFrom-PSOBBCombatCanaryPhosgStringBytes `
+                                -RawToken ([string]$key.Raw))
+                        $normalizedKeyBuilder =
+                            [System.Text.StringBuilder]::new(
+                                2 + (6 * $keyBytes.Length))
+                        [void]$normalizedKeyBuilder.Append('"')
+                        foreach ($keyByte in $keyBytes) {
+                            [void]$normalizedKeyBuilder.Append(
+                                '\u00' + $keyByte.ToString('X2',
+                                    [System.Globalization.CultureInfo]::InvariantCulture))
+                        }
+                        [void]$normalizedKeyBuilder.Append('"')
+                        $keyInfo = [pscustomobject]@{
+                            Identity = [Convert]::ToHexString($keyBytes)
+                            Normalized = $normalizedKeyBuilder.ToString()
+                            Name = [System.Text.Encoding]::Latin1.GetString(
+                                $keyBytes)
+                        }
+                    } finally {
+                        if ($null -ne $keyBytes) {
+                            [Array]::Clear($keyBytes, 0, $keyBytes.Length)
+                        }
+                    }
+                    $Budget.KeyCache.Add([string]$key.Raw, $keyInfo)
+                }
+                $normalizedKey = [string]$keyInfo.Normalized
+                $normalizedKeyLength = $normalizedKey.Length
                 Add-PSOBBCombatCanaryJsonNormalizedWork `
                     -Budget $Budget -Policy $Policy `
                     -Characters $normalizedKeyLength
-                $keyIdentity = [Convert]::ToHexString($keyBytes)
+                $keyIdentity = [string]$keyInfo.Identity
                 if (-not $keyIdentities.Add($keyIdentity)) {
                     throw 'Duplicate phosg byte object key'
                 }
-                $normalizedKeyBuilder = [System.Text.StringBuilder]::new(
-                    $normalizedKeyLength)
-                [void]$normalizedKeyBuilder.Append('"')
-                foreach ($keyByte in $keyBytes) {
-                    [void]$normalizedKeyBuilder.Append(
-                        '\u00' + $keyByte.ToString('X2',
-                            [System.Globalization.CultureInfo]::InvariantCulture))
-                }
-                [void]$normalizedKeyBuilder.Append('"')
-                $normalizedKey = $normalizedKeyBuilder.ToString()
-                $phosgName = [System.Text.Encoding]::Latin1.GetString($keyBytes)
+                $phosgName = [string]$keyInfo.Name
                 if ($Index.Value -ge $Tokens.Count -or
                     $Tokens[$Index.Value].Kind -cne 'Colon') {
                     throw 'JSON object property is missing a colon'
@@ -1826,39 +1858,29 @@ function ConvertTo-PSOBBCombatCanaryPhosgJsonPreflight {
         Properties = 0
         Items = 0
         NormalizedWork = [int64]0
+        KeyCache = [System.Collections.Generic.Dictionary[string, object]]::new(
+            [System.StringComparer]::Ordinal)
     }
-    $tokens = @()
-    try {
-        $tokens = @(Get-PSOBBCombatCanaryPhosgJsonTokens `
-                -Text $Text -Policy $policy -Budget $budget)
-        $index = 0
-        $root = Read-PSOBBCombatCanaryPhosgJsonValue `
-            -Tokens $tokens -Index ([ref]$index) -Depth 0 `
-            -Policy $policy -Budget $budget
-        if ($index -ne $tokens.Count) { throw 'Extra top-level JSON content' }
-        if (([string]$root.Normalized).Length -gt
-            [int]$policy.MaximumNormalizedWork) {
-            throw 'The JSON normalized root exceeded its exact bound'
-        }
-        [pscustomobject]@{
-            NormalizedText = [string]$root.Normalized
-            Root = $root
-            ResourceUsage = [pscustomobject]@{
-                Characters = $Text.Length
-                Tokens = [int]$budget.Tokens
-                Properties = [int]$budget.Properties
-                Items = [int]$budget.Items
-                NormalizedWork = [int64]$budget.NormalizedWork
-            }
-        }
-    } finally {
-        foreach ($token in @($tokens)) {
-            if ($token.PSObject.Properties.Name -contains 'PhosgBytes' -and
-                $token.PhosgBytes -is [byte[]]) {
-                [Array]::Clear(
-                    [byte[]]$token.PhosgBytes, 0,
-                    ([byte[]]$token.PhosgBytes).Length)
-            }
+    $tokens = @(Get-PSOBBCombatCanaryPhosgJsonTokens `
+            -Text $Text -Policy $policy -Budget $budget)
+    $index = 0
+    $root = Read-PSOBBCombatCanaryPhosgJsonValue `
+        -Tokens $tokens -Index ([ref]$index) -Depth 0 `
+        -Policy $policy -Budget $budget
+    if ($index -ne $tokens.Count) { throw 'Extra top-level JSON content' }
+    if (([string]$root.Normalized).Length -gt
+        [int]$policy.MaximumNormalizedWork) {
+        throw 'The JSON normalized root exceeded its exact bound'
+    }
+    [pscustomobject]@{
+        NormalizedText = [string]$root.Normalized
+        Root = $root
+        ResourceUsage = [pscustomobject]@{
+            Characters = $Text.Length
+            Tokens = [int]$budget.Tokens
+            Properties = [int]$budget.Properties
+            Items = [int]$budget.Items
+            NormalizedWork = [int64]$budget.NormalizedWork
         }
     }
 }
@@ -2445,19 +2467,14 @@ function ConvertFrom-PSOBBCombatCanaryPhosgStringBytes {
                 $index++
                 continue
             }
-            $characterCount = 1
-            if ([char]::IsHighSurrogate($character)) {
-                if ($index + 1 -ge $RawToken.Length - 1 -or
-                    -not [char]::IsLowSurrogate($RawToken[$index + 1])) {
-                    throw 'Unpaired surrogate in raw JSON string'
-                }
-                $characterCount = 2
-            } elseif ([char]::IsLowSurrogate($character)) {
-                throw 'Unpaired surrogate in raw JSON string'
+            $segmentStart = $index
+            while ($index -lt $RawToken.Length - 1 -and
+                $RawToken[$index] -ne '\') {
+                $index++
             }
+            $segmentLength = $index - $segmentStart
             $count += $utf8.GetBytes(
-                $RawToken, $index, $characterCount, $workBytes, $count)
-            $index += $characterCount
+                $RawToken, $segmentStart, $segmentLength, $workBytes, $count)
         }
         $result = [byte[]]::new($count)
         if ($count -gt 0) {

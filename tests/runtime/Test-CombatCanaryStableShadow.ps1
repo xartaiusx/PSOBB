@@ -114,6 +114,8 @@ $initializerPath = Join-Path $repositoryRoot `
 . (Import-FunctionDefinition -Path $verifierPath `
     -Name 'Test-PSOBBCombatCanaryVerifierMutableServerExemptPath')
 . (Import-FunctionDefinition -Path $verifierPath `
+    -Name 'Test-PSOBBCombatCanaryReleaseExecutableIdentity')
+. (Import-FunctionDefinition -Path $verifierPath `
     -Name 'Assert-PSOBBCombatCanaryMetadataCache')
 . (Import-FunctionDefinition -Path $verifierPath `
     -Name 'Test-PSOBBCombatCanaryConfigKeyUnique')
@@ -121,6 +123,8 @@ $initializerPath = Join-Path $repositoryRoot `
     -Name 'Test-PSOBBCombatCanaryConfigScalar')
 . (Import-FunctionDefinition -Path $verifierPath `
     -Name 'Test-PSOBBCombatCanaryArtifactConfigurationPolicy')
+. (Import-FunctionDefinition -Path $verifierPath `
+    -Name 'Get-PSOBBCombatCanaryOrdinaryTreeManifest')
 . (Import-FunctionDefinition -Path $initializerPath `
     -Name 'Move-PSOBBCombatInitializeNoClobber')
 . (Import-FunctionDefinition -Path $initializerPath `
@@ -129,6 +133,127 @@ $initializerPath = Join-Path $repositoryRoot `
     -Name 'Undo-PSOBBCombatInitializeTarget')
 . (Import-FunctionDefinition -Path $initializerPath `
     -Name 'Get-PSOBBCombatInitializeFinalConfigurationText')
+
+$validParserInputs = @(
+    '{"schemaVersion":1}',
+    ("{// comment`n`"schemaVersion`":1,}"),
+    '{"schemaVersion":0x7F}',
+    '{"\u00FF":"\u00FF"}',
+    '{"\u00E9":1,"é":2}',
+    ('{"value":"' + [char]::ConvertFromUtf32(0x1F600) + '"}'))
+$invalidParserInputs = @(
+    '{"schemaVersion":1,"\u0073chemaVersion":2}',
+    '{"\u00C3\u00A9":1,"é":2}',
+    '{"value":"\u0100"}',
+    '{"\u0100":1}',
+    '{"value":"\uD800"}',
+    '{"value":"\uD83D\uDE00"}',
+    ('{"value":"' + [char]0xD800 + '"}'),
+    ('{"value":"' + [char]0xDC00 + '"}'))
+$validParserAccepted = 0
+foreach ($parserInput in $validParserInputs) {
+    try {
+        Read-PSOBBCombatCanaryStrictJsonObject -Text $parserInput `
+            -RoleLabel 'parser optimization fixture' | Out-Null
+        $validParserAccepted++
+    } catch { }
+}
+$invalidParserRejected = 0
+foreach ($parserInput in $invalidParserInputs) {
+    try {
+        Read-PSOBBCombatCanaryStrictJsonObject -Text $parserInput `
+            -RoleLabel 'parser optimization fixture' | Out-Null
+    } catch {
+        $invalidParserRejected++
+    }
+}
+Add-Result 'optimized strict parser preserves phosg byte semantics' (
+    $validParserAccepted -eq $validParserInputs.Count -and
+    $invalidParserRejected -eq $invalidParserInputs.Count) `
+    "valid=$validParserAccepted/$($validParserInputs.Count); invalid=$invalidParserRejected/$($invalidParserInputs.Count)"
+
+$walkerFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'psobb-stable-shadow-walker-test-' + [Guid]::NewGuid().ToString('N'))
+try {
+    $walkerTree = Join-Path $walkerFixtureRoot 'tree'
+    $walkerNested = Join-Path $walkerTree 'nested'
+    $walkerOutside = Join-Path $walkerFixtureRoot 'outside'
+    New-Item -ItemType Directory -Path $walkerNested, $walkerOutside `
+        -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $walkerTree 'alpha.txt'), 'alpha',
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $walkerNested 'beta.txt'), 'beta',
+        [System.Text.UTF8Encoding]::new($false))
+    $walkerManifest = @(
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
+            -Path $walkerTree -Root $walkerFixtureRoot `
+            -Label 'walker fixture')
+    $walkerOrdinaryAccepted =
+        $walkerManifest.Count -eq 2 -and
+        [string]$walkerManifest[0].path -ceq 'alpha.txt' -and
+        [string]$walkerManifest[1].path -ceq 'nested/beta.txt' -and
+        [string]$walkerManifest[0].sha256 -ceq
+            (Get-LowerSha256 (Join-Path $walkerTree 'alpha.txt')) -and
+        [string]$walkerManifest[1].sha256 -ceq
+            (Get-LowerSha256 (Join-Path $walkerNested 'beta.txt'))
+
+    $walkerJunction = Join-Path $walkerTree 'junction'
+    New-Item -ItemType Junction -Path $walkerJunction `
+        -Target $walkerOutside | Out-Null
+    $walkerReparseRejected = $false
+    try {
+        Get-PSOBBCombatCanaryOrdinaryTreeManifest `
+            -Path $walkerTree -Root $walkerFixtureRoot `
+            -Label 'walker reparse fixture' | Out-Null
+    } catch {
+        $walkerReparseRejected = $true
+    }
+    [System.IO.Directory]::Delete($walkerJunction, $false)
+    Add-Result 'single-pass verifier walker hashes ordinary files and rejects reparses' (
+        $walkerOrdinaryAccepted -and $walkerReparseRejected) `
+        'exact paths, sizes, hashes, and reparse rejection preserved'
+} finally {
+    if (Test-Path -LiteralPath $walkerFixtureRoot) {
+        Remove-Item -LiteralPath $walkerFixtureRoot -Recurse -Force
+    }
+}
+
+$duplicateLeftManifest = @(
+    [pscustomobject]@{ path = 'alpha'; size = 1; sha256 = ('a' * 64) },
+    [pscustomobject]@{ path = 'alpha'; size = 1; sha256 = ('a' * 64) })
+$uniqueRightManifest = @(
+    [pscustomobject]@{ path = 'alpha'; size = 1; sha256 = ('a' * 64) },
+    [pscustomobject]@{ path = 'beta'; size = 1; sha256 = ('b' * 64) })
+Add-Result 'exact manifest comparison rejects duplicate expected paths' (
+    -not (Test-PSOBBManifestEntriesEqual `
+        -Left $duplicateLeftManifest -Right $uniqueRightManifest)) `
+    'duplicates cannot conceal an unmatched ordinary file'
+
+$expectedExecutable = [pscustomobject]@{
+    path = 'newserv-windows.exe'
+    size = [int64]42
+    sha256 = ('c' * 64)
+}
+$matchingRelease = @([pscustomobject]@{
+        path = 'newserv-windows.exe'
+        size = [int64]42
+        sha256 = ('c' * 64)
+    })
+$contradictoryRelease = @([pscustomobject]@{
+        path = 'newserv-windows.exe'
+        size = [int64]42
+        sha256 = ('d' * 64)
+    })
+Add-Result 'CurrentUpstream executable stays bound to its build contract' (
+    (Test-PSOBBCombatCanaryReleaseExecutableIdentity `
+        -ManifestEntries $matchingRelease `
+        -ExpectedExecutable $expectedExecutable) -and
+    -not (Test-PSOBBCombatCanaryReleaseExecutableIdentity `
+        -ManifestEntries $contradictoryRelease `
+        -ExpectedExecutable $expectedExecutable)) `
+    'manifest equality avoids a second file hash without weakening identity'
 
 $stableConfiguration = @'
 {

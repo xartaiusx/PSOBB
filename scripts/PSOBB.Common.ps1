@@ -3715,6 +3715,15 @@ function Test-PSOBBManifestEntriesEqual {
     if ($leftEntries.Count -ne $rightEntries.Count) {
         return $false
     }
+    $leftPaths = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($entry in $leftEntries) {
+        $path = [string]$entry.path
+        if ([string]::IsNullOrWhiteSpace($path) -or
+            -not $leftPaths.Add($path)) {
+            return $false
+        }
+    }
     $rightByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::Ordinal)
     foreach ($entry in $rightEntries) {
