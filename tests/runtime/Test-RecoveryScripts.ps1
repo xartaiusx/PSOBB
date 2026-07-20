@@ -17,6 +17,72 @@ function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
     $results.Add([pscustomobject]@{ Name = $Name; Passed = $Passed; Detail = $Detail })
 }
 
+function Test-RecoveryInterlockContract(
+    [Parameter(Mandatory)][string]$Source,
+    [Parameter(Mandatory)][int]$MinimumGlobalGateCount,
+    [switch]$RequireEphemeralLifecycleCoverage
+) {
+    $clientLock = $Source.IndexOf(
+        'Enter-PSOBBClientOperationLock', [System.StringComparison]::Ordinal)
+    $lifecycleLock = $Source.IndexOf(
+        "'Local\PSOBB.Newserv.Start.'", [System.StringComparison]::Ordinal)
+    $globalGates = @([regex]::Matches(
+            $Source, 'Assert-PSOBBGlobalStoppedRuntime') | ForEach-Object Index)
+    $activityBoundary = if ($globalGates.Count -gt 0) { $globalGates[0] } else { -1 }
+    $lifecycleRelease = $Source.LastIndexOf(
+        '$mutex.ReleaseMutex()', [System.StringComparison]::Ordinal)
+    $clientRelease = $Source.LastIndexOf(
+        'Exit-PSOBBClientOperationLock', [System.StringComparison]::Ordinal)
+    $baseContract = ($clientLock -ge 0) -and
+        ($lifecycleLock -gt $clientLock) -and
+        ($activityBoundary -gt $lifecycleLock) -and
+        ($globalGates.Count -ge $MinimumGlobalGateCount) -and
+        ($lifecycleRelease -gt $activityBoundary) -and
+        ($clientRelease -gt $lifecycleRelease) -and
+        ($Source -notmatch '(?im)^\s*Stop-Process\b')
+    if (-not $baseContract -or -not $RequireEphemeralLifecycleCoverage) {
+        return $baseContract
+    }
+
+    $ephemeralStart = $Source.IndexOf(
+        '$process.Start()', [System.StringComparison]::Ordinal)
+    $ephemeralExit = $Source.IndexOf(
+        '$process.WaitForExit(30000)', [System.StringComparison]::Ordinal)
+    ($ephemeralStart -gt $activityBoundary) -and
+        ($globalGates[-1] -lt $ephemeralStart) -and
+        ($ephemeralExit -gt $ephemeralStart) -and
+        ($lifecycleRelease -gt $ephemeralExit) -and
+        ($clientRelease -gt $ephemeralExit)
+}
+
+$recoveryOperationSources = [ordered]@{
+    Backup = [pscustomobject]@{
+        Source = Get-Content -Raw -LiteralPath (
+            Join-Path $repositoryRoot 'scripts\Backup-PSOBB.ps1')
+        Gates = 2
+        Ephemeral = $false
+    }
+    Restore = [pscustomobject]@{
+        Source = Get-Content -Raw -LiteralPath (
+            Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1')
+        Gates = 3
+        Ephemeral = $false
+    }
+    RestoreDrill = [pscustomobject]@{
+        Source = $restoreDrillSource
+        Gates = 2
+        Ephemeral = $true
+    }
+}
+foreach ($entry in $recoveryOperationSources.GetEnumerator()) {
+    Add-Result "$($entry.Key) uses the global stopped-runtime boundary" (
+        Test-RecoveryInterlockContract `
+            -Source ([string]$entry.Value.Source) `
+            -MinimumGlobalGateCount ([int]$entry.Value.Gates) `
+            -RequireEphemeralLifecycleCoverage:$entry.Value.Ephemeral) `
+        'client lock precedes lifecycle lock; shared census rejects lifecycle evidence, named processes/helpers, and every reserved listener'
+}
+
 function Test-ProtectedTree([Parameter(Mandatory)][string]$Path) {
     $items = @(Get-Item -Force -LiteralPath $Path) +
         @(Get-ChildItem -Force -LiteralPath $Path -Recurse)
@@ -62,6 +128,39 @@ function New-FixtureConfig([Parameter(Mandatory)][string]$Fixture) {
 "@
 }
 
+function New-FixtureInstallationRecord(
+    [Parameter(Mandatory)][string]$InstallationId,
+    [Parameter(Mandatory)][string]$RuntimeRoot,
+    [string]$Profile = 'baseline'
+) {
+    $hash = [string]::new([char]'0', 64)
+    [ordered]@{
+        schemaVersion = 2
+        installationId = $InstallationId
+        initializedAtUtc = '2026-07-19T00:00:00.0000000+00:00'
+        runtimeRoot = $RuntimeRoot
+        serverVersion = 'fixture'
+        serverArchiveSha256 = $hash
+        serverExecutableSha256 = $hash
+        serverBaseManifestSha256 = $hash
+        clientVersion = 'fixture'
+        clientArchiveSha256 = $hash
+        baseClientExecutableSha256 = $hash
+        baseClientManifestSha256 = $hash
+        clientExecutableSha256 = $hash
+        rendererVersion = 'fixture'
+        rendererArchiveSha256 = $hash
+        rendererWrapperSha256 = $hash
+        rendererConfigurationSha256 = $hash
+        patchManifestSha256 = $hash
+        synchronizedPatchFiles = 0
+        clientPatchProfile = $Profile
+        clientPatchPolicySha256 = Get-LowerSha256 (
+            Join-Path $repositoryRoot 'config\client-patch-profiles.json')
+        networkScope = 'loopback-only'
+    }
+}
+
 function Get-StateFingerprint(
     [Parameter(Mandatory)][string]$BaseRoot,
     [Parameter(Mandatory)][string]$InstallRecordPath
@@ -82,6 +181,86 @@ function Get-StateFingerprint(
     @($records | Sort-Object)
 }
 
+function Get-FullRecoveryFixtureFingerprint(
+    [Parameter(Mandatory)][string]$Root
+) {
+    $records = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @((Get-Item -Force -LiteralPath $Root)) +
+        @(Get-ChildItem -Force -LiteralPath $Root -Recurse | Sort-Object FullName)) {
+        $relative = [System.IO.Path]::GetRelativePath($Root, $item.FullName).Replace('\', '/')
+        $kind = if ($item.PSIsContainer) { 'directory' } else { 'file' }
+        $digest = if ($item.PSIsContainer) { '-' } else { Get-LowerSha256 $item.FullName }
+        $sddl = (Get-Acl -LiteralPath $item.FullName).Sddl
+        $records.Add("$relative|$kind|$($item.Attributes)|$digest|$sddl")
+    }
+    @($records)
+}
+
+function Invoke-RestoreHardExitChild(
+    [Parameter(Mandatory)][string]$RestoreScript,
+    [Parameter(Mandatory)][string]$BackupPath,
+    [Parameter(Mandatory)]$Layout,
+    [Parameter(Mandatory)][string]$InstallationId,
+    [Parameter(Mandatory)][string]$Nonce,
+    [Parameter(Mandatory)][string]$Point
+) {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = Join-Path $PSHOME 'pwsh.exe'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-File', $RestoreScript,
+            '-BackupPath', $BackupPath, '-RuntimeRoot', $Layout.Root,
+            '-Confirm:$false', '-InternalTestHardExitPoint', $Point,
+            '-InternalTestFaultToken', $InstallationId,
+            '-InternalTestFaultNonce', $Nonce)) {
+        $startInfo.ArgumentList.Add([string]$argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'Hard-exit restore fixture process did not start'
+        }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(90000)) {
+            $process.Kill($true)
+            throw 'Hard-exit restore fixture process timed out'
+        }
+        [void]$stdout.GetAwaiter().GetResult()
+        [void]$stderr.GetAwaiter().GetResult()
+        $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Set-FixtureLiveMutation(
+    [Parameter(Mandatory)]$Layout,
+    [Parameter(Mandatory)][string]$InstallationId,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Timestamp
+) {
+    [System.IO.File]::WriteAllText(
+        (Join-Path $Layout.Server 'system\config.json'),
+        (New-FixtureConfig -Fixture $Name),
+        [System.Text.UTF8Encoding]::new($false))
+    $record = (Read-PSOBBInstallationRecordSnapshot `
+        -Path $Layout.InstallRecord -Root $Layout.Root `
+        -ExpectedInstallationId $InstallationId `
+        -ExpectedRuntimeRoot $Layout.Root).Value
+    $record.initializedAtUtc = $Timestamp
+    [System.IO.File]::WriteAllText(
+        $Layout.InstallRecord,
+        ($record | ConvertTo-Json -Depth 10),
+        [System.Text.UTF8Encoding]::new($false))
+    & (Join-Path $repositoryRoot 'scripts\Set-PSOBBRuntimeAcl.ps1') `
+        -RuntimeRoot $Layout.Root -Confirm:$false | Out-Null
+}
+
 function Test-RejectedBackup(
     [Parameter(Mandatory)]$Layout,
     [Parameter(Mandatory)][string]$SourceBackup,
@@ -93,12 +272,41 @@ function Test-RejectedBackup(
     try {
         Copy-Item -LiteralPath $SourceBackup -Destination $testBackup -Recurse
         & $Mutator $testBackup
+        Set-PSOBBProtectedTreeAcl -Path $testBackup -Root $Layout.Backups
         try {
             & (Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1') `
                 -BackupPath $testBackup -RuntimeRoot $Layout.Root -ValidateOnly | Out-Null
             return $false
         } catch {
             return $_.Exception.Message -match $ExpectedMessage
+        }
+    } finally {
+        if (Test-Path -LiteralPath $testBackup) {
+            Remove-Item -LiteralPath $testBackup -Recurse -Force
+        }
+    }
+}
+
+function Test-RedactedBackupRejection(
+    [Parameter(Mandatory)]$Layout,
+    [Parameter(Mandatory)][string]$SourceBackup,
+    [Parameter(Mandatory)][string]$RelativePath,
+    [Parameter(Mandatory)][string]$Sentinel
+) {
+    $testBackup = Join-Path $Layout.Backups (
+        'state-redaction-test-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        Copy-Item -LiteralPath $SourceBackup -Destination $testBackup -Recurse
+        $target = Join-Path $testBackup ($RelativePath.Replace('/', '\'))
+        [System.IO.File]::AppendAllText($target, 'tampered')
+        Set-PSOBBProtectedTreeAcl -Path $testBackup -Root $Layout.Backups
+        try {
+            & (Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1') `
+                -BackupPath $testBackup -RuntimeRoot $Layout.Root `
+                -ValidateOnly | Out-Null
+            return $false
+        } catch {
+            return $_.Exception.Message -notmatch [regex]::Escape($Sentinel)
         }
     } finally {
         if (Test-Path -LiteralPath $testBackup) {
@@ -145,18 +353,29 @@ try {
         (Join-Path $testLayout.Server 'system\teams\base.json'),
         '{"fixture":true}',
         [System.Text.UTF8Encoding]::new($false))
+    $redactionFixtures = [ordered]@{
+        'DO-NOT-LEAK-LICENSE.json' = 'system/licenses/DO-NOT-LEAK-LICENSE.json'
+        'DO-NOT-LEAK-PLAYER.psochar' = 'system/players/DO-NOT-LEAK-PLAYER.psochar'
+        'DO-NOT-LEAK-BANK.psobank' = 'system/players/DO-NOT-LEAK-BANK.psobank'
+        'DO-NOT-LEAK-TEAM.json' = 'system/teams/DO-NOT-LEAK-TEAM.json'
+    }
+    foreach ($fixture in $redactionFixtures.GetEnumerator()) {
+        [System.IO.File]::WriteAllText(
+            (Join-Path $testLayout.Server ($fixture.Value.Replace('/', '\'))),
+            '{"fixture":true}',
+            [System.Text.UTF8Encoding]::new($false))
+    }
     $testMarker = Initialize-PSOBBRuntimeMarker -Layout $testLayout
     [System.IO.File]::WriteAllText(
+        (Join-Path $testLayout.Root '.recovery-test.json'),
+        '{"fixture":true}',
+        [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedAcl -Path (Join-Path $testLayout.Root '.recovery-test.json')
+    [System.IO.File]::WriteAllText(
         $testLayout.InstallRecord,
-        ([ordered]@{
-            schemaVersion = 2
-            installationId = $testMarker.installationId
-            runtimeRoot = $testLayout.Root
-            clientPatchProfile = 'baseline'
-            clientPatchPolicySha256 = Get-LowerSha256 (
-                Join-Path $repositoryRoot 'config\client-patch-profiles.json')
-            fixture = 'installation-original'
-        } | ConvertTo-Json -Depth 5),
+        ((New-FixtureInstallationRecord `
+                -InstallationId $testMarker.installationId `
+                -RuntimeRoot $testLayout.Root) | ConvertTo-Json -Depth 5),
         [System.Text.UTF8Encoding]::new($false))
 
     $backup = & (Join-Path $repositoryRoot 'scripts\Backup-PSOBB.ps1') `
@@ -169,13 +388,180 @@ try {
         -InstallRecordPath $testLayout.InstallRecord)
     $validation = & (Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1') `
         -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root -ValidateOnly
+    $validationManifestSnapshot = Read-PSOBBRecoveryManifestSnapshot `
+        -Path (Join-Path $backup.BackupPath 'manifest.json') `
+        -Root $backup.BackupPath
+    $validationManifest = $validationManifestSnapshot.Value
     Add-Result 'schema-v3 backup validates' `
-        (($validation.Manifest.schemaVersion -eq 3) -and
-        ([string]$validation.Manifest.clientPatchState.profile -ceq 'baseline') -and
-        (@($validation.Manifest.files | Where-Object path -CEQ 'system/config.json').Count -eq 1) -and
-        (@($validation.Manifest.files | Where-Object path -CEQ 'stable/installation.json').Count -eq 1) -and
-        (@($validation.Manifest.stateRoots | Where-Object path -CEQ 'stable/installation.json').Count -eq 1)) `
+        (($validationManifest.schemaVersion -eq 3) -and
+        ([string]$validation.ClientPatchProfile -ceq 'baseline') -and
+        ($validation.PSObject.Properties.Name -notcontains 'Manifest') -and
+        (@($validationManifest.files | Where-Object path -CEQ 'system/config.json').Count -eq 1) -and
+        (@($validationManifest.files | Where-Object path -CEQ 'stable/installation.json').Count -eq 1) -and
+        (@($validationManifest.stateRoots | Where-Object path -CEQ 'stable/installation.json').Count -eq 1)) `
         $validation.ManifestSha256
+    $validationJson = $validation | ConvertTo-Json -Depth 5
+    Add-Result 'restore validation result redacts account and save filenames' (
+        @($redactionFixtures.Keys | Where-Object {
+                $validationJson.Contains(
+                    [string]$_, [System.StringComparison]::Ordinal)
+            }).Count -eq 0) `
+        'the public validation object exposes counts and digests, never manifest paths'
+
+    $licenseReaderRoot = Join-Path $testLayout.Backups (
+        'license-reader-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $licenseReaderRoot | Out-Null
+    $escapedLicensePath = Join-Path $licenseReaderRoot 'escaped-license.json'
+    [System.IO.File]::WriteAllText(
+        $escapedLicensePath,
+        '{"BBLicenses":[{"UserName":"escapeuser","Password":"ESCAPED\u0053ECRET"}]}',
+        [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedTreeAcl `
+        -Path $licenseReaderRoot -Root $testLayout.Backups
+    $decodedNames = [System.Collections.Generic.Dictionary[string, int]]::new(
+        [System.StringComparer]::Ordinal)
+    $decodedPasswords = [System.Collections.Generic.List[string]]::new()
+    $decodedCount = Add-PSOBBRecoveryBBLicenseRedactionTerms `
+        -Path $escapedLicensePath -Root $licenseReaderRoot `
+        -UserNameCounts $decodedNames -Passwords $decodedPasswords `
+        -Label 'escaped license fixture'
+    Add-Result 'license redaction uses decoded strict JSON passwords' (
+        $decodedCount -eq 1 -and $decodedNames['escapeuser'] -eq 1 -and
+        $decodedPasswords.Count -eq 1 -and
+        $decodedPasswords[0] -ceq 'ESCAPEDSECRET') `
+        'escaped JSON content is decoded before bounded redaction terms are collected'
+    Remove-PSOBBValidatedRecoveryTree `
+        -Path $licenseReaderRoot -Root $testLayout.Backups `
+        -Label 'license reader fixture' -RequireProtectedAcl
+
+    $reparseTarget = Join-Path $testLayout.Root 'reparse-target'
+    New-Item -ItemType Directory -Path $reparseTarget | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $reparseTarget 'target.txt'), 'target',
+        [System.Text.UTF8Encoding]::new($false))
+    $backupReparseSentinel = 'DO-NOT-LEAK-BACKUP-REPARSE'
+    $backupReparsePath = Join-Path $testLayout.Server (
+        'system\players\' + $backupReparseSentinel)
+    New-Item -ItemType Junction -Path $backupReparsePath `
+        -Target $reparseTarget | Out-Null
+    $backupCountBeforeReparse = @(Get-ChildItem -LiteralPath $testLayout.Backups `
+        -Directory -Filter 'state-*').Count
+    try {
+        & (Join-Path $repositoryRoot 'scripts\Backup-PSOBB.ps1') `
+            -RuntimeRoot $testLayout.Root | Out-Null
+        $backupReparseRejected = $false
+    } catch {
+        $backupReparseRejected =
+            -not $_.Exception.Message.Contains(
+                $backupReparseSentinel,
+                [System.StringComparison]::Ordinal)
+    } finally {
+        if (Test-Path -LiteralPath $backupReparsePath) {
+            Remove-Item -LiteralPath $backupReparsePath -Force
+        }
+    }
+    $backupCountAfterReparse = @(Get-ChildItem -LiteralPath $testLayout.Backups `
+        -Directory -Filter 'state-*').Count
+    Add-Result 'direct backup rejects and redacts a private reparse item' (
+        $backupReparseRejected -and
+        $backupCountAfterReparse -eq $backupCountBeforeReparse) `
+        'no path disclosure and no backup publication'
+
+    $restoreReparseSentinel = 'DO-NOT-LEAK-RESTORE-REPARSE'
+    $restoreReparseBackup = Join-Path $testLayout.Backups (
+        'state-reparse-' + [Guid]::NewGuid().ToString('N'))
+    Copy-Item -LiteralPath $backup.BackupPath `
+        -Destination $restoreReparseBackup -Recurse
+    $restoreReparsePath = Join-Path $restoreReparseBackup (
+        'system\players\' + $restoreReparseSentinel)
+    New-Item -ItemType Junction -Path $restoreReparsePath `
+        -Target $reparseTarget | Out-Null
+    $liveBeforeRestoreReparse = @(Get-StateFingerprint `
+        -BaseRoot $testLayout.Server `
+        -InstallRecordPath $testLayout.InstallRecord)
+    try {
+        & (Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1') `
+            -BackupPath $restoreReparseBackup `
+            -RuntimeRoot $testLayout.Root -ValidateOnly | Out-Null
+        $restoreReparseRejected = $false
+    } catch {
+        $restoreReparseRejected =
+            -not $_.Exception.Message.Contains(
+                $restoreReparseSentinel,
+                [System.StringComparison]::Ordinal)
+    }
+    $liveAfterRestoreReparse = @(Get-StateFingerprint `
+        -BaseRoot $testLayout.Server `
+        -InstallRecordPath $testLayout.InstallRecord)
+    if (Test-Path -LiteralPath $restoreReparsePath) {
+        Remove-Item -LiteralPath $restoreReparsePath -Force
+    }
+    Remove-Item -LiteralPath $restoreReparseBackup -Recurse -Force
+    Add-Result 'direct restore rejects and redacts a private reparse item' (
+        $restoreReparseRejected -and
+        @(Compare-Object $liveBeforeRestoreReparse $liveAfterRestoreReparse).Count -eq 0) `
+        'validation neither leaks the item name nor mutates live state'
+
+    $drillReparseSentinel = 'DO-NOT-LEAK-DRILL-REPARSE'
+    $drillReparsePath = Join-Path $testLayout.Server $drillReparseSentinel
+    New-Item -ItemType Junction -Path $drillReparsePath `
+        -Target $reparseTarget | Out-Null
+    try {
+        & (Join-Path $repositoryRoot 'scripts\Test-PSOBBRestoreDrill.ps1') `
+            -BackupPath $backup.BackupPath `
+            -RuntimeRoot $testLayout.Root | Out-Null
+        $drillReparseRejected = $false
+    } catch {
+        $drillReparseRejected =
+            -not $_.Exception.Message.Contains(
+                $drillReparseSentinel,
+                [System.StringComparison]::Ordinal)
+    } finally {
+        if (Test-Path -LiteralPath $drillReparsePath) {
+            Remove-Item -LiteralPath $drillReparsePath -Force
+        }
+    }
+    Add-Result 'restore drill redacts a scaffold reparse item' `
+        $drillReparseRejected `
+        'the pre-scaffold boundary reports only a category and ordinal'
+
+    $retentionFixtures = [System.Collections.Generic.List[string]]::new()
+    for ($retentionIndex = 1; $retentionIndex -le 9; $retentionIndex++) {
+        $retentionPath = Join-Path $testLayout.Backups (
+            'pre-restore-20000101T00000' + $retentionIndex + '000Z')
+        Copy-Item -LiteralPath $backup.BackupPath `
+            -Destination $retentionPath -Recurse
+        $retentionManifestPath = Join-Path $retentionPath 'manifest.json'
+        $retentionManifest = Get-Content -Raw -LiteralPath $retentionManifestPath |
+            ConvertFrom-Json
+        $retentionManifest.backupKind = 'pre-restore'
+        [System.IO.File]::WriteAllText(
+            $retentionManifestPath,
+            ($retentionManifest | ConvertTo-Json -Depth 10),
+            [System.Text.UTF8Encoding]::new($false))
+        Set-PSOBBProtectedTreeAcl `
+            -Path $retentionPath -Root $testLayout.Backups
+        $retentionFixtures.Add($retentionPath)
+    }
+    $preservedOldest = [string]$retentionFixtures[0]
+    $preservedOldestManifestSha256 = Get-LowerSha256 (
+        Join-Path $preservedOldest 'manifest.json')
+    $retentionBackup = & (Join-Path $repositoryRoot 'scripts\Backup-PSOBB.ps1') `
+        -RuntimeRoot $testLayout.Root -BackupKind pre-restore -Retention 7 `
+        -PreserveBackupPath $preservedOldest `
+        -PreserveBackupManifestSha256 $preservedOldestManifestSha256
+    $remainingPreRestore = @(Get-ChildItem -LiteralPath $testLayout.Backups `
+        -Directory -Filter 'pre-restore-*')
+    Add-Result 'nested pre-restore retention preserves its selected target' (
+        (Test-Path -LiteralPath $preservedOldest -PathType Container) -and
+        (Test-ProtectedTree -Path $preservedOldest) -and
+        $remainingPreRestore.Count -eq 8) `
+        'seven newest backups plus the exact older protected target remain'
+    foreach ($retentionPath in @($remainingPreRestore.FullName)) {
+        Remove-PSOBBValidatedRecoveryTree `
+            -Path $retentionPath -Root $testLayout.Backups `
+            -Label 'retention fixture cleanup' -RequireProtectedAcl
+    }
 
     $legacySuccessfulDrill = [pscustomobject]@{
         schemaVersion = 2
@@ -183,14 +569,14 @@ try {
         backupManifestSha256 = $validation.ManifestSha256
         approvedServerExecutableSha256 = $validation.ApprovedServerExecutableSha256
         serverExecutableSha256 = $validation.ApprovedServerExecutableSha256
-        clientPatchProfile = $validation.Manifest.clientPatchState.profile
-        clientPatchPolicySha256 = $validation.Manifest.clientPatchState.policySha256
-        clientPatchConfigSha256 = $validation.Manifest.clientPatchState.configSha256
-        installationRecordSha256 = $validation.Manifest.clientPatchState.installationSha256
+        clientPatchProfile = $validation.ClientPatchProfile
+        clientPatchPolicySha256 = $validation.ClientPatchPolicySha256
+        clientPatchConfigSha256 = $validation.ClientPatchConfigSha256
+        installationRecordSha256 = $validation.InstallationRecordSha256
     }
     $legacyDrillRejected = -not (Test-SuccessfulDrillEvidenceBinding `
         -Drill $legacySuccessfulDrill `
-        -Manifest $validation.Manifest `
+        -Manifest $validationManifest `
         -ManifestPath (Join-Path $backup.BackupPath 'manifest.json'))
     Add-Result 'schema-v2 successful drill evidence rejected' $legacyDrillRejected `
         'a prior evidence schema cannot satisfy the current live recovery gate'
@@ -213,7 +599,7 @@ try {
         'manifest semantics are bound to verified file hashes'
 
     $legacyRejected = Test-RejectedBackup -Layout $testLayout -SourceBackup $backup.BackupPath `
-        -ExpectedMessage 'schema 2.*installation.json.*schema 3' -Mutator {
+        -ExpectedMessage '(exact property set|schema)' -Mutator {
         param($root)
         $manifestPath = Join-Path $root 'manifest.json'
         $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
@@ -287,13 +673,26 @@ try {
     }
     Add-Result 'corrupt file rejected' $corruptRejected 'size and SHA-256 enforcement'
 
+    foreach ($fixture in $redactionFixtures.GetEnumerator()) {
+        Add-Result "restore error redacts $($fixture.Key)" (
+            Test-RedactedBackupRejection `
+                -Layout $testLayout -SourceBackup $backup.BackupPath `
+                -RelativePath ([string]$fixture.Value) `
+                -Sentinel ([string]$fixture.Key)) `
+            'account, character, bank, and team filenames never cross the error boundary'
+    }
+
     $failedDrillBackup = Join-Path $testLayout.Backups ('state-failed-drill-' + [Guid]::NewGuid().ToString('N'))
     Copy-Item -LiteralPath $backup.BackupPath -Destination $failedDrillBackup -Recurse
     [System.IO.File]::WriteAllText(
         (Join-Path $failedDrillBackup 'system\licenses\unmanifested.json'),
         '{}',
         [System.Text.UTF8Encoding]::new($false))
-    $failedDrillManifestHash = Get-LowerSha256 (Join-Path $failedDrillBackup 'manifest.json')
+    Set-PSOBBProtectedTreeAcl `
+        -Path $failedDrillBackup -Root $testLayout.Backups
+    $failedDrillManifestHash = (Read-PSOBBRecoveryManifestSnapshot `
+        -Path (Join-Path $failedDrillBackup 'manifest.json') `
+        -Root $failedDrillBackup).Sha256
     try {
         & (Join-Path $repositoryRoot 'scripts\Test-PSOBBRestoreDrill.ps1') `
             -BackupPath $failedDrillBackup -RuntimeRoot $testLayout.Root | Out-Null
@@ -311,6 +710,14 @@ try {
     Add-Result 'failed drill writes bound evidence' $failedEvidenceBound (
         "rejected=$failedDrillRejected; schema=$($failedDrillResult.schemaVersion); " +
         "manifest=$($failedDrillResult.backupManifestSha256); approved=$($failedDrillResult.approvedServerExecutableSha256)")
+    $failedDrillResultText = Get-Content -Raw -LiteralPath (
+        Join-Path $failedDrillRoot.FullName 'drill-result.json')
+    Add-Result 'failed drill result redacts account and save filenames' (
+        @($redactionFixtures.Keys | Where-Object {
+                $failedDrillResultText.Contains(
+                    [string]$_, [System.StringComparison]::Ordinal)
+            }).Count -eq 0) `
+        'persisted failure evidence contains only a generic protected boundary'
     $failedDrillChildren = @(Get-ChildItem -Force -LiteralPath $failedDrillRoot.FullName)
     Add-Result 'failed drill retains result only' `
         (($failedDrillChildren.Count -eq 1) -and ($failedDrillChildren[0].Name -eq 'drill-result.json')) `
@@ -326,8 +733,11 @@ try {
         (Join-Path $testLayout.Server 'system\config.json'),
         (New-FixtureConfig -Fixture 'mutated-before-restore'),
         [System.Text.UTF8Encoding]::new($false))
-    $mutatedRecord = Get-Content -Raw -LiteralPath $testLayout.InstallRecord | ConvertFrom-Json
-    $mutatedRecord.fixture = 'installation-mutated-before-restore'
+    $mutatedRecord = (Read-PSOBBInstallationRecordSnapshot `
+        -Path $testLayout.InstallRecord -Root $testLayout.Root `
+        -ExpectedInstallationId ([string]$testMarker.installationId) `
+        -ExpectedRuntimeRoot $testLayout.Root).Value
+    $mutatedRecord.initializedAtUtc = '2026-07-19T00:00:01.0000000+00:00'
     [System.IO.File]::WriteAllText(
         $testLayout.InstallRecord,
         ($mutatedRecord | ConvertTo-Json -Depth 10),
@@ -359,11 +769,94 @@ try {
         (Test-ProtectedTree -Path $restored.EmergencyBackup) `
         'pre-restore evidence uses the same protected publication path'
 
+    $restoreScript = Join-Path $repositoryRoot 'scripts\Restore-PSOBB.ps1'
+    Set-FixtureLiveMutation `
+        -Layout $testLayout `
+        -InstallationId ([string]$testMarker.installationId) `
+        -Name 'hard-exit-after-original' `
+        -Timestamp '2026-07-19T00:00:02.0000000+00:00'
+    $afterOriginalExitCode = Invoke-RestoreHardExitChild `
+        -RestoreScript $restoreScript -BackupPath $backup.BackupPath `
+        -Layout $testLayout `
+        -InstallationId ([string]$testMarker.installationId) `
+        -Nonce ([Guid]::NewGuid().ToString('N')) `
+        -Point 'swap-1-after-original-move'
+    $afterOriginalInterrupted = @(Get-FullRecoveryFixtureFingerprint `
+        -Root $testLayout.Root)
+    $afterOriginalValidation = & $restoreScript `
+        -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root `
+        -ValidateOnly
+    $afterOriginalAfterValidation = @(Get-FullRecoveryFixtureFingerprint `
+        -Root $testLayout.Root)
+    $afterOriginalWhatIf = & $restoreScript `
+        -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root -WhatIf
+    $afterOriginalAfterWhatIf = @(Get-FullRecoveryFixtureFingerprint `
+        -Root $testLayout.Root)
+    Add-Result 'validation and WhatIf do not resume an interrupted restore' (
+        $afterOriginalExitCode -eq 86 -and
+        $afterOriginalValidation.RecoveryRequired -and
+        $afterOriginalWhatIf.RecoveryRequired -and
+        @(Compare-Object $afterOriginalInterrupted $afterOriginalAfterValidation).Count -eq 0 -and
+        @(Compare-Object $afterOriginalInterrupted $afterOriginalAfterWhatIf).Count -eq 0) `
+        'journal, ACL, tree, and split live-state bytes remain unchanged'
+    $afterOriginalResume = & $restoreScript `
+        -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root `
+        -Confirm:$false
+    $afterOriginalState = @(Get-StateFingerprint `
+        -BaseRoot $testLayout.Server `
+        -InstallRecordPath $testLayout.InstallRecord)
+    $afterOriginalDebris = @(Get-ChildItem -Force `
+        -LiteralPath $testLayout.Stable -Filter '.psobb-restore-*')
+    Add-Result 'hard exit after original move resumes idempotently' (
+        $afterOriginalResume.RecoveredInterruptedTransaction -and
+        @(Compare-Object $original $afterOriginalState).Count -eq 0 -and
+        $afterOriginalDebris.Count -eq 0) `
+        'protected rollback is restored, verified, then the requested target is applied'
+
+    Set-FixtureLiveMutation `
+        -Layout $testLayout `
+        -InstallationId ([string]$testMarker.installationId) `
+        -Name 'hard-exit-accepted-cleanup' `
+        -Timestamp '2026-07-19T00:00:03.0000000+00:00'
+    $acceptedCleanupExitCode = Invoke-RestoreHardExitChild `
+        -RestoreScript $restoreScript -BackupPath $backup.BackupPath `
+        -Layout $testLayout `
+        -InstallationId ([string]$testMarker.installationId) `
+        -Nonce ([Guid]::NewGuid().ToString('N')) `
+        -Point 'cleanup-stage-after-removal'
+    $acceptedCleanupInterrupted = @(Get-FullRecoveryFixtureFingerprint `
+        -Root $testLayout.Root)
+    $acceptedCleanupValidation = & $restoreScript `
+        -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root `
+        -ValidateOnly
+    $acceptedCleanupAfterValidation = @(Get-FullRecoveryFixtureFingerprint `
+        -Root $testLayout.Root)
+    Add-Result 'accepted partial cleanup is read-only under validation' (
+        $acceptedCleanupExitCode -eq 86 -and
+        $acceptedCleanupValidation.RecoveryRequired -and
+        @(Compare-Object $acceptedCleanupInterrupted $acceptedCleanupAfterValidation).Count -eq 0) `
+        'an absent staging tree is accepted only after exact target-state proof'
+    $acceptedCleanupResume = & $restoreScript `
+        -BackupPath $backup.BackupPath -RuntimeRoot $testLayout.Root `
+        -Confirm:$false
+    $acceptedCleanupState = @(Get-StateFingerprint `
+        -BaseRoot $testLayout.Server `
+        -InstallRecordPath $testLayout.InstallRecord)
+    $acceptedCleanupDebris = @(Get-ChildItem -Force `
+        -LiteralPath $testLayout.Stable -Filter '.psobb-restore-*')
+    Add-Result 'accepted cleanup hard exit resumes idempotently' (
+        $acceptedCleanupResume.RecoveredInterruptedTransaction -and
+        @(Compare-Object $original $acceptedCleanupState).Count -eq 0 -and
+        $acceptedCleanupDebris.Count -eq 0) `
+        'remaining protected rollback and journal artifacts are removed in order'
+
     $debris = @(Get-ChildItem -Force -LiteralPath $testLayout.Stable -Filter '.psobb-restore-*')
     Add-Result 'restore leaves no transaction debris' ($debris.Count -eq 0) "$($debris.Count) item(s)"
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
-        Assert-PSOBBRuntimeMarker -Layout $testLayout | Out-Null
+        if (Test-Path -LiteralPath $testLayout.RuntimeMarker -PathType Leaf) {
+            Assert-PSOBBRuntimeMarker -Layout $testLayout | Out-Null
+        }
         Assert-PathWithinRoot -Path $testRoot -Root $temporaryBase | Out-Null
         Remove-Item -LiteralPath $testRoot -Recurse -Force
     }

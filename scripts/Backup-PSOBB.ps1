@@ -2,61 +2,23 @@
 param(
     [string]$RuntimeRoot,
     [ValidateRange(1, 100)][int]$Retention = 7,
-    [ValidateSet('state', 'pre-restore')][string]$BackupKind = 'state'
+    [ValidateSet('state', 'pre-restore')][string]$BackupKind = 'state',
+    [string]$PreserveBackupPath,
+    [ValidatePattern('^[a-f0-9]{64}$')]
+    [string]$PreserveBackupManifestSha256
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 
 function Get-ApprovedServerExecutable {
-    $lockPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'config\sources.lock.json'
-    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
-        throw "Source lock is missing: $lockPath"
-    }
-    $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json
-    $component = @($lock.components | Where-Object id -eq 'newserv-stable-release')
-    if ($component.Count -ne 1) {
-        throw 'Source lock must contain exactly one newserv-stable-release component'
-    }
-    $member = @($component[0].members | Where-Object path -eq 'release/newserv-windows.exe')
-    if (($member.Count -ne 1) -or ($member[0].sha256 -notmatch '^[0-9a-f]{64}$') -or
-        ([long]$member[0].size -le 0)) {
-        throw 'Source lock has no valid approved newserv-windows.exe member'
-    }
-    [pscustomobject]@{
-        ComponentId = $component[0].id
-        Size = [long]$member[0].size
-        Sha256 = $member[0].sha256.ToLowerInvariant()
-    }
+    Get-PSOBBStableServerSourceLockIdentity
 }
 
-function Get-RunningServerProcesses([Parameter(Mandatory)]$Layout) {
-    $expected = [System.IO.Path]::GetFullPath((Join-Path $Layout.Server 'newserv-windows.exe'))
-    $matches = [System.Collections.Generic.List[object]]::new()
-    if (Get-Command -Name Get-NewservProcessesAtPath -ErrorAction SilentlyContinue) {
-        try {
-            foreach ($process in @(Get-NewservProcessesAtPath -Layout $Layout)) {
-                if ($process) { $matches.Add($process) }
-            }
-            return @($matches)
-        } catch {
-            # Fall through to an independent exact executable-path check.
-        }
-    }
-    foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name = 'newserv-windows.exe'" -ErrorAction Stop)) {
-        if ($process.ExecutablePath -and
-            [System.IO.Path]::GetFullPath($process.ExecutablePath).Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $matches.Add($process)
-        }
-    }
-    @($matches)
-}
-
-function Assert-NoReparsePoints([Parameter(Mandatory)][string]$Path) {
-    foreach ($item in @(Get-Item -Force -LiteralPath $Path) + @(Get-ChildItem -Force -LiteralPath $Path -Recurse)) {
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Backup source contains a reparse point: $($item.FullName)"
-        }
-    }
+function Get-RecoveryItemLabel(
+    [Parameter(Mandatory)][string]$Category,
+    [Parameter(Mandatory)][int]$Ordinal
+) {
+    "$Category item $Ordinal"
 }
 
 function Get-LiveStatePath(
@@ -76,15 +38,24 @@ function Get-LiveStatePath(
 }
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
+$clientOperationMutex = $null
+$mutex = $null
+$ownsMutex = $false
+try {
+$clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout -TimeoutSeconds 0
 $marker = Assert-PSOBBRuntimeMarker -Layout $layout
 $mutexName = 'Local\PSOBB.Newserv.Start.' + ([string]$marker.installationId).Replace('-', '')
 $mutex = [System.Threading.Mutex]::new($false, $mutexName)
-$ownsMutex = $false
 try {
-$ownsMutex = $mutex.WaitOne(0)
+    $ownsMutex = $mutex.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    $ownsMutex = $true
+}
 if (-not $ownsMutex) {
     throw 'Another PSOBB start, stop, backup, restore, or patch-profile operation is already in progress'
 }
+Assert-PSOBBGlobalStoppedRuntime `
+    -Layout $layout -Operation 'creating a Stable backup' | Out-Null
 $serverExe = Assert-PathWithinRoot -Path (Join-Path $layout.Server 'newserv-windows.exe') -Root $layout.Root
 $approvedServer = Get-ApprovedServerExecutable
 if (-not (Test-Path -LiteralPath $serverExe -PathType Leaf)) {
@@ -95,10 +66,6 @@ $serverHash = Get-LowerSha256 $serverExe
 if (($serverItem.Length -ne $approvedServer.Size) -or ($serverHash -ne $approvedServer.Sha256)) {
     throw 'The installed server executable does not match the approved source-lock member'
 }
-if (@(Get-RunningServerProcesses -Layout $layout).Count -gt 0) {
-    throw 'Stop the exact stable newserv process before creating a consistent backup'
-}
-
 $stateRoots = @(
     [ordered]@{ path = 'system/licenses'; kind = 'directory' }
     [ordered]@{ path = 'system/players'; kind = 'directory' }
@@ -112,7 +79,15 @@ foreach ($stateRoot in $stateRoots) {
     if (-not (Test-Path -LiteralPath $source -PathType $expectedType)) {
         throw "Required $($stateRoot.kind) state root is missing: $($stateRoot.path)"
     }
-    Assert-NoReparsePoints -Path $source
+    if ($stateRoot.kind -eq 'directory') {
+        [void](Get-PSOBBRedactedRecoveryTreeSnapshot `
+                -Path $source -Root $layout.Root `
+                -Label "Stable $($stateRoot.path) state root")
+    } else {
+        [void](Assert-PSOBBOrdinaryContainedPath `
+                -Path $source -Root $layout.Root -Kind File `
+                -Label "Stable $($stateRoot.path) state file")
+    }
 }
 
 if (-not (Test-Path -LiteralPath $layout.Backups -PathType Container)) {
@@ -120,6 +95,39 @@ if (-not (Test-Path -LiteralPath $layout.Backups -PathType Container)) {
 }
 Assert-PathWithinRoot -Path $layout.Backups -Root $layout.Root | Out-Null
 Set-PSOBBProtectedAcl -Path $layout.Backups
+$preservedBackup = $null
+if (-not [string]::IsNullOrWhiteSpace($PreserveBackupPath)) {
+    if ([string]::IsNullOrWhiteSpace($PreserveBackupManifestSha256)) {
+        throw 'A preserved backup requires its exact manifest SHA-256 binding'
+    }
+    try {
+        $preservedBackup = (Resolve-Path -LiteralPath $PreserveBackupPath).Path
+        [void](Assert-PathWithinRoot `
+                -Path $preservedBackup -Root $layout.Backups)
+        $preservedParent = [System.IO.Path]::GetFullPath(
+            (Split-Path -Parent $preservedBackup)).TrimEnd('\')
+        $backupsRoot = [System.IO.Path]::GetFullPath(
+            $layout.Backups).TrimEnd('\')
+        if (-not $preservedParent.Equals(
+                $backupsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'not a direct backup child'
+        }
+        [void](Get-PSOBBRedactedRecoveryTreeSnapshot `
+                -Path $preservedBackup -Root $layout.Backups `
+                -Label 'retention-preserved recovery backup' `
+                -RequireProtectedAcl)
+        $preservedManifest = Read-PSOBBRecoveryManifestSnapshot `
+            -Path (Join-Path $preservedBackup 'manifest.json') `
+            -Root $preservedBackup
+        if ($preservedManifest.Sha256 -cne $PreserveBackupManifestSha256) {
+            throw 'manifest binding mismatch'
+        }
+    } catch {
+        throw 'The retention-preserved recovery backup binding is invalid'
+    }
+} elseif (-not [string]::IsNullOrWhiteSpace($PreserveBackupManifestSha256)) {
+    throw 'A preserved backup manifest SHA-256 requires a backup path'
+}
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
 $backup = Join-Path $layout.Backups ($BackupKind + '-' + $stamp)
 $partial = $backup + '.partial-' + [Guid]::NewGuid().ToString('N')
@@ -129,6 +137,7 @@ Assert-PathWithinRoot -Path $partial -Root $layout.Backups | Out-Null
 $completed = $false
 try {
     New-Item -ItemType Directory -Path $partial | Out-Null
+    Set-PSOBBProtectedAcl -Path $partial
     foreach ($directory in @('system', 'system/licenses', 'system/players', 'system/teams', 'stable')) {
         $destination = Assert-PathWithinRoot -Path (Join-Path $partial ($directory.Replace('/', '\'))) -Root $partial
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
@@ -137,50 +146,86 @@ try {
     $manifestFiles = [System.Collections.Generic.List[object]]::new()
     foreach ($rootName in @('licenses', 'players', 'teams')) {
         $sourceRoot = Join-Path $layout.Server ('system\' + $rootName)
-        foreach ($sourceFile in @(Get-ChildItem -Force -LiteralPath $sourceRoot -Recurse -File | Sort-Object FullName)) {
+        $ordinal = 0
+        foreach ($sourceFile in @(Get-ChildItem -Force -LiteralPath $sourceRoot `
+                -Recurse -File | Sort-Object FullName)) {
+            $ordinal++
+            $itemLabel = Get-RecoveryItemLabel -Category $rootName -Ordinal $ordinal
             $relativeUnderRoot = [System.IO.Path]::GetRelativePath($sourceRoot, $sourceFile.FullName)
             $relative = ('system/' + $rootName + '/' + $relativeUnderRoot.Replace('\', '/'))
             $destination = Assert-PathWithinRoot -Path (Join-Path $partial ($relative.Replace('/', '\'))) -Root $partial
             New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-            $sourceHash = Get-LowerSha256 $sourceFile.FullName
-            Copy-Item -LiteralPath $sourceFile.FullName -Destination $destination
-            $destinationItem = Get-Item -LiteralPath $destination
-            if (($destinationItem.Length -ne $sourceFile.Length) -or ((Get-LowerSha256 $destination) -ne $sourceHash)) {
-                throw "Backup copy verification failed: $relative"
+            $sourceSnapshot = Read-PSOBBRedactedRecoveryFileSnapshot `
+                -Path $sourceFile.FullName -Root $sourceRoot -MaximumBytes 64MB `
+                -AllowEmpty -IncludeBytes -Label $itemLabel
+            try {
+                [void](Write-PSOBBDurableFileBytes `
+                        -Path $destination -Root $partial `
+                        -Bytes ([byte[]]$sourceSnapshot.Bytes) -Label $itemLabel)
+                $destinationSnapshot = Read-PSOBBRedactedRecoveryFileSnapshot `
+                    -Path $destination -Root $partial -MaximumBytes 64MB `
+                    -AllowEmpty -Label $itemLabel
+                if ($destinationSnapshot.Length -ne $sourceSnapshot.Length -or
+                    $destinationSnapshot.Sha256 -cne $sourceSnapshot.Sha256) {
+                    throw "$itemLabel failed exact backup readback"
+                }
+                $manifestFiles.Add([ordered]@{
+                        path = $relative
+                        size = [long]$sourceSnapshot.Length
+                        sha256 = [string]$sourceSnapshot.Sha256
+                    })
+            } finally {
+                if ($sourceSnapshot.Bytes) {
+                    [Array]::Clear(
+                        [byte[]]$sourceSnapshot.Bytes, 0,
+                        ([byte[]]$sourceSnapshot.Bytes).Length)
+                }
             }
-            $manifestFiles.Add([ordered]@{ path = $relative; size = [long]$sourceFile.Length; sha256 = $sourceHash })
         }
     }
 
+    $fixedOrdinal = 0
     foreach ($relative in @('system/config.json', 'stable/installation.json')) {
+        $fixedOrdinal++
+        $itemLabel = Get-RecoveryItemLabel `
+            -Category 'Stable metadata' -Ordinal $fixedOrdinal
         $source = Get-LiveStatePath -Layout $layout -RelativePath $relative
         $destination = Assert-PathWithinRoot `
             -Path (Join-Path $partial ($relative.Replace('/', '\'))) `
             -Root $partial
-        $sourceItem = Get-Item -LiteralPath $source
-        $sourceHash = Get-LowerSha256 $source
-        Copy-Item -LiteralPath $source -Destination $destination
-        $destinationItem = Get-Item -LiteralPath $destination
-        if (($destinationItem.Length -ne $sourceItem.Length) -or
-            ((Get-LowerSha256 $destination) -ne $sourceHash)) {
-            throw "Backup copy verification failed: $relative"
+        $sourceSnapshot = Read-PSOBBRedactedRecoveryFileSnapshot `
+            -Path $source -Root $layout.Root -MaximumBytes 16MB `
+            -IncludeBytes -Label $itemLabel
+        try {
+            [void](Write-PSOBBDurableFileBytes `
+                    -Path $destination -Root $partial `
+                    -Bytes ([byte[]]$sourceSnapshot.Bytes) -Label $itemLabel)
+            $destinationSnapshot = Read-PSOBBRedactedRecoveryFileSnapshot `
+                -Path $destination -Root $partial -MaximumBytes 16MB `
+                -Label $itemLabel
+            if ($destinationSnapshot.Length -ne $sourceSnapshot.Length -or
+                $destinationSnapshot.Sha256 -cne $sourceSnapshot.Sha256) {
+                throw "$itemLabel failed exact backup readback"
+            }
+            $manifestFiles.Add([ordered]@{
+                    path = $relative
+                    size = [long]$sourceSnapshot.Length
+                    sha256 = [string]$sourceSnapshot.Sha256
+                })
+        } finally {
+            if ($sourceSnapshot.Bytes) {
+                [Array]::Clear(
+                    [byte[]]$sourceSnapshot.Bytes, 0,
+                    ([byte[]]$sourceSnapshot.Bytes).Length)
+            }
         }
-        $manifestFiles.Add([ordered]@{
-            path = $relative
-            size = [long]$destinationItem.Length
-            sha256 = $sourceHash
-        })
     }
 
     $patchState = Assert-PSOBBClientPatchStateCoherent `
         -ConfigPath (Join-Path $partial 'system\config.json') `
         -InstallRecordPath (Join-Path $partial 'stable\installation.json') `
-        -InstallationId ([string]$marker.installationId)
-
-    # A process that started during the copy invalidates the consistency guarantee.
-    if (@(Get-RunningServerProcesses -Layout $layout).Count -gt 0) {
-        throw 'The stable newserv process started while the backup was being created'
-    }
+        -InstallationId ([string]$marker.installationId) `
+        -RuntimeRoot $layout.Root
 
     $manifest = [ordered]@{
         schemaVersion = 3
@@ -206,16 +251,61 @@ try {
         files = @($manifestFiles | Sort-Object { $_.path })
     }
     $manifestPath = Join-Path $partial 'manifest.json'
-    [System.IO.File]::WriteAllText(
-        $manifestPath,
-        ($manifest | ConvertTo-Json -Depth 8),
-        [System.Text.UTF8Encoding]::new($false))
-    Set-PSOBBProtectedTreeAcl -Path $partial -Root $layout.Backups
-    Move-Item -LiteralPath $partial -Destination $backup
+    $manifestBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        ($manifest | ConvertTo-Json -Depth 8))
+    try {
+        [void](Write-PSOBBDurableFileBytes `
+                -Path $manifestPath -Root $partial -Bytes $manifestBytes `
+                -Label 'recovery manifest')
+    } finally {
+        [Array]::Clear($manifestBytes, 0, $manifestBytes.Length)
+    }
+    Set-PSOBBRedactedRecoveryTreeAcl `
+        -Path $partial -Root $layout.Backups -Label 'backup staging tree'
+
+    # Recheck the complete global boundary after all potentially expensive copy,
+    # hashing, and ACL work and immediately before the no-clobber publication.
+    Assert-PSOBBGlobalStoppedRuntime `
+        -Layout $layout -Operation 'publishing a Stable backup' | Out-Null
+    if (Test-Path -LiteralPath $backup) {
+        throw 'The final backup name became occupied before publication'
+    }
+    [System.IO.Directory]::Move($partial, $backup)
+
+    $publishedTree = Get-PSOBBRedactedRecoveryTreeSnapshot `
+        -Path $backup -Root $layout.Backups -Label 'published recovery backup' `
+        -RequireProtectedAcl
+    $publishedManifest = Read-PSOBBRecoveryManifestSnapshot `
+        -Path (Join-Path $backup 'manifest.json') -Root $backup
+    if ($publishedManifest.Value.backupId -cne $manifest.backupId -or
+        @($publishedManifest.Value.files).Count -ne $manifestFiles.Count) {
+        throw 'Published recovery backup manifest readback differs from staging'
+    }
+    $readbackOrdinal = 0
+    foreach ($entry in @($publishedManifest.Value.files)) {
+        $readbackOrdinal++
+        $category = if ([string]$entry.path -match '^system/([^/]+)/') {
+            $Matches[1]
+        } else { 'Stable metadata' }
+        $itemLabel = Get-RecoveryItemLabel `
+            -Category $category -Ordinal $readbackOrdinal
+        $publishedFile = Assert-PathWithinRoot `
+            -Path (Join-Path $backup (([string]$entry.path).Replace('/', '\'))) `
+            -Root $backup
+        $fileSnapshot = Read-PSOBBRedactedRecoveryFileSnapshot `
+            -Path $publishedFile -Root $backup -MaximumBytes 64MB `
+            -AllowEmpty -Label $itemLabel
+        if ($fileSnapshot.Length -ne [long]$entry.size -or
+            $fileSnapshot.Sha256 -cne [string]$entry.sha256) {
+            throw "$itemLabel failed published backup readback"
+        }
+    }
     $completed = $true
 } finally {
     if (-not $completed -and (Test-Path -LiteralPath $partial)) {
-        Remove-Item -LiteralPath $partial -Recurse -Force
+        Remove-PSOBBRedactedRecoveryTree `
+            -Path $partial -Root $layout.Backups `
+            -Label 'unpublished recovery staging tree'
     }
 }
 
@@ -224,8 +314,16 @@ Get-ChildItem -LiteralPath $layout.Backups -Directory -Filter ($BackupKind + '-*
     Sort-Object Name -Descending |
     Select-Object -Skip $Retention |
     ForEach-Object {
-        Assert-PathWithinRoot -Path $_.FullName -Root $layout.Backups | Out-Null
-        Remove-Item -LiteralPath $_.FullName -Recurse -Force
+        if ($_.FullName.Equals(
+                $backup, [System.StringComparison]::OrdinalIgnoreCase) -or
+            ($preservedBackup -and $_.FullName.Equals(
+                    $preservedBackup,
+                    [System.StringComparison]::OrdinalIgnoreCase))) {
+            return
+        }
+        Remove-PSOBBRedactedRecoveryTree `
+            -Path $_.FullName -Root $layout.Backups `
+            -Label 'expired recovery backup' -RequireProtectedAcl
     }
 
 $manifestPath = Join-Path $backup 'manifest.json'
@@ -233,15 +331,26 @@ $manifestPath = Join-Path $backup 'manifest.json'
     BackupPath = $backup
     BackupKind = $BackupKind
     Files = $manifestFiles.Count
-    ManifestSha256 = Get-LowerSha256 $manifestPath
+    ManifestSha256 = [string]$publishedManifest.Sha256
     ServerExecutableSha256 = $serverHash
     ClientPatchProfile = $patchState.Profile
     ClientPatchPolicySha256 = $patchState.PolicySha256
     Retention = $Retention
 }
 } finally {
-    if ($ownsMutex) {
-        $mutex.ReleaseMutex()
+    try {
+        if ($ownsMutex) {
+            $mutex.ReleaseMutex()
+        }
+    } finally {
+        try {
+            if ($mutex) {
+                $mutex.Dispose()
+            }
+        } finally {
+            if ($clientOperationMutex) {
+                Exit-PSOBBClientOperationLock -Mutex $clientOperationMutex
+            }
+        }
     }
-    $mutex.Dispose()
 }
