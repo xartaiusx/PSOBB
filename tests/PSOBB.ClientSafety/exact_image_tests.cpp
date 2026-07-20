@@ -208,6 +208,64 @@ void TestFailClosedMutations() {
       image.loaded, image.identity, empty_gate, failure));
 }
 
+void TestRangeAwareExpectedBytes() {
+  using namespace psobb::client_safety;
+  SyntheticImage image = MakeSyntheticImage();
+  TemporaryFile file(image.file);
+  CHECK(file.valid());
+
+  const std::array<std::byte, 2> file_section_crossing{
+      image.file[0x5FFU], image.file[0x600U]};
+  const std::array file_section_gate{
+      ExpectedBytes{0x11FFU, file_section_crossing}};
+  CHECK(!VerifyExecutable(
+      file.path(), image.identity, file_section_gate).passed());
+
+  const std::array<std::byte, 2> loaded_section_crossing{
+      image.loaded[0x11FFU], image.loaded[0x1200U]};
+  const std::array loaded_section_gate{
+      ExpectedBytes{0x11FFU, loaded_section_crossing}};
+  std::wstring failure;
+  CHECK(!VerifyLoadedImage(
+      image.loaded, image.identity, loaded_section_gate, failure));
+
+  const std::array<std::byte, 2> file_header_crossing{
+      image.file[0x3FFU], image.file[0x400U]};
+  const std::array file_header_gate{
+      ExpectedBytes{0x3FFU, file_header_crossing}};
+  CHECK(!VerifyExecutable(
+      file.path(), image.identity, file_header_gate).passed());
+
+  const std::array<std::byte, 2> loaded_header_crossing{
+      image.loaded[0x3FFU], image.loaded[0x400U]};
+  const std::array loaded_header_gate{
+      ExpectedBytes{0x3FFU, loaded_header_crossing}};
+  CHECK(!VerifyLoadedImage(
+      image.loaded, image.identity, loaded_header_gate, failure));
+
+  auto extended_loaded = image.loaded;
+  auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(extended_loaded.data());
+  auto* nt = reinterpret_cast<IMAGE_NT_HEADERS32*>(
+      extended_loaded.data() + dos->e_lfanew);
+  auto* section = IMAGE_FIRST_SECTION(nt);
+  section->Misc.VirtualSize = 0x300U;
+
+  const std::array<std::byte, 1> zero{std::byte{0x00}};
+  const std::array virtual_tail_gate{ExpectedBytes{0x1200U, zero}};
+  CHECK(VerifyLoadedImage(
+      extended_loaded, image.identity, virtual_tail_gate, failure));
+  CHECK(!VerifyExecutable(
+      file.path(), image.identity, virtual_tail_gate).passed());
+
+  const std::array unmapped_gap_gate{ExpectedBytes{0x1300U, zero}};
+  CHECK(!VerifyLoadedImage(
+      extended_loaded, image.identity, unmapped_gap_gate, failure));
+
+  const std::array overflow_gate{ExpectedBytes{0xFFFFFFFFU, zero}};
+  CHECK(!VerifyLoadedImage(
+      extended_loaded, image.identity, overflow_gate, failure));
+}
+
 void TestPinnedIdentityConstants() {
   using namespace psobb::client_safety;
   CHECK(k59NlIdentity.file_size == 6'971'904U);
@@ -225,6 +283,7 @@ int main() {
   TestKnownSha256();
   TestSyntheticFileAndLoadedImage();
   TestFailClosedMutations();
+  TestRangeAwareExpectedBytes();
   TestPinnedIdentityConstants();
 
   if (g_failures != 0) {

@@ -94,28 +94,86 @@ struct ParsedPe {
   return true;
 }
 
-[[nodiscard]] std::optional<std::size_t> RvaToFileOffset(
+struct RvaRange {
+  std::uint64_t begin;
+  std::uint64_t end;
+};
+
+[[nodiscard]] std::optional<RvaRange> MakeRvaRange(
+    const std::uint32_t rva,
+    const std::size_t size) noexcept {
+  if (size == 0U) {
+    return std::nullopt;
+  }
+
+  const std::uint64_t begin = rva;
+  const std::uint64_t end = begin + static_cast<std::uint64_t>(size);
+  if (end <= begin || end > (std::uint64_t{1} << 32U)) {
+    return std::nullopt;
+  }
+  return RvaRange{begin, end};
+}
+
+[[nodiscard]] bool RangeIsWithin(
+    const RvaRange range,
+    const std::uint64_t start,
+    const std::uint64_t size) noexcept {
+  const std::uint64_t end = start + size;
+  return end >= start && range.begin >= start && range.end <= end;
+}
+
+[[nodiscard]] std::optional<std::size_t> RvaRangeToFileOffset(
     const ParsedPe& parsed,
-    const std::uint32_t rva) noexcept {
-  if (rva < parsed.nt.OptionalHeader.SizeOfHeaders) {
-    return static_cast<std::size_t>(rva);
+    const std::uint32_t rva,
+    const std::size_t size) noexcept {
+  const auto range = MakeRvaRange(rva, size);
+  if (!range) {
+    return std::nullopt;
+  }
+
+  if (RangeIsWithin(
+          *range, 0U, parsed.nt.OptionalHeader.SizeOfHeaders)) {
+    return static_cast<std::size_t>(range->begin);
   }
 
   for (const auto& section : parsed.sections) {
     const std::uint64_t start = section.VirtualAddress;
-    const std::uint64_t end =
-        start + std::max(section.Misc.VirtualSize, section.SizeOfRawData);
-    if (rva < start || rva >= end) {
+    if (!RangeIsWithin(*range, start, section.SizeOfRawData)) {
       continue;
     }
 
-    const std::uint64_t delta = static_cast<std::uint64_t>(rva) - start;
-    if (delta >= section.SizeOfRawData) {
+    const std::uint64_t delta = range->begin - start;
+    const std::uint64_t file_offset = section.PointerToRawData + delta;
+    if (file_offset > std::numeric_limits<std::size_t>::max()) {
       return std::nullopt;
     }
-    return static_cast<std::size_t>(section.PointerToRawData + delta);
+    return static_cast<std::size_t>(file_offset);
   }
   return std::nullopt;
+}
+
+[[nodiscard]] bool LoadedRvaRangeIsMapped(
+    const ParsedPe& parsed,
+    const std::uint32_t rva,
+    const std::size_t size) noexcept {
+  const auto range = MakeRvaRange(rva, size);
+  if (!range) {
+    return false;
+  }
+
+  if (RangeIsWithin(
+          *range, 0U, parsed.nt.OptionalHeader.SizeOfHeaders)) {
+    return true;
+  }
+
+  for (const auto& section : parsed.sections) {
+    const std::uint64_t mapped_size =
+        std::max(section.Misc.VirtualSize, section.SizeOfRawData);
+    if (RangeIsWithin(*range, section.VirtualAddress, mapped_size)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 [[nodiscard]] bool MatchBytes(
@@ -153,7 +211,8 @@ void SetGateFailure(
           failure, L"Empty expected-byte gate at RVA 0x", expectation.rva);
       return false;
     }
-    const auto offset = RvaToFileOffset(parsed, expectation.rva);
+    const auto offset = RvaRangeToFileOffset(
+        parsed, expectation.rva, expectation.bytes.size());
     if (!offset || !MatchBytes(bytes, *offset, expectation.bytes)) {
       SetGateFailure(
           failure, L"File expected-byte gate failed at RVA 0x", expectation.rva);
@@ -165,10 +224,13 @@ void SetGateFailure(
 
 [[nodiscard]] bool VerifyLoadedExpectations(
     const std::span<const std::byte> image,
+    const ParsedPe& parsed,
     const std::span<const ExpectedBytes> expectations,
     std::wstring& failure) {
   for (const auto& expectation : expectations) {
     if (expectation.bytes.empty() ||
+        !LoadedRvaRangeIsMapped(
+            parsed, expectation.rva, expectation.bytes.size()) ||
         !MatchBytes(image, expectation.rva, expectation.bytes)) {
       SetGateFailure(
           failure,
@@ -262,7 +324,7 @@ bool VerifyLoadedImage(
   if (!ParseExactPe(image, identity, parsed, failure)) {
     return false;
   }
-  return VerifyLoadedExpectations(image, expectations, failure);
+  return VerifyLoadedExpectations(image, parsed, expectations, failure);
 }
 
 }  // namespace psobb::client_safety
