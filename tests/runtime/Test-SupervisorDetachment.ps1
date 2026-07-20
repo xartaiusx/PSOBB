@@ -81,16 +81,18 @@ $failureCleanupContract =
     $startSource -match "action\s*=\s*'cancel-start'" -and
     $startSource -match 'Get-LaunchedSupervisorProbe -Identity \$Identity' -and
     $startSource -match '\$Identity\.NativeIdentity\.TerminateTree\(1\)' -and
+    $startSource -match 'assigned job handle.+authoritative' -and
     $startSource -notmatch '\.Kill\(\$true\)' -and
     $startSource -match 'Stop-ExactLaunchedSupervisorAfterFailure\s*`' -and
     $startSource -match 'A newserv process remains after supervisor cleanup' -and
+    $startSource -match 'Get-PSOBBServerEnvironmentProcessRecords' -and
     $supervisorSource -match '\$request\.action -ceq ''cancel-start''' -and
     $supervisorSource -match '\[long\]\$request\.hostStartTimeFileTimeUtc -eq \[long\]\$hostStartTimeFileTimeUtc' -and
     $supervisorSource -match '\[string\]\$request\.startupRequestId -eq \$startupRequestId'
 Add-Result `
     -Name 'failed startup cancels or force-cleans only the verified supervisor tree' `
     -Passed $failureCleanupContract `
-    -Detail 'authenticated cancellation is followed by path/start-time revalidation before process-tree termination'
+    -Detail 'cooperative cancellation is verified-only, while the retained assigned-job handle always terminates its exact tree before global absence proof'
 
 $recordContract =
     $supervisorSource -match 'hostStartTimeFileTimeUtc\s*=\s*\[long\]\$hostStartTimeFileTimeUtc' -and
@@ -116,7 +118,7 @@ $retiredIngressAbsent = -not ($retiredIngressMarkers | Where-Object {
     $supervisorSource.Contains($_, [System.StringComparison]::OrdinalIgnoreCase)
 })
 $nativeControlContract =
-    $supervisorSource -match "controlProtocol\s*=\s*'protected-filesystem-exit-v1'" -and
+    $supervisorSource -match "controlProtocol\s*=\s*'protected-filesystem-exit-v2'" -and
     $supervisorSource -match '\$request\.action -ceq ''exit''' -and
     $supervisorSource -match '\$request\.action -ceq ''cancel-start''' -and
     $retiredIngressAbsent -and
@@ -128,6 +130,15 @@ Add-Result `
     -Name 'supervisor stdin accepts only native lifecycle shutdown' `
     -Passed $nativeControlContract `
     -Detail 'only authenticated exit/cancel-start requests remain and both stdin writes are the literal exit command'
+
+$supervisorOwnsNoMutex =
+    $supervisorSource -notmatch 'System\.Threading\.Mutex' -and
+    $supervisorSource -notmatch 'Enter-PSOBBClientOperationLock' -and
+    $supervisorSource -notmatch '\.WaitOne\('
+Add-Result `
+    -Name 'supervisor acquires neither lifecycle mutex' `
+    -Passed $supervisorOwnsNoMutex `
+    -Detail 'the guarded parent retains lifecycle serialization while the detached supervisor only validates protected state'
 
 $claimFunction = @($supervisorAst.FindAll({
     param($node)
@@ -160,6 +171,13 @@ $dummyProcess = $null
 $dummyChildProcess = $null
 $dummyLaunch = $null
 $exit259Launch = $null
+$collisionProcess = $null
+$collisionChildProcess = $null
+$collisionLaunch = $null
+$collisionChildPidPath = $null
+$uninspectableProcess = $null
+$uninspectableLaunch = $null
+$unrelatedProcess = $null
 $dummyChildPidPath = $null
 $cleanupFixtureRoot = $null
 try {
@@ -208,6 +226,14 @@ try {
         $fullPath
     }
     function Get-NewservProcessesAtPath {
+        param($Layout)
+        $null = $Layout
+        @()
+    }
+    function Get-PSOBBReservedServerPortListeners {
+        @()
+    }
+    function Get-PSOBBServerEnvironmentProcessRecords {
         param($Layout)
         $null = $Layout
         @()
@@ -296,6 +322,8 @@ Start-Sleep -Seconds 30
     }
     $fixtureLayout = [pscustomobject]@{
         Root = $cleanupFixtureRoot
+        Environment = 'Stable'
+        EnvironmentId = 'stable'
         ControlDirectory = $cleanupControlDirectory
         PidFile = Join-Path $cleanupControlDirectory 'newserv.process.json'
         LegacyPidFile = Join-Path $cleanupControlDirectory 'newserv.pid'
@@ -342,6 +370,13 @@ Start-Sleep -Seconds 30
         StartTimeFileTimeUtc = [long]$actualStartFileTime
         NativeIdentity = $dummyLaunch
     }
+    $unrelatedProcess = Start-Process `
+        -FilePath $pwshPath `
+        -ArgumentList @(
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+            $encodedChildCommand) `
+        -WindowStyle Hidden `
+        -PassThru
     $wrongIdentity = $identity.PSObject.Copy()
     $wrongIdentity.StartTimeFileTimeUtc = [long]$identity.StartTimeFileTimeUtc + 1
     @(
@@ -350,26 +385,26 @@ Start-Sleep -Seconds 30
         $fixtureLayout.HostPidFile,
         $fixtureLayout.ControlState
     ) | ForEach-Object { [System.IO.File]::WriteAllText($_, 'fixture') }
-    $mismatchRejected = $false
-    try {
-        Stop-ExactLaunchedSupervisorAfterFailure `
-            -Layout $fixtureLayout `
-            -Identity $wrongIdentity `
-            -ControlToken ('A' * 43) `
-            -StartupRequestId ('b' * 32)
-    } catch {
-        $mismatchRejected = $_.Exception.Message -match 'Mismatch'
-    }
+    Stop-ExactLaunchedSupervisorAfterFailure `
+        -Layout $fixtureLayout `
+        -Identity $wrongIdentity `
+        -ControlToken ('A' * 43) `
+        -StartupRequestId ('b' * 32) `
+        -ControlIdentity ('c' * 64) `
+        -ComponentId 'newserv-stable-release'
     $dummyProcess.Refresh()
-    $retainedAfterMismatch = @(
+    $dummyChildProcess.Refresh()
+    $unrelatedProcess.Refresh()
+    $remainingAfterMismatch = @(
         Get-ChildItem -LiteralPath $cleanupFixtureRoot -Force -File -Recurse)
     Add-Result `
-        -Name 'cleanup refuses a PID whose creation identity does not match' `
+        -Name 'mismatched probe still terminates only the authoritative retained job' `
         -Passed (
-            $mismatchRejected -and
-            -not $dummyProcess.HasExited -and
-            $retainedAfterMismatch.Count -eq 4) `
-        -Detail 'a one-tick creation-time mismatch left the process and lifecycle evidence untouched'
+            $dummyProcess.HasExited -and
+            $dummyChildProcess.HasExited -and
+            -not $unrelatedProcess.HasExited -and
+            $remainingAfterMismatch.Count -eq 0) `
+        -Detail 'a one-tick probe mismatch issued no guessed PID action; the assigned job killed its supervisor and child while an unrelated sleeper remained active'
 
     $transientNativeIdentity = [pscustomobject]@{
         ProcessId = 4242
@@ -432,44 +467,121 @@ Start-Sleep -Seconds 30
         StartTimeFileTimeUtc = 1L
         NativeIdentity = $persistentNativeIdentity
     }
-    $persistentMessage = ''
+    $persistentProbe = Get-LaunchedSupervisorProbe `
+        -Identity $persistentIdentity `
+        -ProbeAttempts 2 `
+        -ProbeDelayMilliseconds 0
+    Add-Result `
+        -Name 'persistent inspection failure is returned as a sanitized structured probe' `
+        -Passed (
+            $persistentProbe.State -eq 'Uninspectable' -and
+            $persistentProbe.Detail -match 'token=\[REDACTED\]' -and
+            $persistentProbe.Detail -notmatch 'persistent-secret' -and
+            $persistentProbe.Detail.ToCharArray().Where({ [char]::IsControl($_) }).Count -eq 0) `
+        -Detail $persistentProbe.Detail
+
+    @(
+        $fixtureLayout.PidFile,
+        $fixtureLayout.LegacyPidFile,
+        $fixtureLayout.HostPidFile,
+        $fixtureLayout.ControlState
+    ) | ForEach-Object { [System.IO.File]::WriteAllText($_, 'uninspectable-fixture') }
+    $uninspectableLaunch = [PSOBBLifecycle.NativeSupervisorLauncher]::Start(
+        $pwshPath,
+        $repositoryRoot,
+        @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+            $encodedChildCommand))
+    $uninspectableProcess = Get-Process `
+        -Id ([int]$uninspectableLaunch.ProcessId) -ErrorAction Stop
+    $uninspectableIdentity = [pscustomobject]@{
+        Pid = $uninspectableProcess.Id
+        NativeIdentity = $uninspectableLaunch
+    }
+    Stop-ExactLaunchedSupervisorAfterFailure `
+        -Layout $fixtureLayout `
+        -Identity $uninspectableIdentity `
+        -ControlToken ('A' * 43) `
+        -StartupRequestId ('b' * 32) `
+        -ControlIdentity ('c' * 64) `
+        -ComponentId 'newserv-stable-release'
+    $uninspectableProcess.Refresh()
+    $unrelatedProcess.Refresh()
+    $remainingAfterUninspectable = @(
+        Get-ChildItem -LiteralPath $cleanupFixtureRoot -Force -File -Recurse)
+    Add-Result `
+        -Name 'uninspectable probe still terminates only the authoritative retained job' `
+        -Passed (
+            $uninspectableProcess.HasExited -and
+            -not $unrelatedProcess.HasExited -and
+            $remainingAfterUninspectable.Count -eq 0 -and
+            (Test-Path -LiteralPath $cleanupControlDirectory -PathType Container)) `
+        -Detail 'missing path/time probe fields caused no guessed PID action; the assigned job terminated while an unrelated sleeper remained active'
+
+    $collisionChildPidPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'psobb-supervisor-collision-child-' + [Guid]::NewGuid().ToString('N') + '.pid')
+    $escapedCollisionChildPidPath = $collisionChildPidPath.Replace("'", "''")
+    $collisionCommand = @"
+`$child = Start-Process -FilePath '$escapedPwshPath' -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', '$encodedChildCommand') -WindowStyle Hidden -PassThru
+[System.IO.File]::WriteAllText('$escapedCollisionChildPidPath', [string]`$child.Id)
+Start-Sleep -Seconds 30
+"@
+    $collisionLaunch = [PSOBBLifecycle.NativeSupervisorLauncher]::Start(
+        $pwshPath,
+        $repositoryRoot,
+        @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $collisionCommand))
+    $collisionProcess = Get-Process -Id ([int]$collisionLaunch.ProcessId) -ErrorAction Stop
+    $collisionChildDeadline = [DateTime]::UtcNow.AddSeconds(3)
+    while (-not (Test-Path -LiteralPath $collisionChildPidPath -PathType Leaf) -and
+        [DateTime]::UtcNow -lt $collisionChildDeadline) {
+        Start-Sleep -Milliseconds 25
+    }
+    if (-not (Test-Path -LiteralPath $collisionChildPidPath -PathType Leaf)) {
+        throw 'The collision fixture child did not publish its PID'
+    }
+    $collisionChildProcess = Get-Process -Id (
+        [int]([System.IO.File]::ReadAllText($collisionChildPidPath))) -ErrorAction Stop
+    $collisionIdentity = [pscustomobject]@{
+        Pid = $collisionProcess.Id
+        ExecutablePath = $actualPath
+        StartTimeFileTimeUtc = [long]$collisionLaunch.StartTimeFileTimeUtc
+        NativeIdentity = $collisionLaunch
+    }
+    @(
+        $fixtureLayout.PidFile,
+        $fixtureLayout.LegacyPidFile,
+        $fixtureLayout.HostPidFile,
+        $fixtureLayout.ControlState
+    ) | ForEach-Object { [System.IO.File]::WriteAllText($_, 'collision-fixture') }
+    [System.IO.File]::WriteAllText(
+        $fixtureLayout.ControlRequest,
+        'occupied-create-only-request')
+    $collisionMessage = ''
     try {
         Stop-ExactLaunchedSupervisorAfterFailure `
             -Layout $fixtureLayout `
-            -Identity $persistentIdentity `
+            -Identity $collisionIdentity `
             -ControlToken ('A' * 43) `
-            -StartupRequestId ('b' * 32)
+            -StartupRequestId ('b' * 32) `
+            -ControlIdentity ('c' * 64) `
+            -ComponentId 'newserv-stable-release'
     } catch {
-        $persistentMessage = $_.Exception.Message
+        $collisionMessage = $_.Exception.Message
     }
-    $retainedAfterUninspectable = @(
+    $collisionProcess.Refresh()
+    $collisionChildProcess.Refresh()
+    $unrelatedProcess.Refresh()
+    $collisionRemainingFiles = @(
         Get-ChildItem -LiteralPath $cleanupFixtureRoot -Force -File -Recurse)
     Add-Result `
-        -Name 'persistent inspection failure is sanitized and retains lifecycle state' `
+        -Name 'failed cancellation publication still terminates only the retained supervisor tree' `
         -Passed (
-            $persistentMessage -match 'token=\[REDACTED\]' -and
-            $persistentMessage -notmatch 'persistent-secret' -and
-            $persistentMessage.ToCharArray().Where({ [char]::IsControl($_) }).Count -eq 0 -and
-            $retainedAfterUninspectable.Count -eq 4) `
-        -Detail $persistentMessage
-
-    Stop-ExactLaunchedSupervisorAfterFailure `
-        -Layout $fixtureLayout `
-        -Identity $identity `
-        -ControlToken ('A' * 43) `
-        -StartupRequestId ('b' * 32)
-    $dummyProcess.Refresh()
-    $dummyChildProcess.Refresh()
-    $remainingFixtureFiles = @(
-        Get-ChildItem -LiteralPath $cleanupFixtureRoot -Force -File -Recurse)
-    Add-Result `
-        -Name 'live failed-start cleanup terminates the exact detached supervisor tree' `
-        -Passed (
-            $dummyProcess.HasExited -and
-            $dummyChildProcess.HasExited -and
-            $remainingFixtureFiles.Count -eq 0 -and
-            (Test-Path -LiteralPath $cleanupControlDirectory -PathType Container)) `
-        -Detail 'authenticated cancellation timed out, then the retained job handle terminated the verified supervisor and child while preserving the control directory'
+            $collisionMessage -match 'Cooperative failed-start cancellation failed after exact process and listener absence was verified' -and
+            $collisionMessage -match 'create-only path already exists' -and
+            $collisionProcess.HasExited -and
+            $collisionChildProcess.HasExited -and
+            -not $unrelatedProcess.HasExited -and
+            $collisionRemainingFiles.Count -eq 0) `
+        -Detail 'a fixed-request collision was reported only after the supervisor and child exited; an unrelated sleeper remained active'
 } finally {
     if ($exit259Launch) {
         $exit259Launch.Dispose()
@@ -483,6 +595,24 @@ Start-Sleep -Seconds 30
         }
         $dummyLaunch.Dispose()
     }
+    if ($collisionLaunch) {
+        try {
+            $collisionLaunch.TerminateTree(1)
+            $collisionLaunch.WaitForExit(5000) | Out-Null
+        } catch {
+            # The tested cleanup path may already have closed every job process.
+        }
+        $collisionLaunch.Dispose()
+    }
+    if ($uninspectableLaunch) {
+        try {
+            $uninspectableLaunch.TerminateTree(1)
+            $uninspectableLaunch.WaitForExit(5000) | Out-Null
+        } catch {
+            # The tested cleanup path may already have closed every job process.
+        }
+        $uninspectableLaunch.Dispose()
+    }
     if ($dummyProcess) {
         $dummyProcess.Dispose()
     }
@@ -493,8 +623,32 @@ Start-Sleep -Seconds 30
         }
         $dummyChildProcess.Dispose()
     }
+    if ($collisionProcess) {
+        $collisionProcess.Dispose()
+    }
+    if ($uninspectableProcess) {
+        $uninspectableProcess.Dispose()
+    }
+    if ($collisionChildProcess) {
+        $collisionChildProcess.Refresh()
+        if (-not $collisionChildProcess.HasExited) {
+            Stop-Process -Id $collisionChildProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        $collisionChildProcess.Dispose()
+    }
+    if ($unrelatedProcess) {
+        $unrelatedProcess.Refresh()
+        if (-not $unrelatedProcess.HasExited) {
+            Stop-Process -Id $unrelatedProcess.Id -Force -ErrorAction SilentlyContinue
+            $unrelatedProcess.WaitForExit(5000) | Out-Null
+        }
+        $unrelatedProcess.Dispose()
+    }
     if ($dummyChildPidPath) {
         Remove-Item -LiteralPath $dummyChildPidPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($collisionChildPidPath) {
+        Remove-Item -LiteralPath $collisionChildPidPath -Force -ErrorAction SilentlyContinue
     }
     if ($cleanupFixtureRoot -and (Test-Path -LiteralPath $cleanupFixtureRoot)) {
         Remove-Item -LiteralPath $cleanupFixtureRoot -Recurse -Force

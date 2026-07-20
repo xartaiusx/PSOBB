@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Stable', 'Canary', 'LocalLab')]
-    [string]$Channel = 'Canary',
+    [ValidateSet('Stable', 'Canary', 'LocalLab', 'Native')]
+    [string]$Channel,
+    [ValidateSet('Stable', 'CombatCanary')]
+    [string]$ServerEnvironment = 'Stable',
     [ValidateSet('ProfileDefault', 'Borderless', 'Resizable')]
     [string]$WindowMode = 'Borderless',
     [switch]$PreserveForeground,
@@ -19,17 +21,11 @@ function Wait-PSOBBServerReady {
         [ValidateRange(1, 120)][int]$TimeoutSeconds
     )
 
-    $expected = @('127.0.0.1:11000', '127.0.0.1:12000', '127.0.0.1:12001')
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         $process = Get-NewservProcess -Layout $Layout
         if ($process) {
-            $listeners = @(Get-NetTCPConnection -State Listen -OwningProcess $process.Id -ErrorAction SilentlyContinue)
-            $actual = @($listeners | ForEach-Object {
-                '{0}:{1}' -f $_.LocalAddress, $_.LocalPort
-            } | Sort-Object -Unique)
-            if ($actual.Count -eq $expected.Count -and
-                -not (Compare-Object -ReferenceObject $expected -DifferenceObject $actual)) {
+            if (Test-PSOBBExactLoopbackServerListeners -ProcessId $process.Id) {
                 return $process
             }
         }
@@ -41,32 +37,54 @@ function Wait-PSOBBServerReady {
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
+    -Environment $ServerEnvironment
+$serverLayout = Get-PSOBBServerEnvironmentLayout `
+    -Layout $layout -Environment $serverEnvironmentName
+$resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
+    -ServerEnvironment $serverEnvironmentName `
+    -Channel $Channel `
+    -DefaultStableChannel Canary
+$resolvedWindowMode = if ($PSBoundParameters.ContainsKey('WindowMode')) {
+    $WindowMode
+} elseif ($serverEnvironmentName -ceq 'CombatCanary') {
+    'ProfileDefault'
+} else {
+    'Borderless'
+}
 $serverStartedBySession = $false
 $serverStartResult = $null
 $clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
 try {
-    $runningClients = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
+    $runningClients = @(Get-PSOBBAllClientProcessRecords -Layout $layout)
     if ($runningClients.Count -gt 0) {
         throw "An approved PSOBB client is already running (PID(s): $($runningClients.ProcessId -join ', '))"
     }
-    $serverProcess = Get-NewservProcess -Layout $layout
+    $serverProcess = Get-NewservProcess -Layout $serverLayout
     if (-not $serverProcess) {
         $serverStartResult = & (Join-Path $PSScriptRoot 'Start-PSOBB.ps1') `
             -RuntimeRoot $layout.Root `
+            -ServerEnvironment $serverEnvironmentName `
+            -ClientOperationLockHeld `
             -StartupTimeoutSeconds $StartupTimeoutSeconds
         $serverStartedBySession = $true
     }
 
     $serverProcess = Wait-PSOBBServerReady `
-        -Layout $layout `
+        -Layout $serverLayout `
         -TimeoutSeconds $StartupTimeoutSeconds
-    & (Join-Path $PSScriptRoot 'Test-PSOBB.ps1') `
-        -Suite Baseline `
-        -RuntimeRoot $layout.Root | Out-Null
+    if ($serverEnvironmentName -ceq 'CombatCanary') {
+        Get-PSOBBCombatCanaryInstalledBinding -Layout $layout | Out-Null
+    } else {
+        & (Join-Path $PSScriptRoot 'Test-PSOBB.ps1') `
+            -Suite Baseline `
+            -RuntimeRoot $layout.Root | Out-Null
+    }
 
     $clientResult = & (Join-Path $PSScriptRoot 'Start-PSOBBClient.ps1') `
-        -Channel $Channel `
-        -WindowMode $WindowMode `
+        -Channel $resolvedChannel `
+        -ServerEnvironment $serverEnvironmentName `
+        -WindowMode $resolvedWindowMode `
         -PreserveForeground:$PreserveForeground `
         -RuntimeRoot $layout.Root `
         -ClientOperationLockHeld
@@ -74,6 +92,8 @@ try {
     [pscustomobject]@{
         Started = $true
         RuntimeRoot = $layout.Root
+        ServerEnvironment = $serverEnvironmentName
+        EnvironmentId = $serverLayout.EnvironmentId
         ServerStartedBySession = $serverStartedBySession
         ServerPid = $serverProcess.Id
         ServerHostPid = if ($serverStartResult) { $serverStartResult.HostPid } else { $null }
@@ -95,6 +115,7 @@ try {
         try {
             & (Join-Path $PSScriptRoot 'Stop-PSOBB.ps1') `
                 -RuntimeRoot $layout.Root `
+                -ServerEnvironment $serverEnvironmentName `
                 -ClientOperationLockHeld | Out-Null
         } catch {
             Write-Warning 'Session startup failed and the server also failed to stop cleanly.'

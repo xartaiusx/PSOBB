@@ -1,8 +1,11 @@
 [CmdletBinding()]
 param(
     [string]$RuntimeRoot,
+    [ValidateSet('Stable', 'CombatCanary')]
+    [string]$ServerEnvironment = 'Stable',
     [switch]$Background,
-    [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45
+    [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45,
+    [Parameter(DontShow)][switch]$ClientOperationLockHeld
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
@@ -543,23 +546,6 @@ namespace PSOBBLifecycle
     Add-Type -TypeDefinition $nativeSupervisorLauncherSource -Language CSharp
 }
 
-function Get-ApprovedNewservExecutable {
-    $lockPath = Join-Path $script:PSOBBRepositoryRoot 'config\sources.lock.json'
-    $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json
-    $components = @($lock.components | Where-Object { $_.id -eq 'newserv-stable-release' })
-    if ($components.Count -ne 1) {
-        throw 'sources.lock.json must contain exactly one newserv-stable-release component'
-    }
-    $members = @($components[0].members | Where-Object { $_.path -eq 'release/newserv-windows.exe' })
-    if ($members.Count -ne 1 -or [string]$members[0].sha256 -notmatch '^[0-9a-f]{64}$') {
-        throw 'sources.lock.json does not contain one valid approved newserv executable member'
-    }
-    [pscustomobject]@{
-        Sha256 = [string]$members[0].sha256
-        Size = [long]$members[0].size
-    }
-}
-
 function Set-LifecycleFileAcl {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -742,55 +728,84 @@ function Stop-ExactLaunchedSupervisorAfterFailure {
         [Parameter(Mandatory)]$Layout,
         [Parameter(Mandatory)]$Identity,
         [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9_-]{43}$')][string]$ControlToken,
-        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$StartupRequestId
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{32}$')][string]$StartupRequestId,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$ControlIdentity,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$ComponentId
     )
 
     $probe = Get-LaunchedSupervisorProbe -Identity $Identity
-    if ($probe.State -in @('Mismatch', 'Uninspectable')) {
-        throw "Refusing failed-start cleanup because the supervisor is $($probe.State): $($probe.Detail)"
-    }
-
+    $cooperativeCancelFailure = $null
+    $jobTerminationFailure = $null
+    $retainedHostExited = $false
     if ($probe.State -eq 'Verified') {
-        $request = [ordered]@{
-            schemaVersion = 1
-            action = 'cancel-start'
-            hostPid = [int]$Identity.Pid
-            hostStartTimeFileTimeUtc = [long]$Identity.StartTimeFileTimeUtc
-            startupRequestId = $StartupRequestId
-            controlToken = $ControlToken
-            requestedAtUtc = [DateTime]::UtcNow.ToString('o')
-        }
-        Write-ProtectedJson `
-            -Path $Layout.ControlRequest -Value $request -Root $Layout.Root -CreateOnly
-
-        $deadline = [DateTime]::UtcNow.AddSeconds(5)
-        while ([DateTime]::UtcNow -lt $deadline) {
-            if ($Identity.NativeIdentity.WaitForExit(100)) {
-                break
+        try {
+            $request = [ordered]@{
+                schemaVersion = 3
+                action = 'cancel-start'
+                serverEnvironment = [string]$Layout.Environment
+                environmentId = [string]$Layout.EnvironmentId
+                componentId = $ComponentId
+                controlIdentity = $ControlIdentity
+                hostPid = [int]$Identity.Pid
+                hostStartTimeFileTimeUtc = [long]$Identity.StartTimeFileTimeUtc
+                startupRequestId = $StartupRequestId
+                controlToken = $ControlToken
+                requestedAtUtc = [DateTime]::UtcNow.ToString('o')
             }
+            Write-ProtectedJson `
+                -Path $Layout.ControlRequest -Value $request -Root $Layout.Root -CreateOnly
+
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                if ($Identity.NativeIdentity.WaitForExit(100)) {
+                    break
+                }
+            }
+        } catch {
+            $cooperativeCancelFailure = ConvertTo-PSOBBSafeLifecycleDiagnostic `
+                -Value $_.Exception.Message
         }
+
     }
 
-    # The job was attached before the supervisor's first instruction. Terminating
-    # this retained handle cannot be redirected by PID reuse and includes any
-    # newserv child that appeared immediately before cancellation.
+    # The job was attached before the supervisor's first instruction and the
+    # caller verified that launch identity before monitoring startup. Always
+    # terminate the retained job regardless of probe classification, including
+    # when the supervisor has already exited but a child may remain. The
+    # assigned job handle—not a guessed PID—is authoritative even when image or
+    # creation-time inspection is mismatched or unavailable.
     try {
         $Identity.NativeIdentity.TerminateTree(1)
     } catch {
-        $detail = ConvertTo-PSOBBSafeLifecycleDiagnostic -Value $_.Exception.Message
-        throw "The exact launched supervisor job could not be terminated: $detail"
+        $jobTerminationFailure = ConvertTo-PSOBBSafeLifecycleDiagnostic `
+            -Value $_.Exception.Message
     }
-    $Identity.NativeIdentity.WaitForExit(5000) | Out-Null
+    try {
+        $retainedHostExited = [bool](
+            $Identity.NativeIdentity.WaitForExit(5000))
+    } catch {
+        $waitFailure = ConvertTo-PSOBBSafeLifecycleDiagnostic `
+            -Value $_.Exception.Message
+        $jobTerminationFailure = if ($jobTerminationFailure) {
+            "$jobTerminationFailure Wait: $waitFailure"
+        } else {
+            "Wait: $waitFailure"
+        }
+    }
 
     $finalProbe = Get-LaunchedSupervisorProbe -Identity $Identity
-    if ($finalProbe.State -ne 'Absent') {
+    if (-not $retainedHostExited -and $finalProbe.State -ne 'Absent') {
         throw "The launched supervisor cleanup did not reach Absent ($($finalProbe.State)): $($finalProbe.Detail)"
     }
 
     $serverDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    $remainingServers = @()
+    $remainingListeners = @()
     do {
         $remainingServers = @(Get-NewservProcessesAtPath -Layout $Layout)
-        if ($remainingServers.Count -eq 0) {
+        $remainingListeners = @(Get-PSOBBReservedServerPortListeners)
+        if ($remainingServers.Count -eq 0 -and
+            $remainingListeners.Count -eq 0) {
             break
         }
         Start-Sleep -Milliseconds 100
@@ -798,47 +813,43 @@ function Stop-ExactLaunchedSupervisorAfterFailure {
     if ($remainingServers.Count -gt 0) {
         throw "A newserv process remains after supervisor cleanup (PID(s): $($remainingServers.Id -join ', '))"
     }
+    if ($remainingListeners.Count -gt 0) {
+        $listenerDetails = @($remainingListeners | ForEach-Object {
+                '{0}:{1} PID {2}' -f $_.LocalAddress, $_.LocalPort,
+                    $_.OwningProcess
+            })
+        throw "A reserved PSOBB listener remains after supervisor cleanup ($($listenerDetails -join ', '))"
+    }
+    $rootLayout = Get-PSOBBLayout -RuntimeRoot ([string]$Layout.Root)
+    $remainingGlobalServers = @(
+        Get-PSOBBServerEnvironmentProcessRecords -Layout $rootLayout)
+    if ($remainingGlobalServers.Count -gt 0) {
+        $globalDetails = @($remainingGlobalServers | ForEach-Object {
+                'PID {0} ({1})' -f $_.ProcessId, $_.Classification
+            })
+        throw "A named newserv process remains after retained-job cleanup ($($globalDetails -join ', ')); no guessed PID action was attempted"
+    }
 
-    @(
-        $Layout.PidFile,
-        $Layout.LegacyPidFile,
-        $Layout.HostPidFile,
-        $Layout.ControlState,
-        $Layout.ControlRequest
-    ) | ForEach-Object {
-        $safePath = Assert-PathWithinRoot -Path $_ -Root $Layout.Root
-        if (Test-Path -LiteralPath $safePath) {
-            Remove-Item -LiteralPath $safePath -Force -ErrorAction Stop
-        }
+    Remove-PSOBBLifecycleFilesVerified -Layout $Layout | Out-Null
+
+    if ($jobTerminationFailure) {
+        throw "The retained supervisor job reported a termination failure after exact process and listener absence was verified: $jobTerminationFailure"
+    }
+    if ($cooperativeCancelFailure) {
+        throw "Cooperative failed-start cancellation failed after exact process and listener absence was verified: $cooperativeCancelFailure"
     }
 }
 
-function Test-ExactLoopbackListeners {
-    param([Parameter(Mandatory)][int]$ProcessId)
-
-    $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
-        Where-Object { $_.OwningProcess -eq $ProcessId })
-    $actual = @($listeners | ForEach-Object {
-        '{0}:{1}' -f $_.LocalAddress, $_.LocalPort
-    } | Sort-Object -Unique)
-    $expected = @('127.0.0.1:11000', '127.0.0.1:12000', '127.0.0.1:12001')
-    if ($actual.Count -ne $expected.Count) {
-        return $false
-    }
-    -not (Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
-}
-
-$layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
-$marker = Assert-PSOBBRuntimeMarker -Layout $layout
-$approved = Get-ApprovedNewservExecutable
-$executable = Assert-PathWithinRoot -Path (Join-Path $layout.Server 'newserv-windows.exe') -Root $layout.Root
-if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "Server executable is missing; run Initialize-PSOBB.ps1 first: $executable"
-}
-$executableItem = Get-Item -LiteralPath $executable
-if ($executableItem.Length -ne $approved.Size -or (Get-LowerSha256 $executable) -ne $approved.Sha256) {
-    throw 'The runtime newserv executable does not match the approved sources.lock member'
-}
+$rootLayout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
+$marker = Assert-PSOBBRuntimeMarker -Layout $rootLayout
+$serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
+    -Environment $ServerEnvironment
+$layout = Get-PSOBBServerEnvironmentLayout `
+    -Layout $rootLayout -Environment $serverEnvironmentName
+$approved = Get-PSOBBApprovedNewservExecutableIdentity `
+    -Layout $rootLayout -ServerEnvironment $serverEnvironmentName
+$executable = Assert-PathWithinRoot `
+    -Path $approved.ExecutablePath -Root $layout.EnvironmentRoot
 
 # Background is retained for command-line compatibility. Supervised operation is
 # always hidden because the controller, rather than a console window, owns stdin.
@@ -851,51 +862,97 @@ $nativeHostIdentity = $null
 $hostIdentity = $null
 $controlToken = $null
 $startupRequestId = $null
+$controlIdentity = $null
 $startupCompleted = $false
+$startupStateWritten = $false
+$clientOperationMutex = if ($ClientOperationLockHeld) {
+    $null
+} else {
+    Enter-PSOBBClientOperationLock -Layout $rootLayout
+}
 try {
+    Assert-PSOBBNoRunningClients -Layout $rootLayout | Out-Null
     $ownsMutex = $mutex.WaitOne(0)
     if (-not $ownsMutex) {
         throw 'Another PSOBB start or stop operation is already in progress'
     }
 
+    Assert-PSOBBServerEnvironmentIsolation -Layout $rootLayout | Out-Null
+    $installedBinding = if ($serverEnvironmentName -ceq 'CombatCanary') {
+        Get-PSOBBCombatCanaryInstalledBinding -Layout $rootLayout
+    } else {
+        $null
+    }
+    $approved = Get-PSOBBApprovedNewservExecutableIdentity `
+        -Layout $rootLayout -ServerEnvironment $serverEnvironmentName
+    $executable = Assert-PathWithinRoot `
+        -Path $approved.ExecutablePath -Root $layout.EnvironmentRoot
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+        throw "The $serverEnvironmentName server executable is missing: $executable"
+    }
+    $executableItem = Get-Item -LiteralPath $executable
+    if ($executableItem.Length -ne $approved.Size -or
+        (Get-LowerSha256 $executable) -cne $approved.Sha256) {
+        throw "The $serverEnvironmentName newserv executable does not match its exact approved component"
+    }
+    Assert-PSOBBExclusiveServerStartBoundary `
+        -ServerEnvironment $serverEnvironmentName `
+        -ServerProcesses @(Get-PSOBBServerEnvironmentProcessRecords -Layout $rootLayout) `
+        -ReservedPortListeners @(Get-PSOBBReservedServerPortListeners) | Out-Null
+
     Initialize-PSOBBLifecycleControlDirectory -Layout $layout | Out-Null
-
-    $running = @(Get-NewservProcessesAtPath -Layout $layout)
-    if ($running.Count -gt 0) {
-        throw "The approved newserv executable is already running (PID(s): $($running.Id -join ', '))"
+    if (Test-Path -LiteralPath $layout.PidFile -PathType Leaf) {
+        Assert-LifecycleFileAcl -Path $layout.PidFile -Root $layout.Root
     }
+    Wait-PSOBBRecordedSupervisorHostQuiescence -Layout $layout | Out-Null
 
-    Remove-PSOBBRetiredLifecycleFiles -Layout $layout
-
-    $lifecycleFiles = @(
-        $layout.PidFile,
-        $layout.LegacyPidFile,
-        $layout.HostPidFile,
-        $layout.ControlState,
-        $layout.ControlRequest
-    )
-    foreach ($path in $lifecycleFiles) {
-        $safePath = Assert-PathWithinRoot -Path $path -Root $layout.Root
-        Remove-Item -LiteralPath $safePath -Force -ErrorAction SilentlyContinue
+    if ($serverEnvironmentName -ceq 'Stable') {
+        Remove-PSOBBRetiredLifecycleFiles -Layout $rootLayout
+        $remainingRetired = @(Get-PSOBBRetiredLifecyclePaths `
+            -Layout $rootLayout | Where-Object { Test-Path -LiteralPath $_ })
+        if ($remainingRetired.Count -gt 0) {
+            throw 'Retired lifecycle file removal could not be verified'
+        }
     }
+    Remove-PSOBBLifecycleFilesVerified -Layout $layout | Out-Null
 
     $tokenBytes = [byte[]]::new(32)
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
     $controlToken = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     [Array]::Clear($tokenBytes, 0, $tokenBytes.Length)
     $startupRequestId = [Guid]::NewGuid().ToString('N')
+    $controlIdentity = Get-PSOBBServerControlIdentity `
+        -InstallationId ([string]$marker.installationId) `
+        -EnvironmentId $layout.EnvironmentId `
+        -ComponentId $approved.ComponentId `
+        -StartupRequestId $startupRequestId `
+        -ExecutableSha256 $approved.Sha256
 
     $startupState = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 3
         state = 'starting'
         installationId = [string]$marker.installationId
+        serverEnvironment = $serverEnvironmentName
+        environmentId = $layout.EnvironmentId
+        componentId = $approved.ComponentId
+        controlIdentity = $controlIdentity
         executablePath = $executable
         executableSha256 = $approved.Sha256
+        buildContractSha256 = if ($installedBinding) {
+            [string]$installedBinding.BuildContractSha256
+        } else { $null }
+        clientBindingSha256 = if ($installedBinding) {
+            [string]$installedBinding.ClientBindingSha256
+        } else { $null }
+        stateBindingSha256 = if ($installedBinding) {
+            [string]$installedBinding.StateBindingSha256
+        } else { $null }
         startupRequestId = $startupRequestId
         controlToken = $controlToken
         requestedAtUtc = [DateTime]::UtcNow.ToString('o')
     }
     Write-ProtectedJson -Path $layout.ControlState -Value $startupState -Root $layout.Root
+    $startupStateWritten = $true
 
     $hostExecutable = Join-Path $PSHOME 'pwsh.exe'
     $hostArguments = @(
@@ -904,12 +961,14 @@ try {
         '-NonInteractive',
         '-ExecutionPolicy', 'Bypass',
         '-File', (Join-Path $PSScriptRoot 'Invoke-NewservSupervisor.ps1'),
-        '-RuntimeRoot', $layout.Root
+        '-RuntimeRoot', $layout.Root,
+        '-ServerEnvironment', $serverEnvironmentName
     )
     # CreateProcessW is used directly so the long-lived supervisor receives no
     # inheritable handles from a captured caller. Redirecting standard streams
     # through ProcessStartInfo requires handle inheritance and can therefore
     # keep an unrelated pipeline open until the server exits.
+    Assert-PSOBBNoRunningClients -Layout $rootLayout | Out-Null
     $nativeHostIdentity = [PSOBBLifecycle.NativeSupervisorLauncher]::Start(
         $hostExecutable,
         $script:PSOBBRepositoryRoot,
@@ -943,8 +1002,12 @@ try {
             if (Test-Path -LiteralPath $layout.ControlState -PathType Leaf) {
             Assert-LifecycleFileAcl -Path $layout.ControlState -Root $layout.Root
                 try {
-                    $state = Get-Content -Raw -LiteralPath $layout.ControlState | ConvertFrom-Json
-                    if (-not [string]::IsNullOrWhiteSpace([string]$state.message)) {
+                    $state = Read-PSOBBStrictLifecycleJson `
+                        -Path $layout.ControlState `
+                        -Root $layout.Root `
+                        -Contract ServerControlState
+                    if ([string]$state.state -ceq 'failed' -and
+                        -not [string]::IsNullOrWhiteSpace([string]$state.message)) {
                         $detail += ': ' + [string]$state.message
                     }
                 } catch { }
@@ -957,22 +1020,52 @@ try {
 
         if (Test-Path -LiteralPath $layout.PidFile -PathType Leaf) {
             Assert-LifecycleFileAcl -Path $layout.PidFile -Root $layout.Root
-            $serverProcess = Get-NewservProcess -Layout $layout
             if ($serverProcess) {
-                $record = Get-Content -Raw -LiteralPath $layout.PidFile | ConvertFrom-Json
+                $serverProcess.Dispose()
+                $serverProcess = $null
+            }
+            $serverIdentity = Get-NewservProcess -Layout $layout -PassThruIdentity
+            $serverProcess = if ($serverIdentity) { $serverIdentity.Process } else { $null }
+            if ($serverProcess) {
+                $record = $serverIdentity.Record
                 $recordedHostPath = [System.IO.Path]::GetFullPath([string]$record.hostExecutablePath)
                 if ([int]$record.hostPid -ne $hostProcessId -or
+                    [long]$record.startTimeFileTimeUtc -ne
+                        [long]$serverIdentity.StartTimeFileTimeUtc -or
                     [long]$record.hostStartTimeFileTimeUtc -ne [long]$hostIdentity.StartTimeFileTimeUtc -or
                     -not $recordedHostPath.Equals(
                         [string]$hostIdentity.ExecutablePath,
                         [System.StringComparison]::OrdinalIgnoreCase) -or
                     [string]$record.startupRequestId -ne $startupRequestId -or
+                    [string]$record.serverEnvironment -cne $serverEnvironmentName -or
+                    [string]$record.environmentId -cne $layout.EnvironmentId -or
+                    [string]$record.componentId -cne $approved.ComponentId -or
+                    -not (Test-PSOBBFixedTimeTextEquals `
+                        -Expected $controlIdentity `
+                        -Actual ([string]$record.controlIdentity)) -or
                     [string]$record.executablePath -ne $executable -or
                     [string]$record.executableSha256 -ne $approved.Sha256 -or
-                    [string]$record.controlToken -ne $controlToken) {
+                    -not (Test-PSOBBFixedTimeTextEquals `
+                        -Expected $controlToken `
+                        -Actual ([string]$record.controlToken))) {
                     throw 'The supervisor process record did not match this start request'
                 }
-                if (Test-ExactLoopbackListeners -ProcessId $serverProcess.Id) {
+                if ($installedBinding) {
+                    if ([string]$record.buildContractSha256 -cne
+                            [string]$installedBinding.BuildContractSha256 -or
+                        [string]$record.clientBindingSha256 -cne
+                            [string]$installedBinding.ClientBindingSha256 -or
+                        [string]$record.stateBindingSha256 -cne
+                            [string]$installedBinding.StateBindingSha256) {
+                        throw 'The supervisor process record did not retain the sealed combat-canary bindings'
+                    }
+                } elseif ($null -ne $record.buildContractSha256 -or
+                    $null -ne $record.clientBindingSha256 -or
+                    $null -ne $record.stateBindingSha256) {
+                    throw 'The Stable supervisor process record contains unexpected combat-canary bindings'
+                }
+                if (Test-PSOBBExactLoopbackServerListeners `
+                        -ProcessId $serverProcess.Id) {
                     $readyProbe = Get-LaunchedSupervisorProbe `
                         -Identity $hostIdentity `
                         -ProbeAttempts 3 `
@@ -980,12 +1073,39 @@ try {
                     if ($readyProbe.State -ne 'Verified') {
                         throw "The supervisor was $($readyProbe.State) at readiness: $($readyProbe.Detail)"
                     }
+                    Assert-PSOBBNoRunningClients -Layout $rootLayout | Out-Null
+                    $readyServerCensus = @(
+                        Get-PSOBBServerEnvironmentProcessRecords -Layout $rootLayout)
+                    $readyRecordedProcess = Get-NewservProcess -Layout $layout
+                    try {
+                        if (-not $readyRecordedProcess -or
+                            $readyRecordedProcess.Id -ne $serverProcess.Id -or
+                            $readyServerCensus.Count -ne 1 -or
+                            [string]$readyServerCensus[0].Classification -cne
+                                'ApprovedExactPath' -or
+                            [string]$readyServerCensus[0].ServerEnvironment -cne
+                                $serverEnvironmentName -or
+                            [int]$readyServerCensus[0].ProcessId -ne
+                                $serverProcess.Id -or
+                            [long]$readyServerCensus[0].StartTimeFileTimeUtc -ne
+                                [long]$serverIdentity.StartTimeFileTimeUtc -or
+                            -not (Test-PSOBBExactLoopbackServerListeners `
+                                -ProcessId $serverProcess.Id)) {
+                            throw 'The final ready census no longer contains exactly the selected approved server and listener set'
+                        }
+                    } finally {
+                        if ($readyRecordedProcess) { $readyRecordedProcess.Dispose() }
+                    }
                     $controlToken = $null
                     $startupCompleted = $true
                     $startResult = [pscustomobject]@{
                         Pid = $serverProcess.Id
                         HostPid = $hostProcessId
                         Supervised = $true
+                        ServerEnvironment = $serverEnvironmentName
+                        EnvironmentId = $layout.EnvironmentId
+                        ComponentId = $approved.ComponentId
+                        ControlIdentity = $controlIdentity
                         ExecutableSha256 = $approved.Sha256
                         Listeners = @('127.0.0.1:11000', '127.0.0.1:12000', '127.0.0.1:12001')
                     }
@@ -1004,13 +1124,32 @@ try {
 } catch {
     $startupFailure = $_
     $cleanupFailure = $null
-    if (-not $startupCompleted -and $hostIdentity -and $controlToken -and $startupRequestId) {
+    if (-not $hostIdentity -and $nativeHostIdentity) {
+        $hostIdentity = [pscustomobject]@{
+            Pid = [int]$nativeHostIdentity.ProcessId
+            ExecutablePath = [System.IO.Path]::GetFullPath(
+                (Join-Path $PSHOME 'pwsh.exe'))
+            StartTimeFileTimeUtc = [long]$nativeHostIdentity.StartTimeFileTimeUtc
+            NativeIdentity = $nativeHostIdentity
+        }
+    }
+    if (-not $startupCompleted -and $hostIdentity -and $controlToken -and
+        $startupRequestId -and $controlIdentity) {
         try {
             Stop-ExactLaunchedSupervisorAfterFailure `
                 -Layout $layout `
                 -Identity $hostIdentity `
                 -ControlToken $controlToken `
-                -StartupRequestId $startupRequestId
+                -StartupRequestId $startupRequestId `
+                -ControlIdentity $controlIdentity `
+                -ComponentId $approved.ComponentId
+        } catch {
+            $cleanupFailure = $_.Exception.Message
+        }
+    } elseif (-not $startupCompleted -and -not $nativeHostIdentity -and
+        $startupStateWritten) {
+        try {
+            Remove-PSOBBLifecycleFilesVerified -Layout $layout | Out-Null
         } catch {
             $cleanupFailure = $_.Exception.Message
         }
@@ -1021,6 +1160,7 @@ try {
     throw $startupFailure
 } finally {
     $controlToken = $null
+    if ($serverProcess) { $serverProcess.Dispose() }
     if ($nativeHostIdentity) {
         $nativeHostIdentity.Dispose()
     }
@@ -1028,4 +1168,7 @@ try {
         $mutex.ReleaseMutex()
     }
     $mutex.Dispose()
+    if ($clientOperationMutex) {
+        Exit-PSOBBClientOperationLock -Mutex $clientOperationMutex
+    }
 }

@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Stable', 'Canary', 'LocalLab')]
-    [string]$Channel = 'Stable',
+    [ValidateSet('Stable', 'Canary', 'LocalLab', 'Native')]
+    [string]$Channel,
+    [ValidateSet('Stable', 'CombatCanary')]
+    [string]$ServerEnvironment = 'Stable',
     [ValidateSet('ProfileDefault', 'Borderless', 'Resizable')]
     [string]$WindowMode = 'ProfileDefault',
     [switch]$PreserveForeground,
@@ -43,22 +45,53 @@ function Wait-PSOBBClientStartupDelay {
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
+    -Environment $ServerEnvironment
+$serverLayout = Get-PSOBBServerEnvironmentLayout `
+    -Layout $layout -Environment $serverEnvironmentName
+$resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
+    -ServerEnvironment $serverEnvironmentName `
+    -Channel $Channel `
+    -DefaultStableChannel Stable
 $clientOperationMutex = if ($ClientOperationLockHeld) {
     $null
 } else {
     Enter-PSOBBClientOperationLock -Layout $layout
 }
 try {
-$clientExecutable = Get-PSOBBClientExecutablePath -Layout $layout -Channel $Channel
+$running = @(Get-PSOBBAllClientProcessRecords -Layout $layout)
+if ($running.Count -gt 0) {
+    $identities = @($running | ForEach-Object {
+            '{0}/{1} PID {2} ({3})' -f $_.ServerEnvironment, $_.Channel,
+                $_.ProcessId, $_.Classification
+        })
+    throw "A named Psobb process is already running ($($identities -join ', '))"
+}
+$serverCensus = @(Get-PSOBBServerEnvironmentProcessRecords -Layout $layout)
+$serverProcess = Get-NewservProcess -Layout $serverLayout
+if (-not $serverProcess -or $serverCensus.Count -ne 1 -or
+    [int]$serverCensus[0].ProcessId -ne $serverProcess.Id -or
+    [string]$serverCensus[0].ServerEnvironment -cne $serverEnvironmentName -or
+    [string]$serverCensus[0].Classification -cne 'ApprovedExactPath' -or
+    -not (Test-PSOBBExactLoopbackServerListeners -ProcessId $serverProcess.Id)) {
+    throw "The exact $serverEnvironmentName server is not the one ready canonical PSOBB server"
+}
+
+$combatClientContract = if ($serverEnvironmentName -ceq 'CombatCanary') {
+    Get-PSOBBCombatCanaryClientLaunchContract -Layout $layout
+} else {
+    $null
+}
+$clientExecutable = Get-PSOBBClientExecutablePath `
+    -Layout $layout `
+    -Channel $resolvedChannel `
+    -ServerEnvironment $serverEnvironmentName
 $clientRoot = Split-Path -Parent $clientExecutable
 $clientIdentity = Assert-PSOBBApprovedClientExecutable -Path $clientExecutable
 
-$running = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
-if ($running.Count -gt 0) {
-    throw "An approved PSOBB client is already running (PID(s): $($running.ProcessId -join ', '))"
-}
-
-$clientProfile = if ($Channel -eq 'LocalLab' -and
+$clientProfile = if ($combatClientContract) {
+    $combatClientContract.Profile
+} elseif ($resolvedChannel -eq 'LocalLab' -and
     $WindowMode -ne 'ProfileDefault') {
     # The presentation-owner ASI reads its mode before creating the game
     # window. Materialize an explicit launcher/CLI choice while stopped and
@@ -67,18 +100,18 @@ $clientProfile = if ($Channel -eq 'LocalLab' -and
         -Layout $layout `
         -WindowMode $WindowMode `
         -ClientOperationLockHeld).Profile
-} elseif ($Channel -eq 'LocalLab') {
+} elseif ($resolvedChannel -eq 'LocalLab') {
     Assert-PSOBBLocalLabClientRuntimeContract -Layout $layout
 } else {
     & (Join-Path $PSScriptRoot 'Test-PSOBBClientGraphics.ps1') `
-        -Channel $Channel `
+        -Channel $resolvedChannel `
         -RuntimeRoot $layout.Root | Out-Null
     Get-Content -Raw -LiteralPath (Join-Path $clientRoot 'client-profile.json') |
         ConvertFrom-Json -Depth 10
 }
 $useManagedPresentation =
     ([int]$clientProfile.schemaVersion -ge 4) -and
-    (($Channel -eq 'LocalLab') -or
+    (($resolvedChannel -eq 'LocalLab') -or
      ([string]$clientProfile.graphicsPreset -in @('HighFidelity2560x1600', 'Ultra3840x2880'))) -and
     ([int]$clientProfile.desktopWidth -eq 2560) -and
     ([int]$clientProfile.desktopHeight -eq 1600)
@@ -118,6 +151,29 @@ try {
     $graphicsRegistryTransaction = Set-PSOBBClientNativeGraphics `
         -Layout $layout `
         -Profile $clientProfile
+    $finalClientCensus = @(Get-PSOBBAllClientProcessRecords -Layout $layout)
+    if ($finalClientCensus.Count -gt 0) {
+        $identities = @($finalClientCensus | ForEach-Object {
+                '{0}/{1} PID {2} ({3})' -f $_.ServerEnvironment, $_.Channel,
+                    $_.ProcessId, $_.Classification
+            })
+        throw "A named Psobb process appeared during client preflight ($($identities -join ', '))"
+    }
+    $finalServerProcess = Get-NewservProcess -Layout $serverLayout
+    $finalServerCensus = @(
+        Get-PSOBBServerEnvironmentProcessRecords -Layout $layout)
+    if (-not $finalServerProcess -or
+        $finalServerProcess.Id -ne $serverProcess.Id -or
+        $finalServerCensus.Count -ne 1 -or
+        [string]$finalServerCensus[0].Classification -cne
+            'ApprovedExactPath' -or
+        [string]$finalServerCensus[0].ServerEnvironment -cne
+            $serverEnvironmentName -or
+        [int]$finalServerCensus[0].ProcessId -ne $serverProcess.Id -or
+        -not (Test-PSOBBExactLoopbackServerListeners `
+            -ProcessId $serverProcess.Id)) {
+        throw 'The selected server identity, control record, environment, or listeners changed during client preflight'
+    }
     $process = Start-PSOBBClientProcess `
         -ClientExecutable $clientExecutable `
         -WorkingDirectory $clientRoot `
@@ -257,7 +313,9 @@ try {
 
     $result = [pscustomobject]@{
         Started = $true
-        Channel = $Channel
+        ServerEnvironment = $serverEnvironmentName
+        EnvironmentId = $serverLayout.EnvironmentId
+        Channel = $resolvedChannel
         Pid = $process.Id
         Executable = $clientExecutable
         WindowTitle = $process.MainWindowTitle
@@ -271,6 +329,9 @@ try {
         PresentationOwner = $presentationOwner
         NativeGraphicsPresetId = [string]$graphicsRegistryTransaction.PresetId
         GraphicCtrlSha256 = [string]$graphicsRegistryTransaction.GraphicCtrlSha256
+        ClientBindingSha256 = if ($combatClientContract) {
+            [string]$combatClientContract.Verification.ClientBindingSha256
+        } else { $null }
         GraphicCtrlBackupPath = $graphicsRegistryTransaction.BackupPath
         Borderless = ($null -ne $presentation) -and ($selectedWindowMode -eq 'Borderless')
         WindowX = if ($presentation) { $presentation.X } else { $null }
@@ -281,7 +342,7 @@ try {
         ClientHeight = if ($presentation) { $presentation.ClientHeight } else { $null }
     }
     $profilePath = Join-Path $clientRoot 'client-profile.json'
-    $receiptRoot = Join-Path $layout.Logs 'client-startup'
+    $receiptRoot = Join-Path $serverLayout.Logs 'client-startup'
     $receiptRoot = Assert-PathWithinRoot -Path $receiptRoot -Root $layout.Root
     [void][IO.Directory]::CreateDirectory($receiptRoot)
     $receiptRoot = Assert-PathWithinRoot -Path $receiptRoot -Root $layout.Root
@@ -293,9 +354,11 @@ try {
         throw "The unique client-startup receipt already exists: $receiptPath"
     }
     $receipt = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 3
         completedAtUtc = [DateTime]::UtcNow.ToString('o')
-        channel = $Channel
+        serverEnvironment = $serverEnvironmentName
+        environmentId = $serverLayout.EnvironmentId
+        channel = $resolvedChannel
         profileId = if ($clientProfile.PSObject.Properties.Name -contains 'profileId') {
             [string]$clientProfile.profileId
         } else { $null }
@@ -306,8 +369,11 @@ try {
         } else { $null }
         processId = $process.Id
         processStartTimeUtc = $process.StartTime.ToUniversalTime().ToString('o')
+        processStartTimeFileTimeUtc = [long](
+            $process.StartTime.ToUniversalTime().ToFileTimeUtc())
         executableSize = $clientIdentity.Size
         executableSha256 = $clientIdentity.Sha256
+        clientBindingSha256 = $result.ClientBindingSha256
         startupElapsedMilliseconds = $result.StartupElapsedMilliseconds
         foregroundPreserved = $result.ForegroundPreserved
         windowMode = $result.WindowMode

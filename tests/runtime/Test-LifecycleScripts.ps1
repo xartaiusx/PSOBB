@@ -19,7 +19,9 @@ $scriptNames = @(
     'Set-PSOBBRememberedLogin.ps1',
     'Set-PSOBBLocalVisualAsset.ps1',
     'Start-PSOBBClient.ps1',
-    'Stop-PSOBB.ps1'
+    'Start-PSOBB.ps1',
+    'Stop-PSOBB.ps1',
+    'Invoke-NewservSupervisor.ps1'
 )
 foreach ($scriptName in $scriptNames) {
     $tokens = $null
@@ -662,21 +664,26 @@ try {
         ($notRunning.Reason -eq 'not-running') -and
         ($notRunning.ForcedCount -eq 0)) 'no PID action was attempted'
 
-    $originalInventory = (Get-Item Function:\Get-PSOBBClientProcessRecords).ScriptBlock
+    $originalInventory = (Get-Item Function:\Get-PSOBBAllClientProcessRecords).ScriptBlock
     try {
-        Set-Item Function:\Get-PSOBBClientProcessRecords -Value {
-            @([pscustomobject]@{ Channel = 'Canary'; ProcessId = 4242 })
+        Set-Item Function:\Get-PSOBBAllClientProcessRecords -Value {
+            @([pscustomobject]@{
+                ServerEnvironment = 'Stable'
+                Channel = 'Canary'
+                ProcessId = 4242
+                Classification = 'ApprovedExactPath'
+            })
         }
         $clientGuarded = $false
         try {
             Assert-PSOBBNoRunningClients -Layout $fixtureLayout | Out-Null
         } catch {
-            $clientGuarded = $_.Exception.Message -match 'Canary PID 4242' -and
-                $_.Exception.Message -match 'Stop-PSOBBSession.ps1 -Target All'
+            $clientGuarded = $_.Exception.Message -match
+                'Stable/Canary PID 4242 \(ApprovedExactPath\)'
         }
         Add-Result 'server-stop client guard fails closed' $clientGuarded 'approved client inventory blocks server shutdown'
     } finally {
-        Set-Item Function:\Get-PSOBBClientProcessRecords -Value $originalInventory
+        Set-Item Function:\Get-PSOBBAllClientProcessRecords -Value $originalInventory
     }
 
     New-Item -ItemType Directory -Path $shortcutRoot -Force | Out-Null
@@ -798,7 +805,7 @@ $supervisorDetached = $startServerSource -match 'NativeSupervisorLauncher' -and
     $startServerSource -notmatch 'RedirectStandard(?:Input|Output|Error)\s*=\s*\$true'
 Add-Result 'server supervisor detaches caller capture handles' $supervisorDetached 'start returns while the hidden supervisor remains alive'
 $startSessionLocked = $startSessionSource -match 'Enter-PSOBBClientOperationLock' -and
-    $startSessionSource -match 'Get-PSOBBClientProcessRecords' -and
+    $startSessionSource -match 'Get-PSOBBAllClientProcessRecords' -and
     $startSessionSource -match 'ClientOperationLockHeld' -and
     $startSessionSource -match 'Exit-PSOBBClientOperationLock'
 Add-Result 'session start is one guarded lifecycle transaction' $startSessionLocked 'server readiness and client start share the client-operation lock'
@@ -892,9 +899,11 @@ Add-Result 'client-patch presentation has one reference-only initial correction'
     $startClientSource -match 'Get-PSOBBClientWindowPresentation' -and
     $startClientSource -match 'client-patch-owned window did not present') `
     'the stopped contract is materialized first; only a mismatched settled pso_widescreen frame receives its declared initial client area'
-$localLabExposedSafely = $startClientSource -match "ValidateSet\('Stable', 'Canary', 'LocalLab'\)" -and
+$localLabExposedSafely = $startClientSource -match
+        "ValidateSet\('Stable', 'Canary', 'LocalLab', 'Native'\)" -and
     $startClientSource -match 'Assert-PSOBBLocalLabClientRuntimeContract' -and
-    $startSessionSource -match "ValidateSet\('Stable', 'Canary', 'LocalLab'\)" -and
+    $startSessionSource -match
+        "ValidateSet\('Stable', 'Canary', 'LocalLab', 'Native'\)" -and
     (Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Install-PSOBBDesktopShortcuts.ps1')) -match
         "ValidateSet\('Stable', 'Canary', 'LocalLab'\)"
 Add-Result 'LocalLab start is exposed only through its runtime guard' $localLabExposedSafely 'Stable and Canary behavior remains unchanged'
@@ -908,11 +917,48 @@ $stopSessionLocked = $stopSessionSource -match 'Enter-PSOBBClientOperationLock' 
 Add-Result 'stop-all is one guarded lifecycle transaction' $stopSessionLocked 'a concurrent client start cannot enter between client and server shutdown'
 
 $stopClientSource = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'scripts\Stop-PSOBBClient.ps1')
+$stopClientTokens = $null
+$stopClientErrors = $null
+$stopClientAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $stopClientSource,
+    [ref]$stopClientTokens,
+    [ref]$stopClientErrors)
+$revalidationFunctions = @($stopClientAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Get-RevalidatedPSOBBClientProcess'
+        }, $true))
+$oneTickClientRejected = $false
+$currentTestProcess = Get-Process -Id $PID -ErrorAction Stop
+try {
+    if ($stopClientErrors.Count -eq 0 -and $revalidationFunctions.Count -eq 1) {
+        Invoke-Expression $revalidationFunctions[0].Extent.Text
+        $currentFileTimeUtc = [long](
+            $currentTestProcess.StartTime.ToUniversalTime().ToFileTimeUtc())
+        try {
+            Get-RevalidatedPSOBBClientProcess -Record ([pscustomobject]@{
+                    ProcessId = $PID
+                    StartTimeFileTimeUtc = $currentFileTimeUtc + 1
+                    ExecutablePath = [System.IO.Path]::GetFullPath(
+                        $currentTestProcess.Path)
+                    ExecutableSha256 = '0' * 64
+                }) | Out-Null
+        } catch {
+            $oneTickClientRejected = $_.Exception.Message -match 'was reused'
+        }
+    }
+} finally {
+    $currentTestProcess.Dispose()
+}
 $safeStopWired = $stopClientSource -match 'CloseMainWindow' -and
     $stopClientSource -match 'Get-RevalidatedPSOBBClientProcess' -and
     $stopClientSource -match 'Assert-PSOBBApprovedClientExecutable' -and
-    $stopClientSource -match 'Stop-Process -Id \$process.Id -Force'
+    $stopClientSource -match '\$process\.Kill\(\)' -and
+    $stopClientSource -match 'StartTimeFileTimeUtc'
 Add-Result 'client force fallback is identity-revalidated' $safeStopWired 'normal close precedes explicit validated force'
+Add-Result 'client stop rejects a one-tick process-creation mismatch before action' `
+    $oneTickClientRejected `
+    'the exact retained FILETIME contract exposes no close or force target after simulated PID reuse'
 Add-Result 'client stop preserves saved credential fields' (
     $stopClientSource -notmatch 'Set-PSOBBClientManualLogin|Clear-PSOBBClientSavedCredentials') `
     'normal and idempotent shutdown paths do not mutate the native login cache'

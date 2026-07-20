@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Stable', 'Canary', 'LocalLab')]
+    [ValidateSet('All', 'Stable', 'Canary', 'LocalLab', 'Native')]
     [string]$Channel = 'All',
+    [ValidateSet('Stable', 'CombatCanary')]
+    [string]$ServerEnvironment = 'Stable',
     [string]$RuntimeRoot,
     [switch]$Force,
     [ValidateRange(1, 120)][int]$ShutdownTimeoutSeconds = 20,
@@ -19,46 +21,75 @@ function Get-RevalidatedPSOBBClientProcess {
     if (-not $process) {
         return $null
     }
+    $returnProcess = $false
     try {
         $startTimeUtc = $process.StartTime.ToUniversalTime()
+        $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
+        if ($null -eq $Record.StartTimeFileTimeUtc -or
+            $startTimeFileTimeUtc -ne [long]$Record.StartTimeFileTimeUtc) {
+            throw "PSOBB client PID $($Record.ProcessId) was reused before shutdown; refusing to act"
+        }
+        if (-not (Test-PSOBBProcessAtExactPath `
+            -Process $process `
+            -Name 'Psobb' `
+            -ExpectedPath ([string]$Record.ExecutablePath))) {
+            return $null
+        }
+        $identity = Assert-PSOBBApprovedClientExecutable `
+            -Path ([string]$Record.ExecutablePath)
+        if (-not $identity.Sha256.Equals(
+            [string]$Record.ExecutableSha256,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The approved PSOBB client identity changed before shutdown for PID $($Record.ProcessId)"
+        }
+        $returnProcess = $true
+        $process
     } catch {
-        throw "Cannot verify the creation time for PSOBB client PID $($Record.ProcessId)"
+        throw "Cannot revalidate PSOBB client PID $($Record.ProcessId): $($_.Exception.Message)"
+    } finally {
+        if (-not $returnProcess) {
+            $process.Dispose()
+        }
     }
-    if ([Math]::Abs(($startTimeUtc - [DateTime]$Record.StartTimeUtc).TotalSeconds) -gt 0.5) {
-        throw "PSOBB client PID $($Record.ProcessId) was reused before shutdown; refusing to act"
-    }
-    if (-not (Test-PSOBBProcessAtExactPath `
-        -Process $process `
-        -Name 'Psobb' `
-        -ExpectedPath ([string]$Record.ExecutablePath))) {
-        return $null
-    }
-    $identity = Assert-PSOBBApprovedClientExecutable -Path ([string]$Record.ExecutablePath)
-    if (-not $identity.Sha256.Equals(
-        [string]$Record.ExecutableSha256,
-        [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "The approved PSOBB client identity changed before shutdown for PID $($Record.ProcessId)"
-    }
-    $process
 }
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
+    -Environment $ServerEnvironment
+$resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
+    -ServerEnvironment $serverEnvironmentName -Channel $Channel -AllowAll
 $clientOperationMutex = if ($ClientOperationLockHeld) {
     $null
 } else {
     Enter-PSOBBClientOperationLock -Layout $layout
 }
 try {
-    $records = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel $Channel)
+    $allNamedRecords = @(Get-PSOBBAllClientProcessRecords -Layout $layout)
+    $records = @(Get-PSOBBClientProcessRecords `
+        -Layout $layout `
+        -Channel $resolvedChannel `
+        -ServerEnvironment $serverEnvironmentName)
     if ($records.Count -eq 0) {
+        if ($allNamedRecords.Count -gt 0) {
+            throw "No selected $serverEnvironmentName/$resolvedChannel client is running, but another named Psobb process exists"
+        }
         return [pscustomobject]@{
             Stopped = $false
             Reason = 'not-running'
-            Channel = $Channel
+            ServerEnvironment = $serverEnvironmentName
+            Channel = $resolvedChannel
             GracefulCount = 0
             ForcedCount = 0
         }
+    }
+    if ($allNamedRecords.Count -ne $records.Count -or
+        @($allNamedRecords | Where-Object {
+                [string]$_.ServerEnvironment -cne $serverEnvironmentName -or
+                [string]$_.Classification -cne 'ApprovedExactPath' -or
+                [int]$_.ProcessId -notin @($records.ProcessId)
+            }).Count -gt 0) {
+        throw 'The global named-client census does not exactly match the selected approved client inventory'
     }
 
     $closeFailures = [System.Collections.Generic.List[string]]::new()
@@ -79,6 +110,8 @@ try {
             if (-not $process.HasExited) {
                 $closeFailures.Add("PID $($record.ProcessId): $($_.Exception.Message)")
             }
+        } finally {
+            $process.Dispose()
         }
     }
 
@@ -103,26 +136,34 @@ try {
         if (-not $process) {
             continue
         }
-        if (-not $Force) {
-            throw "PSOBB client PID $($record.ProcessId) did not close within $ShutdownTimeoutSeconds seconds. No forceful termination was attempted."
-        }
+        try {
+            if (-not $Force) {
+                throw "PSOBB client PID $($record.ProcessId) did not close within $ShutdownTimeoutSeconds seconds. No forceful termination was attempted."
+            }
 
-        Stop-Process -Id $process.Id -Force
-        if (-not $process.WaitForExit(5000)) {
-            throw "Forced termination of PSOBB client PID $($record.ProcessId) could not be confirmed"
+            $process.Kill()
+            if (-not $process.WaitForExit(5000)) {
+                throw "Forced termination of PSOBB client PID $($record.ProcessId) could not be confirmed"
+            }
+            $forcedPids.Add([int]$record.ProcessId)
+        } finally {
+            $process.Dispose()
         }
-        $forcedPids.Add([int]$record.ProcessId)
     }
 
-    $stillRunning = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel $Channel)
+    $stillRunning = @(Get-PSOBBAllClientProcessRecords -Layout $layout)
     if ($stillRunning.Count -gt 0) {
-        throw "An approved PSOBB client is still running after shutdown (PID(s): $($stillRunning.ProcessId -join ', '))"
+        $details = @($stillRunning | ForEach-Object {
+                'PID {0} ({1})' -f $_.ProcessId, $_.Classification
+            })
+        throw "A named Psobb process is still running after shutdown ($($details -join ', ')); no additional PID action was attempted"
     }
     $allPids = @($records.ProcessId)
     $gracefulPids = @($allPids | Where-Object { -not $forcedPids.Contains([int]$_) })
     [pscustomobject]@{
         Stopped = $true
-        Channel = $Channel
+        ServerEnvironment = $serverEnvironmentName
+        Channel = $resolvedChannel
         Pids = $allPids
         Graceful = ($forcedPids.Count -eq 0)
         GracefulCount = $gracefulPids.Count
