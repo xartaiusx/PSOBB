@@ -414,7 +414,7 @@ try {
     $escapedLicensePath = Join-Path $licenseReaderRoot 'escaped-license.json'
     [System.IO.File]::WriteAllText(
         $escapedLicensePath,
-        '{"BBLicenses":[{"UserName":"escapeuser","Password":"ESCAPED\u0053ECRET"}]}',
+        '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"escapeuser","Password":"ESCAPED\u0053ECRET"}]}',
         [System.Text.UTF8Encoding]::new($false))
     Set-PSOBBProtectedTreeAcl `
         -Path $licenseReaderRoot -Root $testLayout.Backups

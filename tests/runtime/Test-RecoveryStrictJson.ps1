@@ -18,6 +18,43 @@ function Write-Utf8([string]$Path, [string]$Text) {
         $Path, $Text, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Test-RejectedLicenseFixture(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Root,
+    [AllowEmptyString()][string]$Text,
+    [byte[]]$Bytes
+) {
+    if ($null -ne $Bytes) {
+        [System.IO.File]::WriteAllBytes($Path, $Bytes)
+    } else {
+        Write-Utf8 -Path $Path -Text $Text
+    }
+    $lengthBefore = (Get-Item -LiteralPath $Path).Length
+    $sha256Before = Get-LowerSha256 $Path
+    $sddlBefore = (Get-Acl -LiteralPath $Path).Sddl
+    $names = [System.Collections.Generic.Dictionary[string, int]]::new(
+        [System.StringComparer]::Ordinal)
+    $names.Add('existingfixture', 2)
+    $passwords = [System.Collections.Generic.List[string]]::new()
+    $passwords.Add('EXISTINGSYNTHETIC')
+    try {
+        Add-PSOBBRecoveryBBLicenseRedactionTerms `
+            -Path $Path -Root $Root -UserNameCounts $names `
+            -Passwords $passwords -Label 'synthetic licenses item' | Out-Null
+        $false
+    } catch {
+        $_.Exception.Message -ceq (
+            'The synthetic licenses item cannot be inspected for recovery redaction') -and
+            $names.Count -eq 1 -and $names['existingfixture'] -eq 2 -and
+            $passwords.Count -eq 1 -and
+            $passwords[0] -ceq 'EXISTINGSYNTHETIC' -and
+            $_.Exception.Message -notmatch 'DO-NOT-LEAK' -and
+            (Get-Item -LiteralPath $Path).Length -eq $lengthBefore -and
+            (Get-LowerSha256 $Path) -ceq $sha256Before -and
+            (Get-Acl -LiteralPath $Path).Sddl -ceq $sddlBefore
+    }
+}
+
 function Test-Rejected(
     [Parameter(Mandatory)][scriptblock]$Action,
     [string]$Pattern = '(duplicate|exact property|type|fractional|out-of-range|invalid|strict)'
@@ -300,6 +337,196 @@ try {
             Test-Rejected {
                 Get-PSOBBStableServerSourceLockIdentity -Path $sourceLockPath
             }) 'root and consumed Stable component/member shapes are exact'
+    }
+
+    $licenseRoot = Join-Path $runtimeRoot 'license-reader'
+    New-Item -ItemType Directory -Path $licenseRoot | Out-Null
+    $licensePath = Join-Path $licenseRoot 'DO-NOT-LEAK-LICENSE-PATH.json'
+    $newservLicenseText = @'
+{
+  "BBTeamID": 0x0,
+  "FormatVersion": 0x1,
+  "AccountID": 0x1,
+  "LastPlayerName": "literal 0xABC",
+  "DCNTELicenses": [],
+  "BBLicenses": [
+    {"UserName": "fixtureacct", "Password": "SYNTH\u0053ECRET"},
+    {"UserName": "abcdefghijklmnop", "Password": "123456789012345\u0041"}
+  ],
+  "BanEndTime": 0x0,
+  "PCLicenses": [],
+  "AutoReplyMessage": "",
+  "GCLicenses": [],
+  "AutoPatchesEnabled": [],
+  "XBLicenses": [],
+  "Flags": 0x7FFFFFFF,
+  "Ep3TotalMesetaEarned": 0x0,
+  "Ep3CurrentMeseta": 0x0,
+  "DCLicenses": [],
+  "UserFlags": 0x0
+}
+'@
+    Write-Utf8 -Path $licensePath -Text $newservLicenseText
+    $licenseLengthBefore = (Get-Item -LiteralPath $licensePath).Length
+    $licenseHashBefore = Get-LowerSha256 $licensePath
+    $licenseAclBefore = (Get-Acl -LiteralPath $licensePath).Sddl
+    $licenseNames = [System.Collections.Generic.Dictionary[string, int]]::new(
+        [System.StringComparer]::Ordinal)
+    $licensePasswords = [System.Collections.Generic.List[string]]::new()
+    $licenseCount = Add-PSOBBRecoveryBBLicenseRedactionTerms `
+        -Path $licensePath -Root $licenseRoot `
+        -UserNameCounts $licenseNames -Passwords $licensePasswords `
+        -Label 'synthetic licenses item'
+    Add-Result 'license redaction accepts exact current newserv hex JSON' (
+        $licenseCount -eq 2 -and $licenseNames.Count -eq 2 -and
+        $licenseNames['fixtureacct'] -eq 1 -and
+        $licenseNames['abcdefghijklmnop'] -eq 1 -and
+        $licensePasswords.Count -eq 2 -and
+        $licensePasswords[0] -ceq 'SYNTHSECRET' -and
+        $licensePasswords[1] -ceq '123456789012345A') `
+        'current BBLicenses decode through the exact 16-byte inclusive boundary'
+    Add-Result 'license redaction leaves source bytes and ACL unchanged' (
+        (Get-Item -LiteralPath $licensePath).Length -eq $licenseLengthBefore -and
+        (Get-LowerSha256 $licensePath) -ceq $licenseHashBefore -and
+        (Get-Acl -LiteralPath $licensePath).Sddl -ceq $licenseAclBefore) `
+        'the reader is bounded and read-only'
+
+    $genericReaderStillStrict = Test-Rejected {
+        Read-PSOBBRedactedRecoveryStrictJsonSnapshot `
+            -Path $licensePath -Root $licenseRoot -MaximumBytes 1MB `
+            -Label 'synthetic generic item'
+    } '^The synthetic generic item failed strict JSON validation$'
+    Add-Result 'generic recovery JSON reader still rejects hex integers' `
+        $genericReaderStillStrict `
+        'the newserv lexical extension is confined to BB license redaction'
+
+    $boundaryText = ConvertTo-PSOBBNewservLicenseStrictJsonText `
+        -Text '{"maximum":0x7FFFFFFFFFFFFFFF,"minimum":-0x8000000000000000}' `
+        -Label 'synthetic boundary item'
+    $boundaryValue = $boundaryText | ConvertFrom-Json
+    Add-Result 'license hex normalizer accepts exact Int64 boundaries' (
+        $boundaryValue.maximum -eq [long]::MaxValue -and
+        $boundaryValue.minimum -eq [long]::MinValue) `
+        'validated phosg integer values survive strict normalization'
+
+    $licenseFailureCases = [ordered]@{
+        'duplicate BBLicenses key' =
+            '{"FormatVersion":0x1,"BBLicenses":[],"BBLicenses":[]}'
+        'decoded duplicate BBLicenses key' =
+            '{"FormatVersion":0x1,"BBLicenses":[],"\u0042BLicenses":[]}'
+        'escaped FormatVersion key alias' =
+            '{"Format\u0056ersion":0x1,"BBLicenses":[]}'
+        'escaped BBLicenses key alias' =
+            '{"FormatVersion":0x1,"BB\u004Cicenses":[]}'
+        'escaped username key alias' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"User\u004Eame":"fixtureacct","Password":"SYNTHPASS"}]}'
+        'escaped password key alias' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Pass\u0077ord":"SYNTHPASS"}]}'
+        'duplicate username field' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"DO-NOT-LEAK-USER","UserName":"x","Password":"DO-NOT-LEAK-PASSWORD"}]}'
+        'missing BBLicenses key' = '{"FormatVersion":0x1}'
+        'non-array BBLicenses value' =
+            '{"FormatVersion":0x1,"BBLicenses":{}}'
+        'non-object BBLicenses entry' =
+            '{"FormatVersion":0x1,"BBLicenses":["x"]}'
+        'missing password field' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct"}]}'
+        'extra BBLicenses field' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTHPASS","Extra":0}]}'
+        'non-string username' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":1,"Password":"SYNTHPASS"}]}'
+        'non-string password' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":true}]}'
+        'empty username' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"","Password":"SYNTHPASS"}]}'
+        'overlength username' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"abcdefghijklmnopq","Password":"SYNTHPASS"}]}'
+        'empty password' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":""}]}'
+        'overlength password' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"abcdefghijklmnopq"}]}'
+        'partial valid list' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"firstfixture","Password":"FIRSTSYNTH"},{"UserName":"secondfixture","Password":false}]}'
+        'line comment' =
+            '{"FormatVersion":0x1,"BBLicenses":[] // comment' + "`n" + '}'
+        'block comment' =
+            '{"FormatVersion":0x1,"BBLicenses":[]/* comment */}'
+        'trailing comma' =
+            '{"FormatVersion":0x1,"BBLicenses":[],}'
+        'trailing content' =
+            '{"FormatVersion":0x1,"BBLicenses":[]}{}'
+        'non-object root' = '[]'
+        'single-quoted JSON' =
+            "{'FormatVersion':0x1,'BBLicenses':[]}"
+        'unquoted property' =
+            '{FormatVersion:0x1,BBLicenses:[]}'
+        'missing FormatVersion' = '{"BBLicenses":[]}'
+        'legacy fields without FormatVersion' =
+            '{"BBUsername":"legacy","BBPassword":"SYNTHPASS"}'
+        'zero legacy FormatVersion' =
+            '{"FormatVersion":0x0,"BBUsername":"legacy","BBPassword":"SYNTHPASS"}'
+        'zero hybrid FormatVersion' =
+            '{"FormatVersion":0x0,"BBLicenses":[]}'
+        'current hybrid credential fields' =
+            '{"FormatVersion":0x1,"BBLicenses":[],"BBUsername":"legacy","BBPassword":"SYNTHPASS"}'
+        'decimal current FormatVersion' =
+            '{"FormatVersion":1,"BBLicenses":[]}'
+        'string current FormatVersion' =
+            '{"FormatVersion":"0x1","BBLicenses":[]}'
+        'negative current FormatVersion' =
+            '{"FormatVersion":-0x1,"BBLicenses":[]}'
+        'uppercase hex prefix' =
+            '{"FormatVersion":0X1,"BBLicenses":[]}'
+        'lowercase hex digit' =
+            '{"FormatVersion":0xabc,"BBLicenses":[]}'
+        'missing hex digits' =
+            '{"FormatVersion":0x,"BBLicenses":[]}'
+        'positive hex overflow' =
+            '{"FormatVersion":0x8000000000000000,"BBLicenses":[]}'
+        'negative hex overflow' =
+            '{"FormatVersion":-0x8000000000000001,"BBLicenses":[]}'
+        'overlength hex token' =
+            '{"FormatVersion":0x00000000000000000,"BBLicenses":[]}'
+        'non-ASCII byte escape' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTH\u0080"}]}'
+        'escaped control byte' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTH\nPASS"}]}'
+        'escaped DEL byte' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTH\u007F"}]}'
+        'non-byte Unicode escape' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTH\u0100"}]}'
+        'surrogate escape' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTH\uD800"}]}'
+        'raw non-ASCII credential' =
+            '{"FormatVersion":0x1,"BBLicenses":[{"UserName":"fixtureacct","Password":"SYNTHé"}]}'
+    }
+    foreach ($case in $licenseFailureCases.GetEnumerator()) {
+        Add-Result "license redaction rejects $($case.Key)" (
+            Test-RejectedLicenseFixture `
+                -Path $licensePath -Root $licenseRoot -Text ([string]$case.Value)) `
+            'strict shape, syntax, bounds, transactional outputs, and redacted errors'
+    }
+
+    $invalidUtf8Prefix = [System.Text.Encoding]::UTF8.GetBytes(
+        '{"BBLicenses":[{"UserName":"fixtureacct","Password":"')
+    $invalidUtf8Suffix = [System.Text.Encoding]::UTF8.GetBytes('"}]}')
+    $invalidUtf8 = [byte[]]::new(
+        $invalidUtf8Prefix.Length + 2 + $invalidUtf8Suffix.Length)
+    [Array]::Copy($invalidUtf8Prefix, 0, $invalidUtf8, 0, $invalidUtf8Prefix.Length)
+    $invalidUtf8[$invalidUtf8Prefix.Length] = 0xC3
+    $invalidUtf8[$invalidUtf8Prefix.Length + 1] = 0x28
+    [Array]::Copy(
+        $invalidUtf8Suffix, 0, $invalidUtf8,
+        $invalidUtf8Prefix.Length + 2, $invalidUtf8Suffix.Length)
+    try {
+        Add-Result 'license redaction rejects malformed UTF-8' (
+            Test-RejectedLicenseFixture `
+                -Path $licensePath -Root $licenseRoot -Bytes $invalidUtf8) `
+            'the public error does not expose the path or malformed credential bytes'
+    } finally {
+        [Array]::Clear($invalidUtf8Prefix, 0, $invalidUtf8Prefix.Length)
+        [Array]::Clear($invalidUtf8Suffix, 0, $invalidUtf8Suffix.Length)
+        [Array]::Clear($invalidUtf8, 0, $invalidUtf8.Length)
     }
 
     $sentinelPath = Join-Path $runtimeRoot `

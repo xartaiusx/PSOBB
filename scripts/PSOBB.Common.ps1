@@ -2818,6 +2818,338 @@ function Read-PSOBBRedactedRecoveryStrictJsonSnapshot {
     }
 }
 
+function Test-PSOBBNewservLicenseJsonWhitespaceCharacter {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][char]$Character)
+
+    $Character -eq ' ' -or $Character -eq "`t" -or
+        $Character -eq "`r" -or $Character -eq "`n"
+}
+
+function ConvertTo-PSOBBNewservLicenseStrictJsonText {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][Parameter(Mandatory)][string]$Text,
+        [string]$Label = 'licenses item'
+    )
+
+    $builder = [System.Text.StringBuilder]::new($Text.Length)
+    $insideString = $false
+    $escaped = $false
+    $stringStart = -1
+    $pendingPropertyName = $null
+    $requireFormatVersionHex = $false
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $character = $Text[$index]
+        if ($insideString) {
+            [void]$builder.Append($character)
+            if ($escaped) {
+                $escaped = $false
+            } elseif ($character -eq '\') {
+                $escaped = $true
+            } elseif ($character -eq '"') {
+                $insideString = $false
+                $nextIndex = $index + 1
+                while ($nextIndex -lt $Text.Length -and
+                    (Test-PSOBBNewservLicenseJsonWhitespaceCharacter `
+                            -Character $Text[$nextIndex])) {
+                    $nextIndex++
+                }
+                if ($nextIndex -lt $Text.Length -and
+                    $Text[$nextIndex] -eq ':') {
+                    $rawPropertyName = $Text.Substring(
+                        $stringStart + 1, $index - $stringStart - 1)
+                    foreach ($propertyCharacter in $rawPropertyName.ToCharArray()) {
+                        if ($propertyCharacter -eq '\' -or
+                            [int]$propertyCharacter -lt 0x20 -or
+                            [int]$propertyCharacter -gt 0x7E) {
+                            throw "The $Label contains a noncanonical property name"
+                        }
+                    }
+                    $pendingPropertyName = $rawPropertyName
+                }
+            }
+            continue
+        }
+
+        $isWhitespace = Test-PSOBBNewservLicenseJsonWhitespaceCharacter `
+            -Character $character
+        $negative = $character -eq '-'
+        $prefixIndex = if ($negative) { $index + 1 } else { $index }
+        $isHexInteger = ($prefixIndex + 2) -lt $Text.Length -and
+            $Text[$prefixIndex] -eq '0' -and
+            $Text[$prefixIndex + 1] -ceq 'x' -and
+            ((([int]$Text[$prefixIndex + 2]) -ge 0x30 -and
+                    ([int]$Text[$prefixIndex + 2]) -le 0x39) -or
+                (([int]$Text[$prefixIndex + 2]) -ge 0x41 -and
+                    ([int]$Text[$prefixIndex + 2]) -le 0x46))
+        if ($requireFormatVersionHex -and -not $isWhitespace -and
+            -not $isHexInteger) {
+            throw "The $Label FormatVersion is not a saved hexadecimal integer"
+        }
+        if ($character -eq '"') {
+            $insideString = $true
+            $stringStart = $index
+            [void]$builder.Append($character)
+            continue
+        }
+        if (-not $isHexInteger) {
+            if ($character -eq ':' -and $null -ne $pendingPropertyName) {
+                $requireFormatVersionHex =
+                    $pendingPropertyName -ceq 'FormatVersion'
+                $pendingPropertyName = $null
+            } elseif (-not $isWhitespace -and $null -ne $pendingPropertyName) {
+                $pendingPropertyName = $null
+            }
+            [void]$builder.Append($character)
+            continue
+        }
+        if ($requireFormatVersionHex) {
+            $requireFormatVersionHex = $false
+        }
+
+        $previousIndex = $index - 1
+        while ($previousIndex -ge 0 -and
+            (Test-PSOBBNewservLicenseJsonWhitespaceCharacter `
+                    -Character $Text[$previousIndex])) {
+            $previousIndex--
+        }
+        if ($previousIndex -ge 0 -and
+            $Text[$previousIndex] -notin @(':', '[', ',')) {
+            throw "The $Label contains a non-value hexadecimal token"
+        }
+
+        $digitStart = $prefixIndex + 2
+        $tokenEnd = $digitStart
+        while ($tokenEnd -lt $Text.Length -and
+            ((([int]$Text[$tokenEnd]) -ge 0x30 -and
+                    ([int]$Text[$tokenEnd]) -le 0x39) -or
+                (([int]$Text[$tokenEnd]) -ge 0x41 -and
+                    ([int]$Text[$tokenEnd]) -le 0x46))) {
+            $tokenEnd++
+        }
+        $digitCount = $tokenEnd - $digitStart
+        if ($digitCount -lt 1 -or $digitCount -gt 16) {
+            throw "The $Label contains an out-of-range hexadecimal integer"
+        }
+        if ($tokenEnd -lt $Text.Length -and
+            -not (Test-PSOBBNewservLicenseJsonWhitespaceCharacter `
+                    -Character $Text[$tokenEnd]) -and
+            $Text[$tokenEnd] -notin @(',', ']', '}')) {
+            throw "The $Label contains a malformed hexadecimal integer"
+        }
+
+        [uint64]$magnitude = 0
+        if (-not [uint64]::TryParse(
+                $Text.Substring($digitStart, $digitCount),
+                [System.Globalization.NumberStyles]::AllowHexSpecifier,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [ref]$magnitude) -or
+            ((-not $negative) -and
+                $magnitude -gt [uint64][long]::MaxValue) -or
+            ($negative -and
+                $magnitude -gt [uint64]9223372036854775808)) {
+            throw "The $Label contains an out-of-range hexadecimal integer"
+        }
+
+        $decimal = if ($negative) {
+            if ($magnitude -eq [uint64]9223372036854775808) {
+                [long]::MinValue.ToString(
+                    [System.Globalization.CultureInfo]::InvariantCulture)
+            } else {
+                (-[long]$magnitude).ToString(
+                    [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+        } else {
+            $magnitude.ToString(
+                [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        [void]$builder.Append($decimal)
+        $index = $tokenEnd - 1
+    }
+    $builder.ToString()
+}
+
+function ConvertFrom-PSOBBNewservSavedAsciiJsonStringToken {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][Parameter(Mandatory)][string]$RawToken,
+        [string]$Label = 'BBLicense string'
+    )
+
+    if ($RawToken.Length -lt 2 -or $RawToken[0] -ne '"' -or
+        $RawToken[$RawToken.Length - 1] -ne '"') {
+        throw "The $Label is not a JSON string token"
+    }
+    # Project-provisioned BB usernames and passwords are printable ASCII. The
+    # saved account format escapes each non-ASCII byte separately as \u00XX;
+    # reject those bytes rather than reinterpret them as Unicode text.
+    $bytes = [byte[]]::new(16)
+    $byteCount = 0
+    try {
+        for ($index = 1; $index -lt ($RawToken.Length - 1); $index++) {
+            $character = $RawToken[$index]
+            [byte]$decodedByte = 0
+            if ($character -ne '\') {
+                if ([int]$character -lt 0x20 -or [int]$character -gt 0x7E) {
+                    throw "The $Label is outside the current ASCII credential contract"
+                }
+                $decodedByte = [byte][int]$character
+            } else {
+                $index++
+                if ($index -ge ($RawToken.Length - 1)) {
+                    throw "The $Label has an incomplete escape"
+                }
+                $escape = $RawToken[$index]
+                $decodedByte = switch -CaseSensitive ($escape) {
+                    '"' { [byte]0x22; break }
+                    '\' { [byte]0x5C; break }
+                    '/' { [byte]0x2F; break }
+                    'b' { [byte]0x08; break }
+                    'f' { [byte]0x0C; break }
+                    'n' { [byte]0x0A; break }
+                    'r' { [byte]0x0D; break }
+                    't' { [byte]0x09; break }
+                    'u' {
+                        if (($index + 4) -ge $RawToken.Length) {
+                            throw "The $Label has an incomplete Unicode escape"
+                        }
+                        $digits = $RawToken.Substring($index + 1, 4)
+                        if ($digits -cnotmatch '^[0-9A-F]{4}$') {
+                            throw "The $Label has a noncanonical Unicode escape"
+                        }
+                        [uint16]$value = 0
+                        if (-not [uint16]::TryParse(
+                                $digits,
+                                [System.Globalization.NumberStyles]::AllowHexSpecifier,
+                                [System.Globalization.CultureInfo]::InvariantCulture,
+                                [ref]$value) -or $value -gt 0x7F) {
+                            throw "The $Label is outside the current ASCII credential contract"
+                        }
+                        $index += 4
+                        [byte]$value
+                        break
+                    }
+                    default { throw "The $Label has an unsupported escape" }
+                }
+            }
+            if ($decodedByte -lt 0x20 -or $decodedByte -gt 0x7E) {
+                throw "The $Label is outside the current printable ASCII credential contract"
+            }
+            if ($byteCount -ge $bytes.Length) {
+                throw "The $Label exceeds the current credential byte limit"
+            }
+            $bytes[$byteCount] = $decodedByte
+            $byteCount++
+        }
+        [System.Text.Encoding]::ASCII.GetString($bytes, 0, $byteCount)
+    } finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Read-PSOBBRedactedRecoveryNewservLicenseJsonSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateRange(1, 67108864)]
+        [long]$MaximumBytes,
+        [ValidateRange(1, 64)][int]$MaximumDepth = 20,
+        [string]$Label = 'licenses item'
+    )
+
+    $fileSnapshot = $null
+    $document = $null
+    try {
+        $fileSnapshot = Read-PSOBBBoundedOrdinaryFileSnapshot `
+            -Path $Path -Root $Root -MaximumBytes $MaximumBytes `
+            -Label $Label -IncludeBytes
+        $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        $text = $utf8.GetString([byte[]]$fileSnapshot.Bytes)
+        $normalized = ConvertTo-PSOBBNewservLicenseStrictJsonText `
+            -Text $text -Label $Label
+        $options = [System.Text.Json.JsonDocumentOptions]::new()
+        $options.AllowTrailingCommas = $false
+        $options.CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+        $options.MaxDepth = $MaximumDepth
+        $document = [System.Text.Json.JsonDocument]::Parse($normalized, $options)
+        if ($document.RootElement.ValueKind -ne
+            [System.Text.Json.JsonValueKind]::Object) {
+            throw "The $Label root is not an object"
+        }
+        Test-PSOBBStrictJsonPropertyUniqueness `
+            -Element $document.RootElement -Path '$' | Out-Null
+        $formatProperties = @($document.RootElement.EnumerateObject() |
+                Where-Object Name -CEQ 'FormatVersion')
+        $licenseProperties = @($document.RootElement.EnumerateObject() |
+                Where-Object Name -CEQ 'BBLicenses')
+        $legacyCredentialProperties = @($document.RootElement.EnumerateObject() |
+                Where-Object { $_.Name -ceq 'BBUsername' -or
+                    $_.Name -ceq 'BBPassword' })
+        [long]$formatVersion = 0
+        if ($formatProperties.Count -ne 1 -or
+            $formatProperties[0].Value.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Number -or
+            -not $formatProperties[0].Value.TryGetInt64([ref]$formatVersion) -or
+            $formatVersion -ne 1 -or
+            $licenseProperties.Count -ne 1 -or
+            $licenseProperties[0].Value.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Array -or
+            $legacyCredentialProperties.Count -ne 0) {
+            throw "The $Label is not a current-format newserv account"
+        }
+
+        $licenses = [System.Collections.Generic.List[object]]::new()
+        foreach ($licenseElement in $licenseProperties[0].Value.EnumerateArray()) {
+            if ($licenseElement.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "The $Label contains a non-object BBLicense"
+            }
+            $licenseFields = @($licenseElement.EnumerateObject())
+            $userFields = @($licenseFields | Where-Object Name -CEQ 'UserName')
+            $passwordFields = @($licenseFields | Where-Object Name -CEQ 'Password')
+            if ($licenseFields.Count -ne 2 -or $userFields.Count -ne 1 -or
+                $passwordFields.Count -ne 1 -or
+                $userFields[0].Value.ValueKind -ne
+                    [System.Text.Json.JsonValueKind]::String -or
+                $passwordFields[0].Value.ValueKind -ne
+                    [System.Text.Json.JsonValueKind]::String) {
+                throw "The $Label contains an invalid BBLicense property set"
+            }
+            $userName = ConvertFrom-PSOBBNewservSavedAsciiJsonStringToken `
+                -RawToken $userFields[0].Value.GetRawText() `
+                -Label 'BBLicense username'
+            $password = ConvertFrom-PSOBBNewservSavedAsciiJsonStringToken `
+                -RawToken $passwordFields[0].Value.GetRawText() `
+                -Label 'BBLicense password'
+            if ($userName.Length -lt 1 -or $userName.Length -gt 16 -or
+                $password.Length -lt 1 -or $password.Length -gt 16) {
+                throw "The $Label contains an out-of-range BBLicense identity"
+            }
+            $licenses.Add([pscustomobject]@{
+                    UserName = $userName
+                    Password = $password
+                })
+        }
+        [pscustomobject]@{
+            Licenses = $licenses.ToArray()
+            Sha256 = [string]$fileSnapshot.Sha256
+            Length = [long]$fileSnapshot.Length
+            Path = [string]$fileSnapshot.Path
+        }
+    } catch {
+        throw "The $Label failed strict newserv license JSON validation"
+    } finally {
+        if ($document) { $document.Dispose() }
+        if ($fileSnapshot -and $fileSnapshot.Bytes) {
+            [Array]::Clear(
+                [byte[]]$fileSnapshot.Bytes, 0,
+                ([byte[]]$fileSnapshot.Bytes).Length)
+        }
+    }
+}
+
 function Copy-PSOBBRedactedRecoveryFile {
     [CmdletBinding()]
     param(
@@ -2856,42 +3188,42 @@ function Add-PSOBBRecoveryBBLicenseRedactionTerms {
     )
 
     try {
-        $snapshot = Read-PSOBBRedactedRecoveryStrictJsonSnapshot `
+        $snapshot = Read-PSOBBRedactedRecoveryNewservLicenseJsonSnapshot `
             -Path $Path -Root $Root -MaximumBytes 16MB `
             -MaximumDepth 20 -Label $Label
-        $value = $snapshot.Value
-        if ($value -isnot [pscustomobject]) {
-            throw 'not an object'
-        }
-        $licensesProperty = $value.PSObject.Properties['BBLicenses']
-        if ($null -eq $licensesProperty -or
-            $licensesProperty.Value -isnot [System.Array]) {
-            throw 'missing BBLicenses array'
-        }
+        $pendingUserNameCounts =
+            [System.Collections.Generic.Dictionary[string, int]]::new(
+                [System.StringComparer]::Ordinal)
+        $pendingPasswords = [System.Collections.Generic.List[string]]::new()
         $count = 0
-        foreach ($license in @($licensesProperty.Value)) {
-            if ($license -isnot [pscustomobject]) {
-                throw 'invalid BBLicense record'
-            }
-            Assert-PSOBBStrictDataObjectProperties `
-                -Value $license -Expected @('UserName', 'Password') `
-                -Label $Label | Out-Null
-            $userName = $license.PSObject.Properties['UserName'].Value
-            $password = $license.PSObject.Properties['Password'].Value
-            if ($userName -isnot [string] -or $password -isnot [string] -or
-                [string]::IsNullOrWhiteSpace([string]$userName) -or
-                ([string]$userName).Length -gt 16 -or
-                [string]::IsNullOrEmpty([string]$password) -or
-                ([string]$password).Length -gt 16) {
-                throw 'invalid BBLicense identity'
-            }
-            if ($UserNameCounts.ContainsKey([string]$userName)) {
-                $UserNameCounts[[string]$userName]++
+        foreach ($license in @($snapshot.Licenses)) {
+            $userName = [string]$license.UserName
+            $password = [string]$license.Password
+            if ($pendingUserNameCounts.ContainsKey([string]$userName)) {
+                $pendingUserNameCounts[[string]$userName]++
             } else {
-                $UserNameCounts.Add([string]$userName, 1)
+                $pendingUserNameCounts.Add([string]$userName, 1)
             }
-            $Passwords.Add([string]$password)
+            $pendingPasswords.Add([string]$password)
             $count++
+        }
+        foreach ($entry in $pendingUserNameCounts.GetEnumerator()) {
+            $existingCount = if ($UserNameCounts.ContainsKey($entry.Key)) {
+                [int]$UserNameCounts[$entry.Key]
+            } else { 0 }
+            if ($existingCount -gt ([int]::MaxValue - [int]$entry.Value)) {
+                throw 'BBLicense identity count exceeds its exact bound'
+            }
+        }
+        foreach ($entry in $pendingUserNameCounts.GetEnumerator()) {
+            if ($UserNameCounts.ContainsKey($entry.Key)) {
+                $UserNameCounts[$entry.Key] += [int]$entry.Value
+            } else {
+                $UserNameCounts.Add($entry.Key, [int]$entry.Value)
+            }
+        }
+        foreach ($password in $pendingPasswords) {
+            $Passwords.Add($password)
         }
         $count
     } catch {
