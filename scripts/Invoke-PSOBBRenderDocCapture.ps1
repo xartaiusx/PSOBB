@@ -27,6 +27,140 @@ function Assert-PSOBBPrivateRenderDocPath {
     Assert-PSOBBPathOutsideTrackedSource -Path $fullPath -Purpose $Purpose
 }
 
+function Get-PSOBBNamedClientProcessCount {
+    [CmdletBinding()]
+    param()
+
+    $processes = @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue)
+    try {
+        $processes.Count
+    } finally {
+        foreach ($process in $processes) {
+            $process.Dispose()
+        }
+    }
+}
+
+function Close-PSOBBRenderDocClientProcessRecords {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Records = @())
+
+    foreach ($ownedRecord in @($Records)) {
+        if ($null -ne $ownedRecord -and
+            $ownedRecord.PSObject.Properties.Name -contains 'Process' -and
+            $null -ne $ownedRecord.Process) {
+            $ownedRecord.Process.Dispose()
+            $ownedRecord.Process = $null
+        }
+    }
+}
+
+function Complete-PSOBBRedirectedOutput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Threading.Tasks.Task[string]]$StandardOutputTask,
+        [Parameter(Mandatory)][System.Threading.Tasks.Task[string]]$StandardErrorTask,
+        [Parameter(Mandatory)]
+        [System.Threading.CancellationTokenSource]$CancellationSource,
+        [ValidateRange(1, 30000)][int]$TimeoutMilliseconds = 5000
+    )
+
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($drain in @($StandardOutputTask, $StandardErrorTask)) {
+        $remaining = [Math]::Max(
+            1,
+            $TimeoutMilliseconds - [int]$deadline.ElapsedMilliseconds)
+        if (-not $drain.Wait($remaining)) {
+            $CancellationSource.Cancel()
+            throw "Redirected process output did not drain within $TimeoutMilliseconds milliseconds"
+        }
+    }
+    [pscustomobject]@{
+        StandardOutput = $StandardOutputTask.GetAwaiter().GetResult()
+        StandardError = $StandardErrorTask.GetAwaiter().GetResult()
+    }
+}
+
+function Resolve-PSOBBRenderDocClientPoll {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Records = @(),
+        [Parameter(Mandatory)][ValidateRange(0, [int]::MaxValue)]
+        [int]$NamedProcessCount,
+        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)][long]$LaunchStartedAtFileTimeUtc
+    )
+
+    try {
+        if ($Records.Count -gt 1 -or $NamedProcessCount -gt 1) {
+            throw 'More than one PSOBB process appeared after the RenderDoc launch'
+        }
+        if ($NamedProcessCount -gt 0 -and $NamedProcessCount -ne $Records.Count) {
+            throw 'A PSOBB-named process appeared but could not be proven to be the approved client'
+        }
+        if ($Records.Count -ne 1 -or $NamedProcessCount -ne 1) {
+            return $null
+        }
+
+        $candidateRecord = $Records[0]
+        if ([string]$candidateRecord.Channel -cne 'LocalLab' -or
+            -not ([System.IO.Path]::GetFullPath(
+                [string]$candidateRecord.ExecutablePath)).Equals(
+                    [System.IO.Path]::GetFullPath($Profile.ClientExecutable),
+                    [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]$candidateRecord.ExecutableSha256 -cne
+                [string]$Profile.ClientExecutableSha256 -or
+            $null -eq $candidateRecord.StartTimeFileTimeUtc -or
+            [long]$candidateRecord.StartTimeFileTimeUtc -lt
+                $LaunchStartedAtFileTimeUtc) {
+            throw 'The process created by RenderDoc is not the requested exact LocalLab client'
+        }
+
+        $candidateProcess = $candidateRecord.Process
+        if (-not $candidateProcess -or
+            -not (Test-PSOBBProcessAtExactPath `
+                -Process $candidateProcess `
+                -Name 'Psobb' `
+                -ExpectedPath $Profile.ClientExecutable)) {
+            throw 'The RenderDoc client process identity could not be revalidated'
+        }
+        try {
+            $candidateStartTimeUtc = $candidateProcess.StartTime.ToUniversalTime()
+            $candidateStartTimeFileTimeUtc = [long](
+                $candidateStartTimeUtc.ToFileTimeUtc())
+        } catch {
+            throw 'The RenderDoc client creation time could not be revalidated'
+        }
+        if ($candidateStartTimeFileTimeUtc -ne
+            [long]$candidateRecord.StartTimeFileTimeUtc) {
+            throw 'The RenderDoc client PID was reused before capture readiness'
+        }
+
+        $candidateProcess.Refresh()
+        if ($candidateProcess.HasExited -or
+            $candidateProcess.MainWindowHandle -eq [IntPtr]::Zero) {
+            return $null
+        }
+        $window = Get-PSOBBClientWindowPresentation -Process $candidateProcess
+        $targetRecord = [pscustomobject]@{
+            ProcessId = [int]$candidateRecord.ProcessId
+            StartTimeUtc = $candidateStartTimeUtc
+            StartTimeFileTimeUtc = $candidateStartTimeFileTimeUtc
+            Channel = [string]$candidateRecord.Channel
+            ExecutablePath = [string]$candidateRecord.ExecutablePath
+            ExecutableSha256 = [string]$candidateRecord.ExecutableSha256
+        }
+        $candidateRecord.Process = $null
+        [pscustomobject]@{
+            Record = $targetRecord
+            Process = $candidateProcess
+            Window = $window
+        }
+    } finally {
+        Close-PSOBBRenderDocClientProcessRecords -Records $Records
+    }
+}
+
 function Get-PSOBBValidatedRenderDocProfile {
     [CmdletBinding()]
     param(
@@ -531,13 +665,21 @@ if ($MyInvocation.InvocationName -eq '.') {
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$targetProcess = $null
 $clientOperationMutex = Enter-PSOBBClientOperationLock -Layout $layout
 try {
 
-$approvedProcesses = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
-$anyNamedProcesses = @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue)
-if ($approvedProcesses.Count -ne 0 -or $anyNamedProcesses.Count -ne 0) {
-    throw "RenderDoc launch requires no existing PSOBB client process (approved=$($approvedProcesses.Count); named=$($anyNamedProcesses.Count))"
+$approvedProcesses = @()
+try {
+    $approvedProcesses = @(
+        Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
+    $approvedProcessCount = $approvedProcesses.Count
+    $anyNamedProcessCount = Get-PSOBBNamedClientProcessCount
+} finally {
+    Close-PSOBBRenderDocClientProcessRecords -Records $approvedProcesses
+}
+if ($approvedProcessCount -ne 0 -or $anyNamedProcessCount -ne 0) {
+    throw "RenderDoc launch requires no existing PSOBB client process (approved=$approvedProcessCount; named=$anyNamedProcessCount)"
 }
 
 $profile = Get-PSOBBValidatedRenderDocProfile `
@@ -593,9 +735,11 @@ foreach ($argument in $arguments) {
 }
 
 $launchStartedAtUtc = [DateTime]::UtcNow
+$launchStartedAtFileTimeUtc = [long]$launchStartedAtUtc.ToFileTimeUtc()
 $runner = $null
 $stdoutTask = $null
 $stderrTask = $null
+$outputCancellation = $null
 $stdout = ''
 $stderr = ''
 $graphicsRegistryTransaction = $null
@@ -610,17 +754,24 @@ try {
     if (-not $runner) {
         throw 'Windows did not start the locked RenderDoc command-line executable'
     }
-    $stdoutTask = $runner.StandardOutput.ReadToEndAsync()
-    $stderrTask = $runner.StandardError.ReadToEndAsync()
+    $outputCancellation = [System.Threading.CancellationTokenSource]::new()
+    $stdoutTask = $runner.StandardOutput.ReadToEndAsync(
+        $outputCancellation.Token)
+    $stderrTask = $runner.StandardError.ReadToEndAsync(
+        $outputCancellation.Token)
     if (-not $runner.WaitForExit(30000)) {
-        try {
-            $runner.Kill($true)
-            [void]$runner.WaitForExit(10000)
-        } catch { }
+        try { $runner.Kill($true) } catch { }
+        if (-not $runner.WaitForExit(10000)) {
+            throw 'renderdoccmd did not terminate within 10 seconds after cancellation'
+        }
         throw 'renderdoccmd did not return a capture identity within 30 seconds'
     }
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $drainedOutput = Complete-PSOBBRedirectedOutput `
+        -StandardOutputTask $stdoutTask `
+        -StandardErrorTask $stderrTask `
+        -CancellationSource $outputCancellation
+    $stdout = $drainedOutput.StandardOutput
+    $stderr = $drainedOutput.StandardError
     $identityMatches = [regex]::Matches(
         $stderr,
         '(?m)^Launched as ID ([0-9]+)\s*$')
@@ -636,9 +787,10 @@ try {
     }
 } catch {
     $launchError = $_
+    $namedProcessCountAfterLaunchFailure = Get-PSOBBNamedClientProcessCount
     if ($graphicsRegistryTransaction -and
         $graphicsRegistryTransaction.Applied -and
-        @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue).Count -eq 0) {
+        $namedProcessCountAfterLaunchFailure -eq 0) {
         try {
             Restore-PSOBBClientGraphicCtrlBackup `
                 -Layout $layout `
@@ -651,15 +803,9 @@ try {
     }
     throw $launchError
 } finally {
-    $runnerExited = $false
-    if ($runner) {
-        try { $runnerExited = $runner.HasExited } catch { }
-    }
-    if ($stdoutTask -and $runnerExited) {
-        try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { }
-    }
-    if ($stderrTask -and $runnerExited) {
-        try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { }
+    if ($outputCancellation) {
+        $outputCancellation.Cancel()
+        $outputCancellation.Dispose()
     }
     [System.IO.File]::WriteAllText(
         $stdoutPath, $stdout, [System.Text.UTF8Encoding]::new($false))
@@ -675,41 +821,24 @@ $targetRecord = $null
 $targetProcess = $null
 $window = $null
 while ([DateTime]::UtcNow -lt $deadline) {
-    $records = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
-    $named = @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue)
-    if ($records.Count -gt 1 -or $named.Count -gt 1) {
-        throw 'More than one PSOBB process appeared after the RenderDoc launch'
+    $records = @()
+    try {
+        $records = @(
+            Get-PSOBBClientProcessRecords -Layout $layout -Channel All)
+        $namedProcessCount = Get-PSOBBNamedClientProcessCount
+        $readyClient = Resolve-PSOBBRenderDocClientPoll `
+            -Records $records `
+            -NamedProcessCount $namedProcessCount `
+            -Profile $profile `
+            -LaunchStartedAtFileTimeUtc $launchStartedAtFileTimeUtc
+    } finally {
+        Close-PSOBBRenderDocClientProcessRecords -Records $records
     }
-    if ($named.Count -gt 0 -and $named.Count -ne $records.Count) {
-        throw 'A PSOBB-named process appeared but could not be proven to be the approved client'
-    }
-    if ($records.Count -eq 1 -and $named.Count -eq 1) {
-        $candidateRecord = $records[0]
-        if ([string]$candidateRecord.Channel -cne 'LocalLab' -or
-            -not ([System.IO.Path]::GetFullPath([string]$candidateRecord.ExecutablePath)).Equals(
-                [System.IO.Path]::GetFullPath($profile.ClientExecutable),
-                [System.StringComparison]::OrdinalIgnoreCase) -or
-            [string]$candidateRecord.ExecutableSha256 -cne $profile.ClientExecutableSha256 -or
-            [DateTime]$candidateRecord.StartTimeUtc -lt $launchStartedAtUtc.AddSeconds(-2)) {
-            throw 'The process created by RenderDoc is not the requested exact LocalLab client'
-        }
-        $candidateProcess = Get-Process `
-            -Id ([int]$candidateRecord.ProcessId) `
-            -ErrorAction SilentlyContinue
-        if ($candidateProcess -and
-            (Test-PSOBBProcessAtExactPath `
-                -Process $candidateProcess `
-                -Name 'Psobb' `
-                -ExpectedPath $profile.ClientExecutable)) {
-            $candidateProcess.Refresh()
-            if (-not $candidateProcess.HasExited -and
-                $candidateProcess.MainWindowHandle -ne [IntPtr]::Zero) {
-                $targetRecord = $candidateRecord
-                $targetProcess = $candidateProcess
-                $window = Get-PSOBBClientWindowPresentation -Process $candidateProcess
-                break
-            }
-        }
+    if ($readyClient) {
+        $targetRecord = $readyClient.Record
+        $targetProcess = $readyClient.Process
+        $window = $readyClient.Window
+        break
     }
     Start-Sleep -Milliseconds 250
 }
@@ -728,9 +857,8 @@ if ($profileAfter.ProfileSha256 -cne $profile.ProfileSha256 -or
 }
 $targetProcess.Refresh()
 if ($targetProcess.HasExited -or
-    [Math]::Abs((
-        $targetProcess.StartTime.ToUniversalTime() -
-        [DateTime]$targetRecord.StartTimeUtc).TotalSeconds) -gt 0.5 -or
+    [long]$targetProcess.StartTime.ToUniversalTime().ToFileTimeUtc() -ne
+        [long]$targetRecord.StartTimeFileTimeUtc -or
     -not (Test-PSOBBProcessAtExactPath `
         -Process $targetProcess `
         -Name 'Psobb' `
@@ -774,6 +902,7 @@ $manifest = [ordered]@{
         application = 'Psobb.exe'
         processId = [int]$targetRecord.ProcessId
         processStartTimeUtc = ([DateTime]$targetRecord.StartTimeUtc).ToString('o')
+        processStartTimeFileTimeUtc = [long]$targetRecord.StartTimeFileTimeUtc
         executable = 'runtime:' + $relativeExecutable
         executableSize = $profile.ClientExecutableSize
         executableSha256 = $profile.ClientExecutableSha256
@@ -846,5 +975,8 @@ Write-PSOBBJsonAtomically -Value $manifest -Path $manifestPath
     NextAction = 'Bring PSOBB to the required scene and press F12 manually once. Do not enter credentials while recording evidence.'
 }
 } finally {
+    if ($targetProcess) {
+        $targetProcess.Dispose()
+    }
     Exit-PSOBBClientOperationLock -Mutex $clientOperationMutex
 }

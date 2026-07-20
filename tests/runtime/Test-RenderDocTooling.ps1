@@ -4,6 +4,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+. (Join-Path $repositoryRoot 'scripts\PSOBB.Common.ps1')
 $captureScript = Join-Path $repositoryRoot 'scripts\Invoke-PSOBBRenderDocCapture.ps1'
 $registerScript = Join-Path $repositoryRoot 'scripts\Register-PSOBBRenderDocCapture.ps1'
 $replayScript = Join-Path $repositoryRoot 'scripts\Register-PSOBBRenderDocReplayEvidence.ps1'
@@ -26,6 +27,147 @@ function Add-Result {
     })
 }
 
+function Invoke-RenderDocPollFixture {
+    param(
+        [Parameter(Mandatory)][string]$FixtureSource,
+        [Parameter(Mandatory)][DateTime]$ActualStartTimeUtc,
+        [ValidateRange(0, 3)][int]$RecordCount,
+        [ValidateRange(0, 3)][int]$NamedProcessCount,
+        [long]$RecordedFileTimeOffset = 0,
+        [switch]$Ready
+    )
+
+    & {
+        param(
+            $Source, [DateTime]$ActualStart, [int]$Count,
+            [int]$NamedCount, [long]$FileTimeOffset, [bool]$HasWindow)
+
+        $processes = [System.Collections.Generic.List[object]]::new()
+        $records = [System.Collections.Generic.List[object]]::new()
+        foreach ($index in 0..([Math]::Max(0, $Count - 1))) {
+            if ($Count -eq 0) { break }
+            $process = [pscustomobject]@{
+                Id = 7000 + $index
+                StartTime = $ActualStart
+                HasExited = $false
+                MainWindowHandle = if ($HasWindow) {
+                    [IntPtr](100 + $index)
+                } else {
+                    [IntPtr]::Zero
+                }
+                DisposeCount = 0
+            }
+            $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
+            $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+                $this.DisposeCount++
+            }
+            $processes.Add($process)
+            $records.Add([pscustomobject]@{
+                Process = $process
+                ProcessId = 7000 + $index
+                StartTimeUtc = $ActualStart
+                StartTimeFileTimeUtc = (
+                    [long]$ActualStart.ToFileTimeUtc() + $FileTimeOffset)
+                Channel = 'LocalLab'
+                ExecutablePath = 'C:\fixture\Psobb.exe'
+                ExecutableSha256 = 'b' * 64
+            })
+        }
+        function Test-PSOBBProcessAtExactPath {
+            param($Process, $Name, $ExpectedPath)
+            $true
+        }
+        function Get-PSOBBClientWindowPresentation {
+            param($Process)
+            [pscustomobject]@{
+                X = 0
+                Y = 0
+                Width = 2560
+                Height = 1600
+                ClientWidth = 2560
+                ClientHeight = 1600
+                Style = 0
+            }
+        }
+        . ([scriptblock]::Create($Source))
+
+        $output = $null
+        $message = ''
+        try {
+            $output = Resolve-PSOBBRenderDocClientPoll `
+                -Records @($records) `
+                -NamedProcessCount $NamedCount `
+                -Profile ([pscustomobject]@{
+                    ClientExecutable = 'C:\fixture\Psobb.exe'
+                    ClientExecutableSha256 = 'b' * 64
+                }) `
+                -LaunchStartedAtFileTimeUtc (
+                    [long]$ActualStart.ToFileTimeUtc() - 1)
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $productionDisposeCounts = @(
+            $processes | ForEach-Object DisposeCount)
+        if ($output) {
+            $output.Process.Dispose()
+        }
+        foreach ($process in $processes) {
+            if ($process.DisposeCount -eq 0) {
+                $process.Dispose()
+            }
+        }
+        [pscustomobject]@{
+            Accepted = ($null -ne $output)
+            ErrorMessage = $message
+            ProductionDisposeCounts = $productionDisposeCounts
+            FinalDisposeCounts = @($processes | ForEach-Object DisposeCount)
+        }
+    } $FixtureSource $ActualStartTimeUtc $RecordCount $NamedProcessCount `
+        $RecordedFileTimeOffset $Ready.IsPresent
+}
+
+function Invoke-RenderDocDrainTimeoutFixture {
+    param([Parameter(Mandatory)][string]$FunctionSource)
+
+    & {
+        param($Source)
+        . ([scriptblock]::Create($Source))
+        $stdoutSource = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        $stderrSource = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        $cancellation = [System.Threading.CancellationTokenSource]::new()
+        $message = ''
+        try {
+            Complete-PSOBBRedirectedOutput `
+                -StandardOutputTask $stdoutSource.Task `
+                -StandardErrorTask $stderrSource.Task `
+                -CancellationSource $cancellation `
+                -TimeoutMilliseconds 10 | Out-Null
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $cancelled = $cancellation.IsCancellationRequested
+        $cancellation.Dispose()
+        [pscustomobject]@{
+            Cancelled = $cancelled
+            ErrorMessage = $message
+        }
+    } $FunctionSource
+}
+
+function Get-PSOBBTestProcessIds {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+
+    $processes = @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+    try {
+        @($processes | Sort-Object Id | ForEach-Object Id)
+    } finally {
+        foreach ($process in $processes) {
+            $process.Dispose()
+        }
+    }
+}
+
 foreach ($scriptPath in @($captureScript, $registerScript, $replayScript)) {
     $tokens = $null
     $parseErrors = $null
@@ -39,11 +181,27 @@ foreach ($scriptPath in @($captureScript, $registerScript, $replayScript)) {
         -Detail "$($parseErrors.Count) parser error(s)"
 }
 
+$renderDocRecordCloserSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Close-PSOBBRenderDocClientProcessRecords.*?(?=\r?\nfunction Complete-PSOBBRedirectedOutput)').Value
+$renderDocDrainFunctionSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Complete-PSOBBRedirectedOutput.*?(?=\r?\nfunction Resolve-PSOBBRenderDocClientPoll)').Value
+$renderDocPollFunctionSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Resolve-PSOBBRenderDocClientPoll.*?(?=\r?\nfunction Get-PSOBBValidatedRenderDocProfile)').Value
+$renderDocPollFixtureSource = @(
+    $renderDocRecordCloserSource,
+    $renderDocPollFunctionSource) -join "`n"
+
 $prelaunchGuard =
     $captureSource -match 'Get-PSOBBClientProcessRecords -Layout \$layout -Channel All' -and
+    $captureSource -match 'Get-PSOBBNamedClientProcessCount' -and
     $captureSource -match "Get-Process -Name 'Psobb'" -and
-    $captureSource -match 'approvedProcesses\.Count -ne 0' -and
-    $captureSource -match 'anyNamedProcesses\.Count -ne 0' -and
+    $captureSource -match 'approvedProcessCount -ne 0' -and
+    $captureSource -match 'anyNamedProcessCount -ne 0' -and
+    $captureSource -match
+        'Close-PSOBBRenderDocClientProcessRecords -Records \$approvedProcesses' -and
     $captureSource -match 'Assert-PSOBBLocalLabClientRuntimeContract'
 Add-Result 'capture refuses every pre-existing PSOBB process and requires LocalLab' `
     $prelaunchGuard 'approved and same-name inventories must both be empty before launch'
@@ -123,11 +281,80 @@ $identityGuard =
     $captureSource -match 'Launched as ID \(\[0-9\]\+\)' -and
     $captureSource -match 'ConvertTo-PSOBBUInt32ExitCode' -and
     $captureSource -match 'unsignedExitCode -ne \$captureIdentity' -and
-    $captureSource -match 'MainWindowHandle -ne \[IntPtr\]::Zero' -and
+    $captureSource -match 'MainWindowHandle -eq \[IntPtr\]::Zero' -and
     $captureSource -match 'Test-PSOBBProcessAtExactPath' -and
-    $captureSource -match 'StartTimeUtc'
+    $captureSource -match 'launchStartedAtFileTimeUtc' -and
+    $captureSource -match 'StartTimeFileTimeUtc' -and
+    $captureSource -match 'candidateStartTimeFileTimeUtc -ne' -and
+    $captureSource -match 'client PID was reused before capture readiness' -and
+    $captureSource -notmatch '\[Math\]::Abs'
 Add-Result 'capture validates RenderDoc and target process identities' $identityGuard `
-    'the intentional nonzero CLI identity, PID, path, hash, start time, and window are checked'
+    'the intentional nonzero CLI identity, PID, path, hash, exact creation FILETIME, and window are checked'
+
+$pollStartTimeUtc = [DateTime]::SpecifyKind(
+    [DateTime]::ParseExact(
+        '2026-07-19T10:20:30.1234567',
+        'yyyy-MM-ddTHH:mm:ss.fffffff',
+        [Globalization.CultureInfo]::InvariantCulture),
+    [DateTimeKind]::Utc)
+$acceptedPoll = Invoke-RenderDocPollFixture `
+    -FixtureSource $renderDocPollFixtureSource `
+    -ActualStartTimeUtc $pollStartTimeUtc `
+    -RecordCount 1 `
+    -NamedProcessCount 1 `
+    -Ready
+$reusedPoll = Invoke-RenderDocPollFixture `
+    -FixtureSource $renderDocPollFixtureSource `
+    -ActualStartTimeUtc $pollStartTimeUtc `
+    -RecordCount 1 `
+    -NamedProcessCount 1 `
+    -RecordedFileTimeOffset 1 `
+    -Ready
+$waitingPoll = Invoke-RenderDocPollFixture `
+    -FixtureSource $renderDocPollFixtureSource `
+    -ActualStartTimeUtc $pollStartTimeUtc `
+    -RecordCount 1 `
+    -NamedProcessCount 1
+$multiplePoll = Invoke-RenderDocPollFixture `
+    -FixtureSource $renderDocPollFixtureSource `
+    -ActualStartTimeUtc $pollStartTimeUtc `
+    -RecordCount 2 `
+    -NamedProcessCount 2 `
+    -Ready
+Add-Result 'RenderDoc poll transfers only one exact ready process owner' (
+    $acceptedPoll.Accepted -and
+    [int]$acceptedPoll.ProductionDisposeCounts[0] -eq 0 -and
+    [int]$acceptedPoll.FinalDisposeCounts[0] -eq 1) `
+    'the accepted poll transfers its handle to the caller, which disposes it'
+Add-Result 'RenderDoc rejected, waiting, and multi-record polls dispose snapshots' (
+    -not $reusedPoll.Accepted -and
+    $reusedPoll.ErrorMessage -match 'PID was reused' -and
+    [int]$reusedPoll.ProductionDisposeCounts[0] -eq 1 -and
+    -not $waitingPoll.Accepted -and
+    [int]$waitingPoll.ProductionDisposeCounts[0] -eq 1 -and
+    -not $multiplePoll.Accepted -and
+    $multiplePoll.ErrorMessage -match 'More than one' -and
+    @($multiplePoll.ProductionDisposeCounts |
+        Where-Object { $_ -ne 1 }).Count -eq 0 -and
+    @($multiplePoll.FinalDisposeCounts |
+        Where-Object { $_ -ne 1 }).Count -eq 0) `
+    'PID reuse, no-window retries, and every multi-record snapshot fail closed without leaks'
+
+$renderDocDrainTimeout = Invoke-RenderDocDrainTimeoutFixture `
+    -FunctionSource $renderDocDrainFunctionSource
+$boundedProcessGuard =
+    $captureSource -match 'WaitForExit\(30000\)' -and
+    $captureSource -match 'WaitForExit\(10000\)' -and
+    $captureSource -match 'ReadToEndAsync\(\s*\$outputCancellation\.Token\)' -and
+    $captureSource -match '\$runner\.Dispose\(\)' -and
+    $captureSource -match '\$targetProcess\.Dispose\(\)' -and
+    $captureSource -match 'Exit-PSOBBClientOperationLock -Mutex \$clientOperationMutex' -and
+    $renderDocDrainTimeout.Cancelled -and
+    $renderDocDrainTimeout.ErrorMessage -match
+        'did not drain within 10 milliseconds'
+Add-Result 'RenderDoc child and redirected streams have finite cancellation' `
+    $boundedProcessGuard `
+    'a synthetic stuck drain is cancelled after its bound; child, target, and lifecycle lock clean up'
 
 $privacyGuard =
     $captureSource -match 'graphics-evidence' -and
@@ -268,9 +495,7 @@ try {
     $fixtureNamesBefore = @(
         Get-ChildItem -LiteralPath $fixtureRoot -File | Sort-Object Name |
             ForEach-Object Name)
-    $psobbIdsBefore = @(
-        Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue |
-            Sort-Object Id | ForEach-Object Id)
+    $psobbIdsBefore = @(Get-PSOBBTestProcessIds -Name 'Psobb')
 
     . $captureScript -ProfileId 'renderdoc-test-probe'
     $supportedContract = Get-PSOBBDgVoodooRenderDocImportContract `
@@ -324,8 +549,7 @@ try {
             Where-Object Name -ne 'pe-fixtures').Count -eq 0 -and
         @(Compare-Object `
             $psobbIdsBefore `
-            @(Get-Process -Name 'Psobb' -ErrorAction SilentlyContinue |
-                Sort-Object Id | ForEach-Object Id)).Count -eq 0) `
+            @(Get-PSOBBTestProcessIds -Name 'Psobb')).Count -eq 0) `
         'the executable rejection path only reads the supplied PE fixture'
 
     $runtimeRoot = Join-Path $temporaryRoot 'runtime'
@@ -340,6 +564,7 @@ try {
         (Join-Path $runtimeRoot '.psobb-runtime.json'),
         ($marker | ConvertTo-Json -Depth 5),
         [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedAcl -Path (Join-Path $runtimeRoot '.psobb-runtime.json')
 
     function New-SyntheticRun {
         param(

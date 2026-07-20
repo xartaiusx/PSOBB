@@ -42,6 +42,50 @@ function Convert-NullableDouble {
     $parsed
 }
 
+function Close-PSOBBTelemetryClientProcessRecords {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Records = @())
+
+    foreach ($ownedRecord in @($Records)) {
+        if ($null -ne $ownedRecord -and
+            $ownedRecord.PSObject.Properties.Name -contains 'Process' -and
+            $null -ne $ownedRecord.Process) {
+            $ownedRecord.Process.Dispose()
+            $ownedRecord.Process = $null
+        }
+    }
+}
+
+function Get-PSOBBValidatedTelemetryProcessStart {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Process,
+        [Parameter(Mandatory)]$Record
+    )
+
+    if ([int]$Process.Id -ne [int]$Record.ProcessId -or
+        $null -eq $Record.StartTimeFileTimeUtc) {
+        throw 'The approved PSOBB process record has no exact creation identity'
+    }
+    try {
+        $startTimeUtc = $Process.StartTime.ToUniversalTime()
+        $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
+    } catch {
+        throw "The creation time for approved PSOBB PID $($Record.ProcessId) could not be verified"
+    }
+    if ($startTimeFileTimeUtc -ne [long]$Record.StartTimeFileTimeUtc) {
+        throw 'The approved PSOBB process ID was reused during telemetry capture'
+    }
+    [pscustomobject]@{
+        StartTimeUtc = $startTimeUtc
+        StartTimeFileTimeUtc = $startTimeFileTimeUtc
+    }
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $fullOutputPath = [IO.Path]::GetFullPath($OutputPath)
@@ -54,6 +98,9 @@ if (-not $fullOutputPath.StartsWith(
     throw 'Telemetry must be a new JSON file under the private graphics-evidence tree'
 }
 
+$records = @()
+$process = $null
+try {
 $records = @(Get-PSOBBClientProcessRecords -Layout $layout -Channel $Channel)
 if ($records.Count -ne 1) {
     throw "Telemetry requires exactly one approved $Channel PSOBB client"
@@ -69,6 +116,9 @@ $identity = Assert-PSOBBApprovedClientExecutable -Path ([string]$record.Executab
 if ($identity.Sha256 -cne [string]$record.ExecutableSha256) {
     throw 'The approved PSOBB executable changed before telemetry capture'
 }
+$processStart = Get-PSOBBValidatedTelemetryProcessStart `
+    -Process $process `
+    -Record $record
 
 $clientRoot = Split-Path -Parent ([string]$record.ExecutablePath)
 $profilePath = Join-Path $clientRoot 'client-profile.json'
@@ -174,19 +224,20 @@ if ($startupReceipts.Count -gt 1) {
 }
 $startupEvidence = [ordered]@{ available = $false }
 if ($startupReceipts.Count -eq 1) {
-    $startupReceipt = Get-Content -Raw -LiteralPath $startupReceipts[0].FullName |
-        ConvertFrom-Json -Depth 12 -DateKind String
-    $receiptProcessStartUtc = [DateTimeOffset]::Parse(
+    $startupReceipt = Read-PSOBBStrictLifecycleJson `
+        -Path $startupReceipts[0].FullName `
+        -Root $layout.Root `
+        -Contract ClientStartupReceipt
+    [DateTimeOffset]::Parse(
         [string]$startupReceipt.processStartTimeUtc,
         [Globalization.CultureInfo]::InvariantCulture,
-        [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
-    if ([int]$startupReceipt.schemaVersion -ne 1 -or
+        [Globalization.DateTimeStyles]::RoundtripKind) | Out-Null
+    if ([int]$startupReceipt.schemaVersion -ne 3 -or
         [int]$startupReceipt.processId -ne $process.Id -or
         [string]$startupReceipt.executableSha256 -cne $identity.Sha256 -or
         [string]$startupReceipt.profileId -cne $ProfileId -or
-        [Math]::Abs((
-            $receiptProcessStartUtc -
-            $process.StartTime.ToUniversalTime()).TotalSeconds) -gt 0.5) {
+        [long]$startupReceipt.processStartTimeFileTimeUtc -ne
+            [long]$processStart.StartTimeFileTimeUtc) {
         throw 'The startup receipt does not match the approved PSOBB process and profile'
     }
     $startupEvidence = [ordered]@{
@@ -197,6 +248,15 @@ if ($startupReceipts.Count -eq 1) {
         sha256 = Get-LowerSha256 -Path $startupReceipts[0].FullName
         startupElapsedMilliseconds = [double]$startupReceipt.startupElapsedMilliseconds
     }
+}
+$process.Refresh()
+$processStart = Get-PSOBBValidatedTelemetryProcessStart `
+    -Process $process `
+    -Record $record
+if ($process.HasExited -or
+    -not (Test-PSOBBProcessAtExactPath `
+        -Process $process -Name 'Psobb' -ExpectedPath ([string]$record.ExecutablePath))) {
+    throw 'The approved PSOBB process identity changed before telemetry was written'
 }
 $document = [ordered]@{
     schemaVersion = 1
@@ -212,8 +272,9 @@ $document = [ordered]@{
     process = [ordered]@{
         application = 'Psobb.exe'
         processId = $process.Id
-        processStartTimeUtc = $process.StartTime.ToUniversalTime().ToString('o')
-        elapsedSeconds = [Math]::Round(($capturedAtUtc - $process.StartTime.ToUniversalTime()).TotalSeconds, 3)
+        processStartTimeUtc = $processStart.StartTimeUtc.ToString('o')
+        processStartTimeFileTimeUtc = [long]$processStart.StartTimeFileTimeUtc
+        elapsedSeconds = [Math]::Round(($capturedAtUtc - $processStart.StartTimeUtc).TotalSeconds, 3)
         executableSize = $identity.Size
         executableSha256 = $identity.Sha256
         workingSetBytes = $process.WorkingSet64
@@ -278,4 +339,10 @@ try {
     ProcessId = $process.Id
     OutputPath = $fullOutputPath
     Sha256 = Get-LowerSha256 -Path $fullOutputPath
+}
+} finally {
+    if ($process) {
+        $process.Dispose()
+    }
+    Close-PSOBBTelemetryClientProcessRecords -Records $records
 }

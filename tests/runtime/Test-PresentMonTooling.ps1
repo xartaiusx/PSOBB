@@ -7,9 +7,11 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'
 $captureScript = Join-Path $repositoryRoot 'scripts\Invoke-PSOBBPresentMonCapture.ps1'
 $metricsScript = Join-Path $repositoryRoot 'scripts\Get-PSOBBPresentMonMetrics.ps1'
 $telemetryScript = Join-Path $repositoryRoot 'scripts\Capture-PSOBBGraphicsTelemetry.ps1'
+$clientGraphicsScript = Join-Path $repositoryRoot 'scripts\Test-PSOBBClientGraphics.ps1'
 $captureSource = Get-Content -Raw -LiteralPath $captureScript
 $metricsSource = Get-Content -Raw -LiteralPath $metricsScript
 $telemetrySource = Get-Content -Raw -LiteralPath $telemetryScript
+$clientGraphicsSource = Get-Content -Raw -LiteralPath $clientGraphicsScript
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Add-Result {
@@ -26,7 +28,252 @@ function Add-Result {
     })
 }
 
-foreach ($scriptPath in @($captureScript, $metricsScript, $telemetryScript)) {
+function Invoke-ValidatedCaptureProcessFixture {
+    param(
+        [Parameter(Mandatory)][string]$FixtureSource,
+        [AllowNull()]$RecordedFileTimeUtc,
+        [Parameter(Mandatory)][DateTime]$ActualStartTimeUtc,
+        [ValidateRange(0, 3)][int]$RecordCount = 1
+    )
+
+    & {
+        param($Source, $RecordedFileTime, [DateTime]$ActualStart, [int]$Count)
+
+        $fakeProcesses = [System.Collections.Generic.List[object]]::new()
+        $fixtureRecords = [System.Collections.Generic.List[object]]::new()
+        foreach ($index in 0..([Math]::Max(0, $Count - 1))) {
+            if ($Count -eq 0) { break }
+            $fakeProcess = [pscustomobject]@{
+                Id = 4242 + $index
+                StartTime = $ActualStart
+                DisposeCount = 0
+            }
+            $fakeProcess | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+                $this.DisposeCount++
+            }
+            $fakeProcesses.Add($fakeProcess)
+            $fixtureRecords.Add([pscustomobject]@{
+                Process = $fakeProcess
+                ProcessId = 4242 + $index
+                Channel = 'LocalLab'
+                ExecutablePath = 'C:\fixture\Psobb.exe'
+                ExecutableSha256 = 'a' * 64
+                StartTimeUtc = $ActualStart
+                StartTimeFileTimeUtc = $RecordedFileTime
+            })
+        }
+        function Get-PSOBBClientProcessRecords {
+            param($Layout, $Channel)
+            @($fixtureRecords)
+        }
+        function Test-PSOBBProcessAtExactPath {
+            param($Process, $Name, $ExpectedPath)
+            $true
+        }
+        . ([scriptblock]::Create($Source))
+
+        $validated = $null
+        $message = ''
+        try {
+            $validated = Get-PSOBBValidatedCaptureProcess `
+                -Layout ([pscustomobject]@{}) `
+                -Profile ([pscustomobject]@{
+                    ClientExecutable = 'C:\fixture\Psobb.exe'
+                    ClientExecutableSha256 = 'a' * 64
+                }) `
+                -SelectedChannel LocalLab
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $disposedBeforeOwner = @($fakeProcesses | ForEach-Object DisposeCount)
+        if ($validated) {
+            $validated.Process.Dispose()
+        }
+        [pscustomobject]@{
+            Accepted = ($null -ne $validated)
+            ErrorMessage = $message
+            DisposedBeforeOwner = $disposedBeforeOwner
+            DisposedAfterOwner = @($fakeProcesses | ForEach-Object DisposeCount)
+            StartTimeFileTimeUtc = if ($validated) {
+                [long]$validated.StartTimeFileTimeUtc
+            } else {
+                $null
+            }
+        }
+    } $FixtureSource $RecordedFileTimeUtc $ActualStartTimeUtc $RecordCount
+}
+
+function Invoke-LocalLabGraphicsFixture {
+    param(
+        [Parameter(Mandatory)][string]$FixtureSource,
+        [Parameter(Mandatory)][string]$Renderer,
+        [Parameter(Mandatory)][string]$ProfileId,
+        [Parameter(Mandatory)][string]$WindowMode,
+        [string]$ExpectedRenderer = '',
+        [string]$ExpectedProfileId = '',
+        [string]$ExpectedWindowMode = '',
+        [ValidateRange(0, 3)][int]$ProcessCount = 0,
+        [switch]$RequireRunning
+    )
+
+    & {
+        param(
+            $Source, $ActualRenderer, $ActualProfileId, $ActualWindowMode,
+            $ExpectedRendererValue, $ExpectedProfileIdValue,
+            $ExpectedWindowModeValue, [int]$Count, [bool]$MustBeRunning)
+
+        $processes = [System.Collections.Generic.List[object]]::new()
+        foreach ($index in 0..([Math]::Max(0, $Count - 1))) {
+            if ($Count -eq 0) { break }
+            $process = [pscustomobject]@{
+                Id = 6000 + $index
+                DisposeCount = 0
+            }
+            $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+                $this.DisposeCount++
+            }
+            $processes.Add($process)
+        }
+        function Assert-PSOBBLocalLabClientRuntimeContract {
+            param($Layout)
+            [pscustomobject]@{
+                renderer = $ActualRenderer
+                profileId = $ActualProfileId
+                defaultWindowMode = $ActualWindowMode
+            }
+        }
+        function Get-PSOBBClientExecutablePath {
+            param($Layout, $Channel)
+            'C:\fixture\Psobb.exe'
+        }
+        function Get-PSOBBProcessesAtExactPath {
+            param($Name, $ExpectedPath)
+            @($processes)
+        }
+        . ([scriptblock]::Create($Source))
+
+        $output = $null
+        $message = ''
+        try {
+            $output = Test-PSOBBLocalLabClientGraphics `
+                -Layout ([pscustomobject]@{}) `
+                -ExpectedRenderer $ExpectedRendererValue `
+                -ExpectedProfileId $ExpectedProfileIdValue `
+                -ExpectedWindowMode $ExpectedWindowModeValue `
+                -RequireRunning:$MustBeRunning
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $productionDisposeCounts = @(
+            $processes | ForEach-Object DisposeCount)
+        foreach ($process in $processes) {
+            if ($process.DisposeCount -eq 0) {
+                $process.Dispose()
+            }
+        }
+        [pscustomobject]@{
+            Accepted = ($null -ne $output)
+            Output = $output
+            ErrorMessage = $message
+            ProductionDisposeCounts = $productionDisposeCounts
+            FinalDisposeCounts = @($processes | ForEach-Object DisposeCount)
+        }
+    } $FixtureSource $Renderer $ProfileId $WindowMode $ExpectedRenderer `
+        $ExpectedProfileId $ExpectedWindowMode $ProcessCount `
+        $RequireRunning.IsPresent
+}
+
+function Invoke-DrainTimeoutFixture {
+    param([Parameter(Mandatory)][string]$FunctionSource)
+
+    & {
+        param($Source)
+        . ([scriptblock]::Create($Source))
+        $stdoutSource = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        $stderrSource = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        $cancellation = [System.Threading.CancellationTokenSource]::new()
+        $message = ''
+        try {
+            Complete-PSOBBRedirectedOutput `
+                -StandardOutputTask $stdoutSource.Task `
+                -StandardErrorTask $stderrSource.Task `
+                -CancellationSource $cancellation `
+                -TimeoutMilliseconds 10 | Out-Null
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $cancelled = $cancellation.IsCancellationRequested
+        $cancellation.Dispose()
+        [pscustomobject]@{
+            Cancelled = $cancelled
+            ErrorMessage = $message
+        }
+    } $FunctionSource
+}
+
+function Invoke-TelemetryIdentityFixture {
+    param(
+        [Parameter(Mandatory)][string]$FixtureSource,
+        [Parameter(Mandatory)][DateTime]$RecordedStartTimeUtc,
+        [switch]$ChangeBeforeWrite
+    )
+
+    & {
+        param($Source, [DateTime]$RecordedStart, [bool]$ChangeIdentity)
+
+        $recordProcess = [pscustomobject]@{ DisposeCount = 0 }
+        $recordProcess | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+            $this.DisposeCount++
+        }
+        $liveProcess = [pscustomobject]@{
+            Id = 4242
+            StartTime = $RecordedStart
+            DisposeCount = 0
+        }
+        $liveProcess | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+            $this.DisposeCount++
+        }
+        $record = [pscustomobject]@{
+            Process = $recordProcess
+            ProcessId = 4242
+            StartTimeFileTimeUtc = [long]$RecordedStart.ToFileTimeUtc()
+        }
+        . ([scriptblock]::Create($Source))
+
+        $firstAccepted = $false
+        $secondAccepted = $false
+        $message = ''
+        try {
+            Get-PSOBBValidatedTelemetryProcessStart `
+                -Process $liveProcess -Record $record | Out-Null
+            $firstAccepted = $true
+            if ($ChangeIdentity) {
+                $liveProcess.StartTime = $RecordedStart.AddTicks(1)
+            }
+            Get-PSOBBValidatedTelemetryProcessStart `
+                -Process $liveProcess -Record $record | Out-Null
+            $secondAccepted = $true
+        } catch {
+            $message = $_.Exception.Message
+        } finally {
+            Close-PSOBBTelemetryClientProcessRecords -Records @($record)
+            $liveProcess.Dispose()
+        }
+        [pscustomobject]@{
+            FirstAccepted = $firstAccepted
+            SecondAccepted = $secondAccepted
+            ErrorMessage = $message
+            RecordDisposeCount = [int]$recordProcess.DisposeCount
+            LiveDisposeCount = [int]$liveProcess.DisposeCount
+        }
+    } $FixtureSource $RecordedStartTimeUtc $ChangeBeforeWrite.IsPresent
+}
+
+foreach ($scriptPath in @(
+        $captureScript,
+        $metricsScript,
+        $telemetryScript,
+        $clientGraphicsScript)) {
     $tokens = $null
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseFile(
@@ -64,10 +311,47 @@ $clientGuard =
     $captureSource -match 'records\.Count -ne 1' -and
     $captureSource -match 'Test-PSOBBProcessAtExactPath' -and
     $captureSource -match 'Assert-PSOBBApprovedClientExecutable' -and
-    $captureSource -match 'StartTimeUtc' -and
+    $captureSource -match 'StartTimeFileTimeUtc' -and
     $captureSource -match 'Assert-PSOBBCaptureIdentityUnchanged'
 Add-Result 'capture pins one exact running PSOBB profile and process' $clientGuard `
-    'catalog, materialized profile, path, hash, PID, and start time are checked before and after capture'
+    'catalog, materialized profile, path, hash, PID, and exact creation FILETIME are checked before and after capture'
+
+$validatedProcessSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Get-PSOBBValidatedCaptureProcess.*?(?=\r?\nfunction Get-PSOBBLockedPresentMon)').Value
+$presentMonRecordCloserSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Close-PSOBBPresentMonClientProcessRecords.*?(?=\r?\nfunction Complete-PSOBBRedirectedOutput)').Value
+$validatedProcessFixtureSource = @(
+    $presentMonRecordCloserSource,
+    $validatedProcessSource) -join "`n"
+$drainFunctionSource = [regex]::Match(
+    $captureSource,
+    '(?s)function Complete-PSOBBRedirectedOutput.*?(?=\r?\nfunction Get-PSOBBValidatedCaptureProfile)').Value
+$telemetryRecordCloserSource = [regex]::Match(
+    $telemetrySource,
+    '(?s)function Close-PSOBBTelemetryClientProcessRecords.*?(?=\r?\nfunction Get-PSOBBValidatedTelemetryProcessStart)').Value
+$telemetryIdentityFunctionSource = [regex]::Match(
+    $telemetrySource,
+    '(?s)function Get-PSOBBValidatedTelemetryProcessStart.*?(?=\r?\nif \(\$MyInvocation)').Value
+$telemetryIdentityFixtureSource = @(
+    $telemetryRecordCloserSource,
+    $telemetryIdentityFunctionSource) -join "`n"
+$localLabGraphicsFunctionSource = [regex]::Match(
+    $clientGraphicsSource,
+    '(?s)function Test-PSOBBLocalLabClientGraphics.*?(?=\r?\nif \(\$MyInvocation)').Value
+$exactProcessIdentityGuard =
+    -not [string]::IsNullOrWhiteSpace($validatedProcessSource) -and
+    $validatedProcessSource -match '\$null -eq \$record\.StartTimeFileTimeUtc' -and
+    $validatedProcessSource -match '\$startTimeUtc\.ToFileTimeUtc\(\)' -and
+    $validatedProcessSource -match
+        '\$startTimeFileTimeUtc -ne \[long\]\$record\.StartTimeFileTimeUtc' -and
+    $validatedProcessSource -match 'process ID was reused before capture' -and
+    $validatedProcessSource -notmatch '\[Math\]::Abs|record\.StartTimeUtc' -and
+    -not [string]::IsNullOrWhiteSpace($presentMonRecordCloserSource)
+Add-Result 'capture rejects PID reuse by exact process creation FILETIME' `
+    $exactProcessIdentityGuard `
+    'a matching human-readable timestamp cannot replace the schema-3 FILETIME identity'
 
 $telemetryContract =
     $captureSource -match 'Capture-PSOBBGraphicsTelemetry\.ps1' -and
@@ -91,6 +375,22 @@ Add-Result 'capture binds before/after memory, GPU, thermal, and throttle teleme
     $telemetryContract `
     'two hash-bound telemetry artifacts accompany every timed PresentMon run'
 
+$startupReceiptSource = [regex]::Match(
+    $telemetrySource,
+    '(?s)\$startupEvidence\s*=.*?(?=\r?\n\$document\s*=)').Value
+$startupReceiptContract =
+    -not [string]::IsNullOrWhiteSpace($startupReceiptSource) -and
+    $startupReceiptSource -match 'Read-PSOBBStrictLifecycleJson' -and
+    $startupReceiptSource -match '-Contract ClientStartupReceipt' -and
+    $startupReceiptSource -match 'schemaVersion -ne 3' -and
+    $startupReceiptSource -match 'processStartTimeFileTimeUtc -ne' -and
+    $startupReceiptSource -match
+        '\$processStart\.StartTimeFileTimeUtc' -and
+    $startupReceiptSource -notmatch '\[Math\]::Abs'
+Add-Result 'schema-3 startup receipts require exact process creation FILETIME' `
+    $startupReceiptContract `
+    'strict receipt parsing binds PID/profile/executable to processStartTimeFileTimeUtc'
+
 $utcSample = '2026-07-15T21:35:51.4621924Z'
 $parsedUtcSample = [DateTimeOffset]::Parse(
     $utcSample,
@@ -101,6 +401,174 @@ $utcReceiptComparisonValid =
     $parsedUtcSample.ToString('o') -ceq '2026-07-15T21:35:51.4621924Z'
 Add-Result 'startup receipt timestamps preserve UTC across local time zones' `
     $utcReceiptComparisonValid $parsedUtcSample.ToString('o')
+
+$actualStartTimeUtc = [DateTime]::SpecifyKind(
+    [DateTime]::ParseExact(
+        '2026-07-15T21:35:51.4621924',
+        'yyyy-MM-ddTHH:mm:ss.fffffff',
+        [Globalization.CultureInfo]::InvariantCulture),
+    [DateTimeKind]::Utc)
+$actualStartFileTimeUtc = [long]$actualStartTimeUtc.ToFileTimeUtc()
+$exactIdentity = Invoke-ValidatedCaptureProcessFixture `
+    -FixtureSource $validatedProcessFixtureSource `
+    -RecordedFileTimeUtc $actualStartFileTimeUtc `
+    -ActualStartTimeUtc $actualStartTimeUtc
+$reusedPid = Invoke-ValidatedCaptureProcessFixture `
+    -FixtureSource $validatedProcessFixtureSource `
+    -RecordedFileTimeUtc ($actualStartFileTimeUtc + 1) `
+    -ActualStartTimeUtc $actualStartTimeUtc
+$missingFileTime = Invoke-ValidatedCaptureProcessFixture `
+    -FixtureSource $validatedProcessFixtureSource `
+    -RecordedFileTimeUtc $null `
+    -ActualStartTimeUtc $actualStartTimeUtc
+$multipleRecords = Invoke-ValidatedCaptureProcessFixture `
+    -FixtureSource $validatedProcessFixtureSource `
+    -RecordedFileTimeUtc $actualStartFileTimeUtc `
+    -ActualStartTimeUtc $actualStartTimeUtc `
+    -RecordCount 2
+Add-Result 'synthetic exact FILETIME identity is accepted with caller ownership' (
+    $exactIdentity.Accepted -and
+    [int]$exactIdentity.DisposedBeforeOwner[0] -eq 0 -and
+    [int]$exactIdentity.DisposedAfterOwner[0] -eq 1 -and
+    [long]$exactIdentity.StartTimeFileTimeUtc -eq $actualStartFileTimeUtc) `
+    "fileTime=$actualStartFileTimeUtc"
+Add-Result 'rejected and multi-record snapshots fail closed and dispose' (
+    -not $reusedPid.Accepted -and
+    $reusedPid.ErrorMessage -match 'process ID was reused' -and
+    [int]$reusedPid.DisposedBeforeOwner[0] -eq 1 -and
+    -not $missingFileTime.Accepted -and
+    $missingFileTime.ErrorMessage -match 'process ID was reused' -and
+    [int]$missingFileTime.DisposedBeforeOwner[0] -eq 1 -and
+    -not $multipleRecords.Accepted -and
+    $multipleRecords.ErrorMessage -match 'exactly one' -and
+    @($multipleRecords.DisposedBeforeOwner | Where-Object { $_ -ne 1 }).Count -eq 0) `
+    'off-by-one, absent FILETIME, and every multi-record process snapshot are rejected and released'
+
+$telemetryExact = Invoke-TelemetryIdentityFixture `
+    -FixtureSource $telemetryIdentityFixtureSource `
+    -RecordedStartTimeUtc $actualStartTimeUtc
+$telemetryChanged = Invoke-TelemetryIdentityFixture `
+    -FixtureSource $telemetryIdentityFixtureSource `
+    -RecordedStartTimeUtc $actualStartTimeUtc `
+    -ChangeBeforeWrite
+$telemetryValidationCallCount = [regex]::Matches(
+    $telemetrySource,
+    'Get-PSOBBValidatedTelemetryProcessStart\s+`').Count
+Add-Result 'telemetry revalidates exact live FILETIME before sampling and writing' (
+    $telemetryExact.FirstAccepted -and
+    $telemetryExact.SecondAccepted -and
+    $telemetryExact.RecordDisposeCount -eq 1 -and
+    $telemetryExact.LiveDisposeCount -eq 1 -and
+    $telemetryChanged.FirstAccepted -and
+    -not $telemetryChanged.SecondAccepted -and
+    $telemetryChanged.ErrorMessage -match 'reused during telemetry capture' -and
+    $telemetryChanged.RecordDisposeCount -eq 1 -and
+    $telemetryChanged.LiveDisposeCount -eq 1 -and
+    $telemetryValidationCallCount -ge 2) `
+    'a live identity change after sampling fails before output and both process owners are released'
+
+$drainTimeout = Invoke-DrainTimeoutFixture `
+    -FunctionSource $drainFunctionSource
+$boundedDrainGuard =
+    $captureSource -match 'WaitForExit\(\$maximumWaitMilliseconds\)' -and
+    $captureSource -match 'WaitForExit\(10000\)' -and
+    $captureSource -match 'ReadToEndAsync\(\s*\$outputCancellation\.Token\)' -and
+    $captureSource -match '\$captureProcess\.Dispose\(\)' -and
+    $drainTimeout.Cancelled -and
+    $drainTimeout.ErrorMessage -match 'did not drain within 10 milliseconds'
+Add-Result 'PresentMon child and redirected streams have finite cancellation' `
+    $boundedDrainGuard `
+    'a synthetic stuck drain is cancelled after its bound; child termination and disposal remain finite'
+
+$localLabSurfaceGuard =
+    $captureSource -match
+        '(?s)\$SelectedChannel -eq ''LocalLab''.*?Assert-PSOBBLocalLabClientRuntimeContract' -and
+    $telemetrySource -match
+        '(?s)\$Channel -eq ''LocalLab''.*?Assert-PSOBBLocalLabClientRuntimeContract' -and
+    -not [string]::IsNullOrWhiteSpace($localLabGraphicsFunctionSource) -and
+    $clientGraphicsSource -match "'DxvkVulkan', 'D3D8To9'" -and
+    $clientGraphicsSource -match '\[string\]\$ExpectedProfileId' -and
+    $clientGraphicsSource -match 'ExpectedGraphicsPreset does not apply to LocalLab'
+$localLabBinding = & {
+    param($ScriptPath)
+    $message = ''
+    try {
+        . $ScriptPath `
+            -Channel LocalLab `
+            -ExpectedRenderer D3D8To9 `
+            -ExpectedProfileId d3d8to9-canary `
+            -ExpectedWindowMode Resizable
+    } catch {
+        $message = $_.Exception.Message
+    }
+    [pscustomobject]@{
+        Accepted = [string]::IsNullOrEmpty($message)
+        ErrorMessage = $message
+    }
+} $clientGraphicsScript
+Add-Result 'graphics callers expose the exact LocalLab renderer and profile surface' `
+    ($localLabSurfaceGuard -and $localLabBinding.Accepted) `
+    'LocalLab supports DXVK/D3D8To9 renderer expectations and an explicit profile ID'
+
+$localLabSuccess = Invoke-LocalLabGraphicsFixture `
+    -FixtureSource $localLabGraphicsFunctionSource `
+    -Renderer DxvkVulkan `
+    -ProfileId dxvk-canary `
+    -WindowMode Borderless `
+    -ExpectedRenderer DxvkVulkan `
+    -ExpectedProfileId dxvk-canary `
+    -ExpectedWindowMode Borderless `
+    -ProcessCount 1 `
+    -RequireRunning
+$localLabAlternate = Invoke-LocalLabGraphicsFixture `
+    -FixtureSource $localLabGraphicsFunctionSource `
+    -Renderer D3D8To9 `
+    -ProfileId d3d8to9-canary `
+    -WindowMode Resizable `
+    -ExpectedRenderer D3D8To9 `
+    -ExpectedProfileId d3d8to9-canary `
+    -ExpectedWindowMode Resizable
+$localLabMissing = Invoke-LocalLabGraphicsFixture `
+    -FixtureSource $localLabGraphicsFunctionSource `
+    -Renderer DxvkVulkan `
+    -ProfileId dxvk-canary `
+    -WindowMode Borderless `
+    -ProcessCount 0 `
+    -RequireRunning
+$localLabMultiple = Invoke-LocalLabGraphicsFixture `
+    -FixtureSource $localLabGraphicsFunctionSource `
+    -Renderer DxvkVulkan `
+    -ProfileId dxvk-canary `
+    -WindowMode Borderless `
+    -ProcessCount 2
+$localLabMismatch = Invoke-LocalLabGraphicsFixture `
+    -FixtureSource $localLabGraphicsFunctionSource `
+    -Renderer DxvkVulkan `
+    -ProfileId dxvk-canary `
+    -WindowMode Borderless `
+    -ExpectedProfileId d3d8to9-canary
+Add-Result 'LocalLab exact expectations and running branch execute successfully' (
+    $localLabSuccess.Accepted -and
+    [string]$localLabSuccess.Output.Renderer -ceq 'DxvkVulkan' -and
+    [string]$localLabSuccess.Output.ProfileId -ceq 'dxvk-canary' -and
+    $localLabSuccess.Output.Running -and
+    [int]$localLabSuccess.ProductionDisposeCounts[0] -eq 1 -and
+    [int]$localLabSuccess.FinalDisposeCounts[0] -eq 1 -and
+    $localLabAlternate.Accepted -and
+    [string]$localLabAlternate.Output.Renderer -ceq 'D3D8To9') `
+    'both additional renderer values bind; RequireRunning succeeds with one disposed snapshot'
+Add-Result 'LocalLab rejection branches are functional and snapshots are closed' (
+    -not $localLabMissing.Accepted -and
+    $localLabMissing.ErrorMessage -match 'not running' -and
+    -not $localLabMultiple.Accepted -and
+    $localLabMultiple.ErrorMessage -match 'More than one exact' -and
+    @($localLabMultiple.ProductionDisposeCounts |
+        Where-Object { $_ -ne 1 }).Count -eq 0 -and
+    @($localLabMultiple.FinalDisposeCounts |
+        Where-Object { $_ -ne 1 }).Count -eq 0 -and
+    -not $localLabMismatch.Accepted -and
+    $localLabMismatch.ErrorMessage -match "profile is 'dxvk-canary'") `
+    'missing, multiple, and mismatched-profile branches fail closed without leaked test snapshots'
 
 $requiredOptions = @(
     '--process_id',

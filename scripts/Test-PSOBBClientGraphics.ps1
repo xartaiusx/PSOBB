@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Stable', 'Canary')]
+    [ValidateSet('Stable', 'Canary', 'LocalLab')]
     [string]$Channel = 'Stable',
-    [ValidateSet('', 'Native', 'DgVoodooD3D11', 'DgVoodooD3D12')]
+    [ValidateSet(
+        '', 'Native', 'DgVoodooD3D11', 'DgVoodooD3D12',
+        'DxvkVulkan', 'D3D8To9')]
     [string]$ExpectedRenderer = '',
     [ValidateSet('', 'Compatibility', 'HighFidelity2560x1600', 'Ultra3840x2880')]
     [string]$ExpectedGraphicsPreset = '',
+    [ValidatePattern('^$|^[a-z0-9]+(?:-[a-z0-9]+)*$')]
+    [string]$ExpectedProfileId = '',
     [ValidateSet('', 'Borderless', 'Resizable')]
     [string]$ExpectedWindowMode = '',
     [switch]$RequireRunning,
@@ -13,8 +17,84 @@ param(
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+
+function Test-PSOBBLocalLabClientGraphics {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [AllowEmptyString()][string]$ExpectedRenderer,
+        [AllowEmptyString()][string]$ExpectedProfileId,
+        [AllowEmptyString()][string]$ExpectedWindowMode,
+        [switch]$RequireRunning
+    )
+
+    $profile = Assert-PSOBBLocalLabClientRuntimeContract -Layout $Layout
+    $renderer = [string]$profile.renderer
+    $profileId = [string]$profile.profileId
+    $windowMode = [string]$profile.defaultWindowMode
+    if ((-not [string]::IsNullOrEmpty($ExpectedRenderer)) -and
+        $renderer -cne $ExpectedRenderer) {
+        throw "The LocalLab renderer is '$renderer', not '$ExpectedRenderer'"
+    }
+    if ((-not [string]::IsNullOrEmpty($ExpectedProfileId)) -and
+        $profileId -cne $ExpectedProfileId) {
+        throw "The LocalLab profile is '$profileId', not '$ExpectedProfileId'"
+    }
+    if ((-not [string]::IsNullOrEmpty($ExpectedWindowMode)) -and
+        $windowMode -cne $ExpectedWindowMode) {
+        throw "The LocalLab window mode is '$windowMode', not '$ExpectedWindowMode'"
+    }
+
+    $clientExecutable = Get-PSOBBClientExecutablePath `
+        -Layout $Layout `
+        -Channel LocalLab
+    $running = @(
+        Get-PSOBBProcessesAtExactPath `
+            -Name 'Psobb' `
+            -ExpectedPath $clientExecutable)
+    try {
+        if ($running.Count -gt 1) {
+            throw "More than one exact LocalLab client is running: $($running.Id -join ', ')"
+        }
+        if ($RequireRunning.IsPresent -and $running.Count -ne 1) {
+            throw 'The exact LocalLab client is not running'
+        }
+        [pscustomobject]@{
+            Suite = 'ClientGraphics'
+            Channel = 'LocalLab'
+            Renderer = $renderer
+            ProfileId = $profileId
+            GraphicsPreset = $null
+            WindowMode = $windowMode
+            Passed = 1
+            Failed = 0
+            Running = ($running.Count -eq 1)
+        }
+    } finally {
+        foreach ($runningProcess in $running) {
+            $runningProcess.Dispose()
+        }
+    }
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+if ($Channel -eq 'LocalLab') {
+    if (-not [string]::IsNullOrEmpty($ExpectedGraphicsPreset)) {
+        throw 'ExpectedGraphicsPreset does not apply to LocalLab; use ExpectedProfileId'
+    }
+    Test-PSOBBLocalLabClientGraphics `
+        -Layout $layout `
+        -ExpectedRenderer $ExpectedRenderer `
+        -ExpectedProfileId $ExpectedProfileId `
+        -ExpectedWindowMode $ExpectedWindowMode `
+        -RequireRunning:$RequireRunning.IsPresent
+    return
+}
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $lock = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'config\sources.lock.json') |
     ConvertFrom-Json -Depth 20
@@ -118,6 +198,17 @@ if (-not $profileSchemaValid) {
 $renderer = [string]$profile.renderer
 if (-not [string]::IsNullOrEmpty($ExpectedRenderer)) {
     Add-GraphicsCheck 'expected renderer selected' ($renderer -ceq $ExpectedRenderer) "expected=$ExpectedRenderer; actual=$renderer"
+}
+$profileId = if ($profile.PSObject.Properties.Name -contains 'profileId') {
+    [string]$profile.profileId
+} elseif ($Channel -eq 'Stable') {
+    'safe-native-4x3'
+} else {
+    'clarity-dgvoodoo-4x3'
+}
+if (-not [string]::IsNullOrEmpty($ExpectedProfileId)) {
+    Add-GraphicsCheck 'expected profile selected' (
+        $profileId -ceq $ExpectedProfileId) "expected=$ExpectedProfileId; actual=$profileId"
 }
 $channelValid = if ([int]$profile.schemaVersion -eq 1) {
     ($Channel -eq 'Stable') -and ($renderer -eq 'Native')
@@ -369,6 +460,7 @@ if ($renderer -eq 'Native') {
 }
 
 $running = @(Get-PSOBBProcessesAtExactPath -Name 'Psobb' -ExpectedPath $clientExecutable)
+try {
 Add-GraphicsCheck 'running-state requirement' (
     -not $RequireRunning.IsPresent -or ($running.Count -eq 1)) "matchingProcesses=$($running.Count)"
 if ($running.Count -gt 1) {
@@ -443,9 +535,15 @@ if ($failed.Count -gt 0) {
     Suite = 'ClientGraphics'
     Channel = $Channel
     Renderer = $renderer
+    ProfileId = $profileId
     GraphicsPreset = $graphicsPreset
     WindowMode = $windowMode
     Passed = $results.Count
     Failed = 0
     Running = ($running.Count -eq 1)
+}
+} finally {
+    foreach ($runningProcess in $running) {
+        $runningProcess.Dispose()
+    }
 }

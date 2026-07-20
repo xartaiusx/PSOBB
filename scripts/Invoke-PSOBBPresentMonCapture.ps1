@@ -26,6 +26,46 @@ $durationByScenario = [ordered]@{
     Soak = 1800
 }
 
+function Close-PSOBBPresentMonClientProcessRecords {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Records = @())
+
+    foreach ($ownedRecord in @($Records)) {
+        if ($null -ne $ownedRecord -and
+            $ownedRecord.PSObject.Properties.Name -contains 'Process' -and
+            $null -ne $ownedRecord.Process) {
+            $ownedRecord.Process.Dispose()
+            $ownedRecord.Process = $null
+        }
+    }
+}
+
+function Complete-PSOBBRedirectedOutput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Threading.Tasks.Task[string]]$StandardOutputTask,
+        [Parameter(Mandatory)][System.Threading.Tasks.Task[string]]$StandardErrorTask,
+        [Parameter(Mandatory)]
+        [System.Threading.CancellationTokenSource]$CancellationSource,
+        [ValidateRange(1, 30000)][int]$TimeoutMilliseconds = 5000
+    )
+
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($drain in @($StandardOutputTask, $StandardErrorTask)) {
+        $remaining = [Math]::Max(
+            1,
+            $TimeoutMilliseconds - [int]$deadline.ElapsedMilliseconds)
+        if (-not $drain.Wait($remaining)) {
+            $CancellationSource.Cancel()
+            throw "Redirected process output did not drain within $TimeoutMilliseconds milliseconds"
+        }
+    }
+    [pscustomobject]@{
+        StandardOutput = $StandardOutputTask.GetAwaiter().GetResult()
+        StandardError = $StandardErrorTask.GetAwaiter().GetResult()
+    }
+}
+
 function Get-PSOBBValidatedCaptureProfile {
     [CmdletBinding()]
     param(
@@ -143,6 +183,8 @@ function Get-PSOBBValidatedCaptureProcess {
         [Parameter(Mandatory)][ValidateSet('Stable', 'Canary', 'LocalLab')][string]$SelectedChannel
     )
 
+    $records = @()
+    try {
     $records = @(Get-PSOBBClientProcessRecords -Layout $Layout -Channel All)
     if ($records.Count -ne 1) {
         throw "PresentMon capture requires exactly one approved PSOBB client process; found $($records.Count)"
@@ -157,7 +199,7 @@ function Get-PSOBBValidatedCaptureProcess {
             [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'The sole running PSOBB client does not match the requested channel, path, or executable hash'
     }
-    $process = Get-Process -Id ([int]$record.ProcessId) -ErrorAction SilentlyContinue
+    $process = $record.Process
     if (-not $process -or
         -not (Test-PSOBBProcessAtExactPath `
             -Process $process `
@@ -167,19 +209,27 @@ function Get-PSOBBValidatedCaptureProcess {
     }
     try {
         $startTimeUtc = $process.StartTime.ToUniversalTime()
+        $startTimeFileTimeUtc = [long]$startTimeUtc.ToFileTimeUtc()
     } catch {
         throw "The creation time for approved PSOBB PID $($record.ProcessId) could not be verified"
     }
-    if ([Math]::Abs(($startTimeUtc - [DateTime]$record.StartTimeUtc).TotalSeconds) -gt 0.5) {
+    if ($null -eq $record.StartTimeFileTimeUtc -or
+        $startTimeFileTimeUtc -ne [long]$record.StartTimeFileTimeUtc) {
         throw 'The PSOBB process ID was reused before capture'
     }
-    [pscustomobject]@{
+    $validatedProcess = [pscustomobject]@{
         Process = $process
         ProcessId = [int]$process.Id
         StartTimeUtc = $startTimeUtc
+        StartTimeFileTimeUtc = $startTimeFileTimeUtc
         Channel = [string]$record.Channel
         ExecutablePath = [string]$record.ExecutablePath
         ExecutableSha256 = [string]$record.ExecutableSha256
+    }
+    $record.Process = $null
+    $validatedProcess
+    } finally {
+        Close-PSOBBPresentMonClientProcessRecords -Records $records
     }
 }
 
@@ -244,21 +294,33 @@ function Assert-PSOBBCaptureIdentityUnchanged {
     if ([string]$currentProfile.ProfileSha256 -cne [string]$Profile.ProfileSha256) {
         throw 'The materialized client profile changed during capture'
     }
-    $currentProcess = Get-PSOBBValidatedCaptureProcess `
-        -Layout $Layout `
-        -Profile $currentProfile `
-        -SelectedChannel $SelectedChannel
-    if ([int]$currentProcess.ProcessId -ne [int]$InitialProcess.ProcessId -or
-        [Math]::Abs((
-            [DateTime]$currentProcess.StartTimeUtc -
-            [DateTime]$InitialProcess.StartTimeUtc).TotalSeconds) -gt 0.5) {
-        throw 'The PSOBB client exited or restarted during capture'
+    $currentProcess = $null
+    try {
+        $currentProcess = Get-PSOBBValidatedCaptureProcess `
+            -Layout $Layout `
+            -Profile $currentProfile `
+            -SelectedChannel $SelectedChannel
+        if ([int]$currentProcess.ProcessId -ne [int]$InitialProcess.ProcessId -or
+            [long]$currentProcess.StartTimeFileTimeUtc -ne
+                [long]$InitialProcess.StartTimeFileTimeUtc) {
+            throw 'The PSOBB client exited or restarted during capture'
+        }
+        $true
+    } finally {
+        if ($currentProcess -and $currentProcess.Process) {
+            $currentProcess.Process.Dispose()
+        }
     }
-    $true
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
 }
 
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
+$target = $null
+try {
 $durationSeconds = [int]$durationByScenario[$Scenario]
 $profile = Get-PSOBBValidatedCaptureProfile `
     -Layout $layout `
@@ -329,6 +391,7 @@ $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $captureProcess = $null
 $stdoutTask = $null
 $stderrTask = $null
+$outputCancellation = $null
 $stdout = ''
 $stderr = ''
 try {
@@ -336,32 +399,33 @@ try {
     if (-not $captureProcess) {
         throw 'Windows did not start the locked PresentMon executable'
     }
-    $stdoutTask = $captureProcess.StandardOutput.ReadToEndAsync()
-    $stderrTask = $captureProcess.StandardError.ReadToEndAsync()
+    $outputCancellation = [System.Threading.CancellationTokenSource]::new()
+    $stdoutTask = $captureProcess.StandardOutput.ReadToEndAsync(
+        $outputCancellation.Token)
+    $stderrTask = $captureProcess.StandardError.ReadToEndAsync(
+        $outputCancellation.Token)
     $maximumWaitMilliseconds = [int](($durationSeconds + 90) * 1000)
     if (-not $captureProcess.WaitForExit($maximumWaitMilliseconds)) {
-        try {
-            $captureProcess.Kill($true)
-            [void]$captureProcess.WaitForExit(10000)
-        } catch { }
+        try { $captureProcess.Kill($true) } catch { }
+        if (-not $captureProcess.WaitForExit(10000)) {
+            throw 'PresentMon did not terminate within 10 seconds after cancellation'
+        }
         throw "PresentMon did not exit within 90 seconds after the $durationSeconds-second capture window"
     }
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $drainedOutput = Complete-PSOBBRedirectedOutput `
+        -StandardOutputTask $stdoutTask `
+        -StandardErrorTask $stderrTask `
+        -CancellationSource $outputCancellation
+    $stdout = $drainedOutput.StandardOutput
+    $stderr = $drainedOutput.StandardError
     if ($captureProcess.ExitCode -ne 0) {
         throw "PresentMon failed with exit code $($captureProcess.ExitCode): $($stderr.Trim())"
     }
 } finally {
     $stopwatch.Stop()
-    $captureExited = $false
-    if ($captureProcess) {
-        try { $captureExited = $captureProcess.HasExited } catch { }
-    }
-    if ($stdoutTask -and $captureExited) {
-        try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { }
-    }
-    if ($stderrTask -and $captureExited) {
-        try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { }
+    if ($outputCancellation) {
+        $outputCancellation.Cancel()
+        $outputCancellation.Dispose()
     }
     [System.IO.File]::WriteAllText($stdoutPath, $stdout, [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText($stderrPath, $stderr, [System.Text.UTF8Encoding]::new($false))
@@ -421,6 +485,7 @@ $manifest = [ordered]@{
         application = 'Psobb.exe'
         processId = $target.ProcessId
         processStartTimeUtc = ([DateTime]$target.StartTimeUtc).ToString('o')
+        processStartTimeFileTimeUtc = [long]$target.StartTimeFileTimeUtc
         executable = 'runtime:' + $relativeExecutable
         executableSize = $profile.ClientExecutableSize
         executableSha256 = $profile.ClientExecutableSha256
@@ -514,4 +579,9 @@ try {
     FrameTimeP50Ms = $metrics.frameTime.p50
     FrameTimeP95Ms = $metrics.frameTime.p95
     FrameTimeP99Ms = $metrics.frameTime.p99
+}
+} finally {
+    if ($target -and $target.Process) {
+        $target.Process.Dispose()
+    }
 }
