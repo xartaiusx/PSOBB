@@ -1,6 +1,8 @@
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [string]$RuntimeRoot,
+    [Parameter(DontShow = $true)]
+    [switch]$MigrateLegacyStableInstallationRecordAcl,
     [Parameter(DontShow = $true)][string]$InternalTestSourcesLockPath,
     [Parameter(DontShow = $true)][string]$InternalTestPolicyPath,
     [Parameter(DontShow = $true)][string[]]$InternalTestFaultPoints,
@@ -8,6 +10,12 @@ param(
     [Parameter(DontShow = $true)][string]$InternalTestHookPoint,
     [Parameter(DontShow = $true)][scriptblock]$InternalTestHook
 )
+
+if ($PSBoundParameters.ContainsKey(
+        'MigrateLegacyStableInstallationRecordAcl') -and
+    -not $MigrateLegacyStableInstallationRecordAcl) {
+    throw 'Installation-record ACL mode requires its explicit migration switch'
+}
 
 $script:MigrationInternalTestRequested = $false
 foreach ($parameterName in @(
@@ -91,6 +99,135 @@ function Read-MigrationSnapshot(
 function Test-MigrationIdentity($Left, $Right) {
     [uint32]$Left.VolumeSerialNumber -eq [uint32]$Right.VolumeSerialNumber -and
         [uint64]$Left.FileId -eq [uint64]$Right.FileId
+}
+
+function Get-MigrationInstallationAclState($Layout, $Lease) {
+    [void](Assert-PSOBBCombatCanaryOrdinaryFileLeaseIdentity `
+            -Context $Lease -RoleLabel 'Stable installation record ACL lease')
+    $digest = Get-PSOBBLeasedFileDigest `
+        -Lease $Lease.Stream -MaximumBytes 256KB `
+        -Label 'Stable installation record ACL lease'
+    $acl = Get-Acl -LiteralPath $Lease.Path
+    [void](Assert-PSOBBCombatCanaryOrdinaryFileLeaseIdentity `
+            -Context $Lease -RoleLabel 'Stable installation record ACL lease')
+    $identity = Assert-PSOBBCombatCanaryNativeHandlePath `
+        -Handle $Lease.Stream.SafeFileHandle -ExpectedPath $Lease.Path `
+        -Root $Layout.Root -Directory $false `
+        -RoleLabel 'Stable installation record ACL lease' -RequireSingleLink
+    [pscustomobject]@{
+        Path = [string]$Lease.Path
+        Length = [long]$digest.Length
+        Sha256 = [string]$digest.Sha256
+        VolumeSerialNumber = [uint32]$identity.VolumeSerialNumber
+        FileId = [uint64]$identity.FileId
+        NumberOfLinks = [uint32]$identity.NumberOfLinks
+        Acl = $acl
+        AccessSddl = $acl.GetSecurityDescriptorSddlForm(
+            [System.Security.AccessControl.AccessControlSections]::Access)
+        OwnerSid = $acl.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Value
+        GroupSid = $acl.GetGroup(
+            [System.Security.Principal.SecurityIdentifier]).Value
+    }
+}
+
+function Get-MigrationAclPrincipalSids {
+    @(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+        'S-1-5-32-544',
+        'S-1-5-18'
+    ) | Sort-Object -Unique
+}
+
+function Assert-MigrationApprovedAclOwnership($State) {
+    $expectedSids = @(Get-MigrationAclPrincipalSids)
+    if ($State.OwnerSid -notin $expectedSids -or
+        $State.GroupSid -notin $expectedSids) {
+        throw ('The Stable installation record owner or group is not an ' +
+            'approved runtime principal')
+    }
+    $true
+}
+
+function Assert-MigrationLegacyInstallationAclState(
+    $Layout, $Lease, $ExpectedRecordSnapshot) {
+    $state = Get-MigrationInstallationAclState $Layout $Lease
+    if ($state.Length -ne [long]$ExpectedRecordSnapshot.Length -or
+        $state.Sha256 -cne [string]$ExpectedRecordSnapshot.Sha256 -or
+        $state.VolumeSerialNumber -ne
+            [uint32]$ExpectedRecordSnapshot.VolumeSerialNumber -or
+        $state.FileId -ne [uint64]$ExpectedRecordSnapshot.FileId -or
+        $state.NumberOfLinks -ne 1) {
+        throw 'The legacy Stable installation record identity is not exact'
+    }
+    [void](Assert-MigrationApprovedAclOwnership $state)
+    $acl = $state.Acl
+    if ($acl.AreAccessRulesProtected -or
+        -not $acl.AreAccessRulesCanonical) {
+        throw ('The Stable installation record does not have the one accepted ' +
+            'legacy ACL shape')
+    }
+    $expectedSids = @(Get-MigrationAclPrincipalSids)
+    $rules = @($acl.GetAccessRules(
+            $true,
+            $true,
+            [System.Security.Principal.SecurityIdentifier]))
+    $actualSids = @($rules | ForEach-Object {
+            $_.IdentityReference.Value
+        } | Sort-Object -Unique)
+    if ($rules.Count -ne $expectedSids.Count -or
+        $actualSids.Count -ne $expectedSids.Count -or
+        @(Compare-Object -ReferenceObject $expectedSids `
+                -DifferenceObject $actualSids).Count -ne 0) {
+        throw 'The legacy Stable installation record ACL identities are not exact'
+    }
+    foreach ($rule in $rules) {
+        if (-not $rule.IsInherited -or
+            $rule.AccessControlType -ne
+                [System.Security.AccessControl.AccessControlType]::Allow -or
+            [int64]$rule.FileSystemRights -ne
+                [int64][System.Security.AccessControl.FileSystemRights]::FullControl -or
+            $rule.InheritanceFlags -ne
+                [System.Security.AccessControl.InheritanceFlags]::None -or
+            $rule.PropagationFlags -ne
+                [System.Security.AccessControl.PropagationFlags]::None) {
+            throw ('The legacy Stable installation record ACL rules are not ' +
+                'exact inherited FullControl rules')
+        }
+    }
+    $state
+}
+
+function Assert-MigrationInstallationAclStateMatches(
+    $Actual, $Expected, [string]$ExpectedAccessSddl, [string]$Boundary) {
+    if ([string]$Actual.Path -ine [string]$Expected.Path -or
+        $Actual.Length -ne $Expected.Length -or
+        $Actual.Sha256 -cne $Expected.Sha256 -or
+        $Actual.VolumeSerialNumber -ne $Expected.VolumeSerialNumber -or
+        $Actual.FileId -ne $Expected.FileId -or
+        $Actual.NumberOfLinks -ne 1 -or
+        $Actual.AccessSddl -cne $ExpectedAccessSddl -or
+        $Actual.OwnerSid -cne $Expected.OwnerSid -or
+        $Actual.GroupSid -cne $Expected.GroupSid) {
+        throw "Stable installation record state is not exact at $Boundary"
+    }
+    $true
+}
+
+function Set-MigrationInstallationAccessDacl(
+    $Layout, $Lease, [string]$AccessSddl) {
+    [void](Assert-PSOBBCombatCanaryOrdinaryFileLeaseIdentity `
+            -Context $Lease -RoleLabel 'Stable installation record ACL lease')
+    $safePath = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Lease.Path -Root $Layout.Root -Kind File `
+        -Label 'Stable installation record'
+    $security = [System.Security.AccessControl.FileSecurity]::new()
+    $security.SetSecurityDescriptorSddlForm(
+        $AccessSddl,
+        [System.Security.AccessControl.AccessControlSections]::Access)
+    [System.IO.FileSystemAclExtensions]::SetAccessControl(
+        [System.IO.FileInfo](Get-Item -Force -LiteralPath $safePath),
+        $security)
 }
 
 function ConvertTo-MigrationFileId([uint64]$FileId) {
@@ -500,6 +637,241 @@ function Assert-MigrationRuntimeIdentity($Expected, $Actual) {
         }
     }
     $true
+}
+
+function Assert-MigrationAclExternalBindings(
+    $Layout,
+    $Marker,
+    $Record,
+    $Bindings,
+    $RuntimeBinding,
+    [string]$SourcesPath,
+    [string]$PolicyPath,
+    [string]$SourceRoot,
+    $MarkerLease,
+    $SourcesLease,
+    $PolicyLease
+) {
+    $markerAgain = Assert-PSOBBRuntimeMarker -Layout $Layout
+    if ([string]$markerAgain.installationId -cne
+            [string]$Marker.installationId -or
+        [string]$markerAgain.runtimeRoot -cne [string]$Marker.runtimeRoot) {
+        throw 'Runtime ownership marker changed during installation ACL migration'
+    }
+    foreach ($lease in @(
+            @($MarkerLease, 'Runtime ownership marker lease'),
+            @($SourcesLease, 'Migration source lock lease'),
+            @($PolicyLease, 'Migration patch policy lease'))) {
+        [void](Assert-PSOBBCombatCanaryOrdinaryFileLeaseIdentity `
+                -Context $lease[0] -RoleLabel $lease[1])
+    }
+    $bindingsAgain = Get-MigrationBindings `
+        $SourcesPath $PolicyPath $SourceRoot
+    if ($bindingsAgain.SourceLockSha256 -cne $Bindings.SourceLockSha256 -or
+        $bindingsAgain.PolicySha256 -cne $Bindings.PolicySha256) {
+        throw 'Installation ACL migration source bindings changed'
+    }
+    $runtimeAgain = Assert-MigrationRuntime $Layout $Record $bindingsAgain
+    [void](Assert-MigrationRuntimeIdentity $RuntimeBinding $runtimeAgain)
+    $true
+}
+
+function Invoke-MigrationLegacyInstallationAcl(
+    $Layout,
+    $Marker,
+    $RecordSnapshot,
+    $Record,
+    $Bindings,
+    $RuntimeBinding,
+    [string]$SourcesPath,
+    [string]$PolicyPath,
+    [string]$SourceRoot,
+    $MarkerLease,
+    $SourcesLease,
+    $PolicyLease,
+    [bool]$OwnsClientMutex,
+    [bool]$OwnsServerMutex,
+    [System.Management.Automation.PSCmdlet]$CallingCmdlet
+) {
+    if (-not $OwnsClientMutex -or -not $OwnsServerMutex) {
+        throw 'Installation ACL migration does not own both lifecycle locks'
+    }
+    $lease = $null
+    try {
+        $lease = Open-PSOBBCombatCanaryOrdinaryFileLease `
+            -LiteralPath $Layout.InstallRecord -Root $Layout.Root `
+            -RoleLabel 'Stable installation record ACL lease'
+        $initial = Get-MigrationInstallationAclState $Layout $lease
+        if ($initial.Length -ne [long]$RecordSnapshot.Length -or
+            $initial.Sha256 -cne [string]$RecordSnapshot.Sha256 -or
+            $initial.VolumeSerialNumber -ne
+                [uint32]$RecordSnapshot.VolumeSerialNumber -or
+            $initial.FileId -ne [uint64]$RecordSnapshot.FileId -or
+            $initial.NumberOfLinks -ne 1) {
+            throw 'Stable installation record changed before ACL migration'
+        }
+        [void](Assert-MigrationApprovedAclOwnership $initial)
+        if (Test-PSOBBProtectedAcl -Path $lease.Path) {
+            $protected = Get-MigrationInstallationAclState $Layout $lease
+            [void](Assert-MigrationInstallationAclStateMatches `
+                    $protected $initial $protected.AccessSddl `
+                    'already-protected readback')
+            if (-not $protected.Acl.AreAccessRulesCanonical -or
+                -not (Test-PSOBBProtectedAcl -Path $lease.Path)) {
+                throw 'Protected Stable installation record ACL is not exact'
+            }
+            return [pscustomobject]@{
+                Path = $protected.Path
+                Changed = $false
+                Pending = $false
+                PendingRecovery = $false
+                Kind = 'stable-installation-record-acl-migration'
+                RecordSha256 = $protected.Sha256
+                PriorAcl = 'already-protected'
+            }
+        }
+        $legacy = Assert-MigrationLegacyInstallationAclState `
+            $Layout $lease $RecordSnapshot
+        if (-not $CallingCmdlet.ShouldProcess(
+                $legacy.Path,
+                'Replace the exact known legacy Stable installation-record DACL')) {
+            return [pscustomobject]@{
+                Path = $legacy.Path
+                Changed = $false
+                Pending = $true
+                PendingRecovery = $false
+                Kind = 'stable-installation-record-acl-migration-preview'
+                RecordSha256 = $legacy.Sha256
+                PriorAcl = 'known-legacy-inherited'
+            }
+        }
+
+        [void](Assert-MigrationAclExternalBindings `
+                $Layout $Marker $Record $Bindings $RuntimeBinding `
+                $SourcesPath $PolicyPath $SourceRoot `
+                $MarkerLease $SourcesLease $PolicyLease)
+        Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+            -Operation 'protecting Stable installation metadata' | Out-Null
+        $locked = Assert-MigrationLegacyInstallationAclState `
+            $Layout $lease $RecordSnapshot
+        [void](Assert-MigrationInstallationAclStateMatches `
+                $locked $legacy $legacy.AccessSddl 'prewrite legacy DACL')
+        $context = [pscustomobject]@{
+            TargetPath = $legacy.Path
+            Lease = $lease
+            ExpectedLegacyState = $legacy
+        }
+        Invoke-MigrationBoundary 'acl-before-write' $context
+        Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+            -Operation 'protecting Stable installation metadata' | Out-Null
+        [void](Assert-MigrationAclExternalBindings `
+                $Layout $Marker $Record $Bindings $RuntimeBinding `
+                $SourcesPath $PolicyPath $SourceRoot `
+                $MarkerLease $SourcesLease $PolicyLease)
+        $lockedAgain = Assert-MigrationLegacyInstallationAclState `
+            $Layout $lease $RecordSnapshot
+        [void](Assert-MigrationInstallationAclStateMatches `
+                $lockedAgain $legacy $legacy.AccessSddl `
+                'immediate prewrite legacy DACL')
+
+        $attempted = $false
+        try {
+            $attempted = $true
+            Set-PSOBBProtectedAcl -Path $lease.Path
+            Invoke-MigrationBoundary 'acl-after-write' $context
+            $after = Get-MigrationInstallationAclState $Layout $lease
+            [void](Assert-MigrationInstallationAclStateMatches `
+                    $after $legacy $after.AccessSddl 'protected DACL readback')
+            if (-not $after.Acl.AreAccessRulesCanonical -or
+                -not (Test-PSOBBProtectedAcl -Path $lease.Path)) {
+                throw ('Stable installation-record ACL migration did not ' +
+                    'produce the exact protected policy')
+            }
+            [void](Assert-MigrationAclExternalBindings `
+                    $Layout $Marker $Record $Bindings $RuntimeBinding `
+                    $SourcesPath $PolicyPath $SourceRoot `
+                    $MarkerLease $SourcesLease $PolicyLease)
+            Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+                -Operation 'accepting protected Stable installation metadata' |
+                Out-Null
+            $context | Add-Member -NotePropertyName ProtectedAccessSddl `
+                -NotePropertyValue ([string]$after.AccessSddl)
+            Invoke-MigrationBoundary 'acl-before-accept' $context
+            Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+                -Operation 'accepting protected Stable installation metadata' |
+                Out-Null
+            [void](Assert-MigrationAclExternalBindings `
+                    $Layout $Marker $Record $Bindings $RuntimeBinding `
+                    $SourcesPath $PolicyPath $SourceRoot `
+                    $MarkerLease $SourcesLease $PolicyLease)
+            $accepted = Get-MigrationInstallationAclState $Layout $lease
+            [void](Assert-MigrationInstallationAclStateMatches `
+                    $accepted $legacy $after.AccessSddl `
+                    'final protected DACL acceptance')
+            if (-not $accepted.Acl.AreAccessRulesCanonical -or
+                -not (Test-PSOBBProtectedAcl -Path $lease.Path)) {
+                throw ('Stable installation-record ACL changed before final ' +
+                    'acceptance')
+            }
+            return [pscustomobject]@{
+                Path = $accepted.Path
+                Changed = $true
+                Pending = $false
+                PendingRecovery = $false
+                Kind = 'stable-installation-record-acl-migration'
+                RecordSha256 = $accepted.Sha256
+                PriorAcl = 'known-legacy-inherited'
+            }
+        } catch {
+            $migrationFailure = $_
+            if ($attempted) {
+                try {
+                    $candidate = Get-MigrationInstallationAclState $Layout $lease
+                    if ($candidate.AccessSddl -cne $legacy.AccessSddl) {
+                        [void](Assert-MigrationInstallationAclStateMatches `
+                                $candidate $legacy $candidate.AccessSddl `
+                                'rollback candidate DACL')
+                        if (-not $candidate.Acl.AreAccessRulesCanonical -or
+                            -not (Test-PSOBBProtectedAcl -Path $lease.Path)) {
+                            throw ('The post-write installation-record DACL is ' +
+                                'not the exact protected rollback candidate')
+                        }
+                        Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+                            -Operation 'rolling back Stable installation metadata ACL' |
+                            Out-Null
+                        Invoke-MigrationBoundary 'acl-before-rollback' $context
+                        Assert-PSOBBGlobalStoppedRuntime -Layout $Layout `
+                            -Operation 'rolling back Stable installation metadata ACL' |
+                            Out-Null
+                        $candidateAgain = Get-MigrationInstallationAclState `
+                            $Layout $lease
+                        [void](Assert-MigrationInstallationAclStateMatches `
+                                $candidateAgain $legacy $candidate.AccessSddl `
+                                'immediate rollback candidate DACL')
+                        Set-MigrationInstallationAccessDacl `
+                            $Layout $lease $legacy.AccessSddl
+                        $rolledBack = Assert-MigrationLegacyInstallationAclState `
+                            $Layout $lease $RecordSnapshot
+                        [void](Assert-MigrationInstallationAclStateMatches `
+                                $rolledBack $legacy $legacy.AccessSddl `
+                                'legacy DACL rollback readback')
+                    } else {
+                        [void](Assert-MigrationInstallationAclStateMatches `
+                                $candidate $legacy $legacy.AccessSddl `
+                                'unchanged legacy DACL after write failure')
+                    }
+                } catch {
+                    throw ('Stable installation-record ACL migration failed and ' +
+                        'exact DACL rollback was unsafe or failed. Migration: ' +
+                        $migrationFailure.Exception.Message + ' Rollback: ' +
+                        $_.Exception.Message)
+                }
+            }
+            throw $migrationFailure
+        }
+    } finally {
+        Close-PSOBBCombatCanaryOrdinaryFileLease -Context $lease
+    }
 }
 
 function New-MigrationCandidate($Legacy, $Bindings) {
@@ -1172,12 +1544,14 @@ function Resolve-MigrationTransaction($Layout, $Paths,
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 $clientMutex = $null
 $serverMutex = $null
+$ownsClientMutex = $false
 $ownsServerMutex = $false
 $markerLease = $null
 $sourcesLease = $null
 $policyLease = $null
 try {
     $clientMutex = Enter-PSOBBClientOperationLock -Layout $layout -TimeoutSeconds 0
+    $ownsClientMutex = $true
     $marker = Assert-PSOBBRuntimeMarker -Layout $layout
     $markerLease = Open-PSOBBCombatCanaryOrdinaryFileLease `
         -LiteralPath $layout.RuntimeMarker -Root $layout.Root `
@@ -1229,6 +1603,10 @@ try {
     $bindings = Get-MigrationBindings $sourcesPath $policyPath $sourceRoot
     $paths = Get-MigrationPaths $layout
     if (Test-Path -LiteralPath $paths.Root) {
+        if ($MigrateLegacyStableInstallationRecordAcl) {
+            throw ('Stable installation-record ACL migration requires no ' +
+                'retained metadata transaction')
+        }
         $retained = Read-MigrationTransaction `
             $layout $paths ([string]$marker.installationId)
         if ($null -ne $retained.Journal -and
@@ -1264,6 +1642,10 @@ try {
         'rendererVersion', 'rendererArchiveSha256', 'rendererWrapperSha256',
         'rendererConfigurationSha256') + @($legacyProperties[13..17])
     if (Test-MigrationShape $record $currentProperties) {
+        if ($MigrateLegacyStableInstallationRecordAcl) {
+            throw ('Legacy installation-record ACL migration does not accept ' +
+                'current installation metadata')
+        }
         [void](Read-PSOBBInstallationRecordSnapshot `
                 -Path $layout.InstallRecord -Root $layout.Root `
                 -ExpectedInstallationId ([string]$marker.installationId) `
@@ -1301,6 +1683,14 @@ try {
     [void](Get-PSOBBCombatCanaryOwnedPathIdentity `
             -Path $layout.Backups -Root $layout.Root -Directory $true `
             -RoleLabel 'Migration evidence boundary')
+    if ($MigrateLegacyStableInstallationRecordAcl) {
+        Invoke-MigrationLegacyInstallationAcl `
+            $layout $marker $recordSnapshot $record $bindings $runtimeBinding `
+            $sourcesPath $policyPath $sourceRoot `
+            $markerLease $sourcesLease $policyLease `
+            $ownsClientMutex $ownsServerMutex $PSCmdlet
+        return
+    }
     if (-not (Test-PSOBBProtectedAcl -Path $layout.InstallRecord)) {
         throw 'Legacy installation record ACL is not exact and protected'
     }

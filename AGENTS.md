@@ -57,9 +57,10 @@ These instructions apply to the entire repository.
 - Keep Stable v2026-02-27 untouched. Build the pinned current-upstream canary
   only through `scripts/Build-PSOBBCombatCanaryServer.ps1` and export every
   server change as an ordered patch under `patches/newserv`.
-- Use `Set-PSOBBRuntimeAcl.ps1 -MigrateLegacyRuntimeMarkerAcl` only for the one
-  exact, previewed legacy marker DACL recognized by the policy. Do not use it
-  to normalize an unknown marker identity, owner, group, ACL, or byte state.
+- Use the explicit `Set-PSOBBRuntimeAcl.ps1` legacy migration switches only for
+  the exact previewed runtime-marker or Stable installation-record DACL
+  recognized by their policy. Do not use them to normalize an unknown target
+  identity, owner, group, ACL, binding, or byte state.
 - Preserve a restore-drill quarantine record and its protected `.work` tree
   whenever process exit or output-reader completion is unconfirmed. Do not
   remove that evidence until its recorded process identity is absent and all

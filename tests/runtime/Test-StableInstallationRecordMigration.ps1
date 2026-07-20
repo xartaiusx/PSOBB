@@ -8,6 +8,7 @@ $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $migrationScript = Join-Path $repositoryRoot `
     'scripts\Repair-PSOBBStableInstallationRecord.ps1'
+$aclSetterScript = Join-Path $repositoryRoot 'scripts\Set-PSOBBRuntimeAcl.ps1'
 $legacyPolicySha256 =
     'f3501e6cff0d2fd69b0792036c1361ad521f7b3abfec4d695632c6fcc9c0fffb'
 $results = [System.Collections.Generic.List[object]]::new()
@@ -237,6 +238,53 @@ function Get-InvokeParameters($Fixture) {
     }
 }
 
+function Get-AclSetterParameters($Fixture) {
+    @{
+        RuntimeRoot = $Fixture.Layout.Root
+        MigrateLegacyStableInstallationRecordAcl = $true
+        InternalTestSourcesLockPath = $Fixture.SourceLockPath
+        InternalTestPolicyPath = $Fixture.PolicyPath
+        InternalTestFaultToken = $Fixture.InstallationId
+        Confirm = $false
+    }
+}
+
+function Get-TestAccessSddl([string]$Path) {
+    (Get-Acl -LiteralPath $Path).GetSecurityDescriptorSddlForm(
+        [System.Security.AccessControl.AccessControlSections]::Access)
+}
+
+function Get-TestTreeState([string]$Path) {
+    $root = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    @(
+        Get-ChildItem -Recurse -Force -LiteralPath $root |
+            Sort-Object -Property FullName |
+            ForEach-Object {
+                $relative = [System.IO.Path]::GetRelativePath(
+                    $root, $_.FullName).Replace('\', '/')
+                if ($_.PSIsContainer) {
+                    "D:$relative"
+                } else {
+                    "F:$($relative):$((Get-FileHash -Algorithm SHA256 `
+                        -LiteralPath $_.FullName).Hash)"
+                }
+            }
+    )
+}
+
+function Set-TestKnownLegacyInstallationAcl($Fixture) {
+    Set-PSOBBProtectedAcl -Path $Fixture.Layout.Stable
+    $path = Assert-PSOBBOrdinaryContainedPath `
+        -Path $Fixture.Layout.InstallRecord -Root $Fixture.Layout.Root `
+        -Kind File -Label 'legacy installation-record ACL fixture'
+    $legacy = [System.Security.AccessControl.FileSecurity]::new()
+    $legacy.SetAccessRuleProtection($false, $false)
+    [System.IO.FileSystemAclExtensions]::SetAccessControl(
+        [System.IO.FileInfo](Get-Item -Force -LiteralPath $path),
+        $legacy)
+    Get-TestAccessSddl $path
+}
+
 function Test-PreservedRecord($Before, $After, $Fixture) {
     $preserved = @($Before.PSObject.Properties.Name | Where-Object {
             $_ -cne 'clientPatchPolicySha256'
@@ -308,11 +356,643 @@ try {
     Add-Result 'migration has exact legacy policy and stopped transaction gates' (
         $source -match [regex]::Escape($legacyPolicySha256) -and
         $source -match 'SupportsShouldProcess' -and
+        $source -match "ConfirmImpact = 'High'" -and
         @([regex]::Matches($source, 'Assert-PSOBBGlobalStoppedRuntime')).Count `
             -ge 3 -and
         $source -match 'Enter-PSOBBClientOperationLock' -and
         $source -notmatch '(?im)^\s*Stop-Process\b') `
         'known input only; both lifecycle locks; no process termination'
+
+    $setterTokens = $null
+    $setterParseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $aclSetterScript, [ref]$setterTokens, [ref]$setterParseErrors)
+    $setterSource = Get-Content -Raw -LiteralPath $aclSetterScript
+    Add-Result 'ACL setter exposes one explicit installation-record parameter set' (
+        $setterParseErrors.Count -eq 0 -and
+        $setterSource -match
+            'MigrateLegacyStableInstallationRecordAcl' -and
+        $setterSource -match "ParameterSetName = 'StableInstallationRecordMigration'" -and
+        $setterSource -match 'Mandatory = \$true') `
+        'the one-file migration cannot overlap or silently fall into inventory mode'
+
+    $exclusive = New-TestFixture
+    $exclusiveBefore = Get-TestAccessSddl $exclusive.Layout.InstallRecord
+    $exclusiveRejected = $false
+    try {
+        & $aclSetterScript -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyRuntimeMarkerAcl `
+            -MigrateLegacyStableInstallationRecordAcl -WhatIf | Out-Null
+    } catch {
+        $exclusiveRejected = $true
+    }
+    $falseSwitchRejected = $false
+    try {
+        & $aclSetterScript -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyStableInstallationRecordAcl:$false `
+            -InternalTestFaultToken $exclusive.InstallationId -WhatIf |
+            Out-Null
+    } catch {
+        $falseSwitchRejected = $_.Exception.Message -match
+            'requires its explicit migration switch'
+    }
+    $falseMarkerSwitchRejected = $false
+    try {
+        & $aclSetterScript -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyRuntimeMarkerAcl:$false -WhatIf | Out-Null
+    } catch {
+        $falseMarkerSwitchRejected = $_.Exception.Message -match
+            'requires its explicit migration switch'
+    }
+    $falseRepairSwitchRejected = $false
+    try {
+        & $migrationScript -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyStableInstallationRecordAcl:$false `
+            -Confirm:$false | Out-Null
+    } catch {
+        $falseRepairSwitchRejected = $_.Exception.Message -match
+            'ACL mode requires its explicit migration switch'
+    }
+    $pwshPath = (Get-Process -Id $PID).Path
+    $falseSwitchChildOutput = @(& $pwshPath -NoLogo -NoProfile `
+            -ExecutionPolicy Bypass -File $aclSetterScript `
+            -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyStableInstallationRecordAcl:`$false `
+            -InternalTestFaultToken $exclusive.InstallationId `
+            -Confirm:`$false 2>&1 | ForEach-Object { [string]$_ })
+    $falseSwitchChildRejected = $LASTEXITCODE -ne 0 -and
+        ($falseSwitchChildOutput -join "`n") -match
+            'requires its explicit migration switch'
+    $falseRepairChildOutput = @(& $pwshPath -NoLogo -NoProfile `
+            -ExecutionPolicy Bypass -File $migrationScript `
+            -RuntimeRoot $exclusive.Layout.Root `
+            -MigrateLegacyStableInstallationRecordAcl:`$false `
+            -Confirm:`$false 2>&1 | ForEach-Object { [string]$_ })
+    $falseRepairChildRejected = $LASTEXITCODE -ne 0 -and
+        ($falseRepairChildOutput -join "`n") -match
+            'ACL mode requires its explicit migration switch'
+    Add-Result 'ACL migration parameter sets fail closed before inventory' (
+        $exclusiveRejected -and $falseSwitchRejected -and
+        $falseMarkerSwitchRejected -and
+        $falseRepairSwitchRejected -and $falseSwitchChildRejected -and
+        $falseRepairChildRejected -and
+        (Get-TestAccessSddl $exclusive.Layout.InstallRecord) -ceq
+            $exclusiveBefore) `
+        'call and child-process false switches cannot reach any ACL write'
+
+    $aclExplicitNull = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $aclExplicitNull)
+    $aclExplicitNullBefore = Get-TestAccessSddl `
+        $aclExplicitNull.Layout.InstallRecord
+    $aclExplicitNullRejected = $false
+    try {
+        & $aclSetterScript -RuntimeRoot $aclExplicitNull.Layout.Root `
+            -MigrateLegacyStableInstallationRecordAcl `
+            -InternalTestFaultPoints $null -WhatIf | Out-Null
+    } catch {
+        $aclExplicitNullRejected = $_.Exception.Message -match
+            'Internal migration controls require one exact protected temporary fixture'
+    }
+    Add-Result 'ACL wrapper explicit-null hidden control fails closed' (
+        $aclExplicitNullRejected -and
+        (Get-TestAccessSddl $aclExplicitNull.Layout.InstallRecord) -ceq
+            $aclExplicitNullBefore) `
+        'wrapper forwarding preserves script-scope hidden-control detection'
+
+    $aclHappy = New-TestFixture
+    $legacyAcl = Set-TestKnownLegacyInstallationAcl $aclHappy
+    $aclHappyParameters = Get-AclSetterParameters $aclHappy
+    $aclBytesBefore = [System.IO.File]::ReadAllBytes(
+        $aclHappy.Layout.InstallRecord)
+    $aclIdentityBefore = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $aclHappy.Layout.InstallRecord -Root $aclHappy.Layout.Root `
+        -Directory $false -RoleLabel 'ACL migration target before preview'
+    $aclBefore = Get-Acl -LiteralPath $aclHappy.Layout.InstallRecord
+    $aclOwnerBefore = $aclBefore.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    $aclGroupBefore = $aclBefore.GetGroup(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    $siblingPath = Join-Path $aclHappy.Layout.Server 'newserv-windows.exe'
+    $siblingDaclBefore = Get-TestAccessSddl $siblingPath
+    $aclPreview = & $aclSetterScript @aclHappyParameters -WhatIf
+    $aclIdentityAfterPreview = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $aclHappy.Layout.InstallRecord -Root $aclHappy.Layout.Root `
+        -Directory $false -RoleLabel 'ACL migration target after preview'
+    Add-Result 'installation-record ACL wrapper WhatIf is exact and write-free' (
+        -not [bool]$aclPreview.Changed -and [bool]$aclPreview.Pending -and
+        [string]$aclPreview.Kind -ceq
+            'stable-installation-record-acl-migration-preview' -and
+        (Get-TestAccessSddl $aclHappy.Layout.InstallRecord) -ceq $legacyAcl -and
+        [Convert]::ToBase64String($aclBytesBefore) -ceq
+            [Convert]::ToBase64String(
+                [System.IO.File]::ReadAllBytes($aclHappy.Layout.InstallRecord)) -and
+        $aclIdentityAfterPreview.VolumeSerialNumber -eq
+            $aclIdentityBefore.VolumeSerialNumber -and
+        $aclIdentityAfterPreview.FileId -eq $aclIdentityBefore.FileId -and
+        -not (Test-Path -LiteralPath $aclHappy.TransactionRoot) -and
+        @(Get-ChildItem -LiteralPath $aclHappy.Layout.Backups -Directory `
+                -Filter 'installation-record-migration-*').Count -eq 0) `
+        'preview validates exact legacy state without ACL, content, or evidence writes'
+
+    $aclApplied = & $aclSetterScript @aclHappyParameters
+    $aclIdempotent = & $aclSetterScript @aclHappyParameters
+    $aclBytesAfterApply = [System.IO.File]::ReadAllBytes(
+        $aclHappy.Layout.InstallRecord)
+    $aclAfter = Get-Acl -LiteralPath $aclHappy.Layout.InstallRecord
+    $aclIdentityAfter = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $aclHappy.Layout.InstallRecord -Root $aclHappy.Layout.Root `
+        -Directory $false -RoleLabel 'ACL migration target after apply'
+    $metadataParameters = Get-InvokeParameters $aclHappy
+    $metadataApplied = & $migrationScript @metadataParameters
+    Add-Result 'installation-record ACL migrates once before metadata repair' (
+        [bool]$aclApplied.Changed -and -not [bool]$aclIdempotent.Changed -and
+        [bool]$metadataApplied.Changed -and
+        (Test-PSOBBProtectedAcl -Path $aclHappy.Layout.InstallRecord) -and
+        [Convert]::ToBase64String($aclBytesBefore) -ceq
+            [Convert]::ToBase64String($aclBytesAfterApply) -and
+        [Convert]::ToBase64String($aclBytesBefore) -cne
+            [Convert]::ToBase64String(
+                [System.IO.File]::ReadAllBytes($aclHappy.Layout.InstallRecord)) -and
+        $aclIdentityAfter.VolumeSerialNumber -eq
+            $aclIdentityBefore.VolumeSerialNumber -and
+        $aclIdentityAfter.FileId -eq $aclIdentityBefore.FileId -and
+        $aclAfter.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Value -ceq
+                $aclOwnerBefore -and
+        $aclAfter.GetGroup(
+            [System.Security.Principal.SecurityIdentifier]).Value -ceq
+                $aclGroupBefore -and
+        (Get-TestAccessSddl $siblingPath) -ceq $siblingDaclBefore -and
+        (Test-FinalMigrationState $aclHappy)) `
+        'DACL-only apply preserves target identity and siblings; normal repair then converges'
+
+    $currentAclGuard = New-TestFixture
+    $currentAclGuardMigration = Get-InvokeParameters $currentAclGuard
+    & $migrationScript @currentAclGuardMigration | Out-Null
+    $currentAclGuardHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $currentAclGuard.Layout.InstallRecord).Hash
+    $currentAclGuardIdentity = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $currentAclGuard.Layout.InstallRecord `
+        -Root $currentAclGuard.Layout.Root -Directory $false `
+        -RoleLabel 'Current metadata ACL guard target'
+    $currentAclGuardDacl = Get-TestAccessSddl `
+        $currentAclGuard.Layout.InstallRecord
+    $currentAclGuardRejected = $false
+    $currentAclGuardParameters = Get-AclSetterParameters $currentAclGuard
+    try {
+        & $aclSetterScript @currentAclGuardParameters | Out-Null
+    } catch {
+        $currentAclGuardRejected = $_.Exception.Message -match
+            'does not accept current installation metadata'
+    }
+    $currentAclGuardIdentityAfter = Get-PSOBBCombatCanaryOwnedPathIdentity `
+        -Path $currentAclGuard.Layout.InstallRecord `
+        -Root $currentAclGuard.Layout.Root -Directory $false `
+        -RoleLabel 'Current metadata ACL guard unchanged target'
+
+    $retainedAclGuard = New-TestFixture
+    $retainedMigrationParameters = Get-InvokeParameters $retainedAclGuard
+    $retainedMigrationParameters.InternalTestFaultPoints = @(
+        'transaction-after-root', 'cleanup-before-remove')
+    try {
+        & $migrationScript @retainedMigrationParameters | Out-Null
+    } catch {
+    }
+    [void](Set-TestKnownLegacyInstallationAcl $retainedAclGuard)
+    $retainedAclGuardHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $retainedAclGuard.Layout.InstallRecord).Hash
+    $retainedAclGuardDacl = Get-TestAccessSddl `
+        $retainedAclGuard.Layout.InstallRecord
+    $retainedTreeBefore = @(Get-TestTreeState $retainedAclGuard.TransactionRoot)
+    $retainedAclGuardRejected = $false
+    $retainedAclGuardParameters = Get-AclSetterParameters $retainedAclGuard
+    try {
+        & $aclSetterScript @retainedAclGuardParameters | Out-Null
+    } catch {
+        $retainedAclGuardRejected = $_.Exception.Message -match
+            'requires no retained metadata transaction'
+    }
+    $retainedTreeAfter = @(Get-TestTreeState $retainedAclGuard.TransactionRoot)
+    Add-Result 'installation ACL mode rejects current or retained migration state' (
+        $currentAclGuardRejected -and
+        (Get-FileHash -Algorithm SHA256 -LiteralPath `
+            $currentAclGuard.Layout.InstallRecord).Hash -ceq
+                $currentAclGuardHash -and
+        (Get-TestAccessSddl $currentAclGuard.Layout.InstallRecord) -ceq
+            $currentAclGuardDacl -and
+        $currentAclGuardIdentityAfter.VolumeSerialNumber -eq
+            $currentAclGuardIdentity.VolumeSerialNumber -and
+        $currentAclGuardIdentityAfter.FileId -eq
+            $currentAclGuardIdentity.FileId -and
+        $retainedAclGuardRejected -and
+        (Get-FileHash -Algorithm SHA256 -LiteralPath `
+            $retainedAclGuard.Layout.InstallRecord).Hash -ceq
+                $retainedAclGuardHash -and
+        (Get-TestAccessSddl $retainedAclGuard.Layout.InstallRecord) -ceq
+            $retainedAclGuardDacl -and
+        @(Compare-Object $retainedTreeBefore $retainedTreeAfter).Count -eq 0) `
+        'ACL-only mode never repairs current metadata or retained transactions'
+
+    $unknownAclMutations = [ordered]@{
+        extraAllow = {
+            param($Fixture)
+            $acl = Get-Acl -LiteralPath $Fixture.Layout.InstallRecord
+            [void]$acl.AddAccessRule(
+                [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    [System.Security.Principal.SecurityIdentifier]::new(
+                        'S-1-5-32-546'),
+                    [System.Security.AccessControl.FileSystemRights]::Read,
+                    [System.Security.AccessControl.InheritanceFlags]::None,
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Allow))
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.InstallRecord), $acl)
+        }
+        wrongRights = {
+            param($Fixture)
+            $security = [System.Security.AccessControl.DirectorySecurity]::new()
+            $security.SetAccessRuleProtection($true, $false)
+            $sids = @(
+                [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+                [System.Security.Principal.SecurityIdentifier]::new(
+                    'S-1-5-32-544'),
+                [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))
+            $inheritance = [System.Security.AccessControl.InheritanceFlags] `
+                'ContainerInherit, ObjectInherit'
+            foreach ($sid in $sids) {
+                $rights = if ($sid.Value -ceq 'S-1-5-32-544') {
+                    [System.Security.AccessControl.FileSystemRights]::ReadAndExecute
+                } else {
+                    [System.Security.AccessControl.FileSystemRights]::FullControl
+                }
+                [void]$security.AddAccessRule(
+                    [System.Security.AccessControl.FileSystemAccessRule]::new(
+                        $sid, $rights,
+                        $inheritance,
+                        [System.Security.AccessControl.PropagationFlags]::None,
+                        [System.Security.AccessControl.AccessControlType]::Allow))
+            }
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.DirectoryInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.Stable), $security)
+            $fileSecurity = [System.Security.AccessControl.FileSecurity]::new()
+            $fileSecurity.SetAccessRuleProtection($false, $false)
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.InstallRecord), $fileSecurity)
+        }
+        explicitRule = {
+            param($Fixture)
+            $acl = Get-Acl -LiteralPath $Fixture.Layout.InstallRecord
+            [void]$acl.AddAccessRule(
+                [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    [System.Security.AccessControl.InheritanceFlags]::None,
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Allow))
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.InstallRecord), $acl)
+        }
+        denyRule = {
+            param($Fixture)
+            $acl = Get-Acl -LiteralPath $Fixture.Layout.InstallRecord
+            [void]$acl.AddAccessRule(
+                [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    [System.Security.Principal.SecurityIdentifier]::new(
+                        'S-1-5-32-546'),
+                    [System.Security.AccessControl.FileSystemRights]::Read,
+                    [System.Security.AccessControl.InheritanceFlags]::None,
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Deny))
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.InstallRecord), $acl)
+        }
+        protectedUnknown = {
+            param($Fixture)
+            $security = [System.Security.AccessControl.FileSecurity]::new()
+            $security.SetAccessRuleProtection($true, $false)
+            [void]$security.AddAccessRule(
+                [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    [System.Security.AccessControl.InheritanceFlags]::None,
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Allow))
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                    $Fixture.Layout.InstallRecord), $security)
+        }
+    }
+    $unknownAclPassed = $true
+    $unknownAclDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $unknownAclMutations.GetEnumerator()) {
+        $fixture = New-TestFixture
+        [void](Set-TestKnownLegacyInstallationAcl $fixture)
+        & $entry.Value $fixture
+        $beforeDacl = Get-TestAccessSddl $fixture.Layout.InstallRecord
+        $beforeHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $rejected = $false
+        $parameters = Get-AclSetterParameters $fixture
+        try {
+            & $aclSetterScript @parameters | Out-Null
+        } catch {
+            $rejected = $_.Exception.Message -match
+                '(?i)installation.*ACL|ACL (identities|rules)'
+        }
+        $passed = $rejected -and
+            (Get-TestAccessSddl $fixture.Layout.InstallRecord) -ceq $beforeDacl -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $beforeHash -and
+            -not (Test-Path -LiteralPath $fixture.TransactionRoot)
+        $unknownAclPassed = $unknownAclPassed -and $passed
+        $unknownAclDetails.Add("$($entry.Key)=$passed")
+    }
+    Add-Result 'installation ACL migration rejects unknown DACL variants' (
+        $unknownAclPassed) ($unknownAclDetails -join '; ')
+
+    $unknownGroup = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $unknownGroup)
+    $unknownGroupAcl = Get-Acl -LiteralPath `
+        $unknownGroup.Layout.InstallRecord
+    $unknownGroupSid =
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+    $unknownGroupApplied = $false
+    try {
+        $unknownGroupAcl.SetGroup($unknownGroupSid)
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                $unknownGroup.Layout.InstallRecord), $unknownGroupAcl)
+        $unknownGroupApplied = (Get-Acl -LiteralPath `
+            $unknownGroup.Layout.InstallRecord).GetGroup(
+                [System.Security.Principal.SecurityIdentifier]).Value -ceq
+                    $unknownGroupSid.Value
+    } catch {
+        $unknownGroupApplied = $false
+    }
+    $unknownGroupDacl = Get-TestAccessSddl `
+        $unknownGroup.Layout.InstallRecord
+    $unknownGroupRejected = $false
+    $unknownGroupParameters = Get-AclSetterParameters $unknownGroup
+    try {
+        & $aclSetterScript @unknownGroupParameters | Out-Null
+    } catch {
+        $unknownGroupRejected = $_.Exception.Message -match 'owner or group'
+    }
+    Add-Result 'installation ACL migration rejects an unapproved group' (
+        $unknownGroupApplied -and $unknownGroupRejected -and
+        (Get-TestAccessSddl $unknownGroup.Layout.InstallRecord) -ceq
+            $unknownGroupDacl) `
+        'owner and group are part of the exact accepted legacy state'
+
+    $aclHardLink = New-TestFixture
+    $aclHardLinkLegacy = Set-TestKnownLegacyInstallationAcl $aclHardLink
+    $aclHardLinkPath = $aclHardLink.Layout.InstallRecord + '.link'
+    New-Item -ItemType HardLink -Path $aclHardLinkPath `
+        -Target $aclHardLink.Layout.InstallRecord | Out-Null
+    $aclHardLinkRejected = $false
+    $aclHardLinkParameters = Get-AclSetterParameters $aclHardLink
+    try {
+        & $aclSetterScript @aclHardLinkParameters | Out-Null
+    } catch {
+        $aclHardLinkRejected = $true
+    } finally {
+        Remove-Item -LiteralPath $aclHardLinkPath -Force
+    }
+    Add-Result 'installation ACL preflight rejects a hard-linked target' (
+        $aclHardLinkRejected -and
+        (Get-TestAccessSddl $aclHardLink.Layout.InstallRecord) -ceq
+            $aclHardLinkLegacy -and
+        -not (Test-PSOBBProtectedAcl -Path $aclHardLink.Layout.InstallRecord)) `
+        'single-link native identity is required before ShouldProcess or mutation'
+
+    $aclReparse = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $aclReparse)
+    $aclReparseSaved = $aclReparse.Layout.InstallRecord + '.saved'
+    $aclReparseHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $aclReparse.Layout.InstallRecord).Hash
+    [System.IO.File]::Move(
+        $aclReparse.Layout.InstallRecord, $aclReparseSaved, $false)
+    [void][System.IO.File]::CreateSymbolicLink(
+        $aclReparse.Layout.InstallRecord, $aclReparseSaved)
+    $aclReparseRejected = $false
+    $aclReparseParameters = Get-AclSetterParameters $aclReparse
+    try {
+        & $aclSetterScript @aclReparseParameters | Out-Null
+    } catch {
+        $aclReparseRejected = $true
+    } finally {
+        Remove-Item -LiteralPath $aclReparse.Layout.InstallRecord -Force
+        [System.IO.File]::Move(
+            $aclReparseSaved, $aclReparse.Layout.InstallRecord, $false)
+    }
+    Add-Result 'installation ACL preflight rejects target reparse substitution' (
+        $aclReparseRejected -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $aclReparse.Layout.InstallRecord).Hash -ceq
+                $aclReparseHash -and
+        -not (Test-PSOBBProtectedAcl -Path $aclReparse.Layout.InstallRecord)) `
+        'the canonical target must remain one ordinary file throughout validation'
+
+    $beforeWriteCases = @('hard-link', 'content', 'runtime', 'lifecycle')
+    $beforeWritePassed = $true
+    $beforeWriteDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($case in $beforeWriteCases) {
+        $fixture = New-TestFixture
+        $legacy = Set-TestKnownLegacyInstallationAcl $fixture
+        $beforeHash = (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $fixture.Layout.InstallRecord).Hash
+        $racePath = $fixture.Layout.InstallRecord + '.race-link'
+        $parameters = Get-AclSetterParameters $fixture
+        $parameters.InternalTestHookPoint = 'acl-before-write'
+        $parameters.InternalTestHook = switch ($case) {
+            'hard-link' {
+                {
+                    param($Context)
+                    New-Item -ItemType HardLink -Path $racePath `
+                        -Target $Context.TargetPath | Out-Null
+                }
+            }
+            'content' {
+                {
+                    param($Context)
+                    [System.IO.File]::WriteAllText(
+                        $Context.TargetPath,
+                        'rejected-content-race',
+                        [System.Text.UTF8Encoding]::new($false))
+                }
+            }
+            'runtime' {
+                {
+                    [System.IO.File]::WriteAllText(
+                        (Join-Path $fixture.Layout.Stable `
+                            'overlays\dgvoodoo-2.87.3\MS\x86\D3D8.dll'),
+                        'rejected-runtime-race',
+                        [System.Text.UTF8Encoding]::new($false))
+                }
+            }
+            'lifecycle' {
+                {
+                    [System.IO.Directory]::CreateDirectory(
+                        $fixture.Layout.ControlDirectory) | Out-Null
+                    [System.IO.File]::WriteAllText(
+                        $fixture.Layout.ControlState,
+                        '{"race":true}',
+                        [System.Text.UTF8Encoding]::new($false))
+                }
+            }
+        }
+        $rejected = $false
+        try {
+            & $aclSetterScript @parameters | Out-Null
+        } catch {
+            $rejected = $true
+        } finally {
+            if (Test-Path -LiteralPath $racePath) {
+                Remove-Item -LiteralPath $racePath -Force
+            }
+            if (Test-Path -LiteralPath $fixture.Layout.ControlState) {
+                Remove-Item -LiteralPath $fixture.Layout.ControlState -Force
+            }
+        }
+        $passed = $rejected -and
+            (Get-TestAccessSddl $fixture.Layout.InstallRecord) -ceq $legacy -and
+            (Get-FileHash -Algorithm SHA256 `
+                -LiteralPath $fixture.Layout.InstallRecord).Hash -ceq $beforeHash -and
+            -not (Test-PSOBBProtectedAcl -Path $fixture.Layout.InstallRecord)
+        $beforeWritePassed = $beforeWritePassed -and $passed
+        $beforeWriteDetails.Add("$case=$passed")
+    }
+    Add-Result 'installation ACL prewrite races fail before mutation' (
+        $beforeWritePassed) ($beforeWriteDetails -join '; ')
+
+    $prewriteDacl = New-TestFixture
+    $prewriteDaclLegacy = Set-TestKnownLegacyInstallationAcl $prewriteDacl
+    $prewriteDaclState = [pscustomobject]@{ AccessSddl = $null }
+    $prewriteDaclParameters = Get-AclSetterParameters $prewriteDacl
+    $prewriteDaclParameters.InternalTestHookPoint = 'acl-before-write'
+    $prewriteDaclParameters.InternalTestHook = {
+        param($Context)
+        $acl = Get-Acl -LiteralPath $Context.TargetPath
+        [void]$acl.AddAccessRule(
+            [System.Security.AccessControl.FileSystemAccessRule]::new(
+                [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'),
+                [System.Security.AccessControl.FileSystemRights]::Read,
+                [System.Security.AccessControl.InheritanceFlags]::None,
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow))
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                $Context.TargetPath), $acl)
+        $prewriteDaclState.AccessSddl = Get-TestAccessSddl $Context.TargetPath
+    }
+    $prewriteDaclRejected = $false
+    try {
+        & $aclSetterScript @prewriteDaclParameters | Out-Null
+    } catch {
+        $prewriteDaclRejected = $true
+    }
+    Add-Result 'prewrite DACL tampering remains untouched and fails closed' (
+        $prewriteDaclRejected -and
+        $null -ne $prewriteDaclState.AccessSddl -and
+        $prewriteDaclState.AccessSddl -cne $prewriteDaclLegacy -and
+        (Get-TestAccessSddl $prewriteDacl.Layout.InstallRecord) -ceq
+            $prewriteDaclState.AccessSddl) `
+        'unknown concurrent ACL state is preserved for review, never normalized'
+
+    $aclRollback = New-TestFixture
+    $aclRollbackLegacy = Set-TestKnownLegacyInstallationAcl $aclRollback
+    $aclRollbackHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $aclRollback.Layout.InstallRecord).Hash
+    $aclRollbackParameters = Get-AclSetterParameters $aclRollback
+    $aclRollbackParameters.InternalTestFaultPoints = @('acl-after-write')
+    $aclRollbackRejected = $false
+    try {
+        & $aclSetterScript @aclRollbackParameters | Out-Null
+    } catch {
+        $aclRollbackRejected = $_.Exception.Message -match 'Injected'
+    }
+    Add-Result 'post-write fault restores the exact legacy installation DACL' (
+        $aclRollbackRejected -and
+        (Get-TestAccessSddl $aclRollback.Layout.InstallRecord) -ceq
+            $aclRollbackLegacy -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $aclRollback.Layout.InstallRecord).Hash -ceq
+                $aclRollbackHash -and
+        -not (Test-PSOBBProtectedAcl -Path $aclRollback.Layout.InstallRecord)) `
+        'rollback compares the captured protected SDDL before restoring access only'
+
+    $postWriteLifecycle = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $postWriteLifecycle)
+    $postWriteLifecycleHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $postWriteLifecycle.Layout.InstallRecord).Hash
+    $postWriteLifecycleParameters = Get-AclSetterParameters $postWriteLifecycle
+    $postWriteLifecycleParameters.InternalTestHookPoint = 'acl-after-write'
+    $postWriteLifecycleParameters.InternalTestHook = {
+        [System.IO.Directory]::CreateDirectory(
+            $postWriteLifecycle.Layout.ControlDirectory) | Out-Null
+        [System.IO.File]::WriteAllText(
+            $postWriteLifecycle.Layout.ControlState,
+            '{"race":true}',
+            [System.Text.UTF8Encoding]::new($false))
+    }
+    $postWriteLifecycleRejected = $false
+    try {
+        & $aclSetterScript @postWriteLifecycleParameters | Out-Null
+    } catch {
+        $postWriteLifecycleRejected = $_.Exception.Message -match
+            'rollback was unsafe or failed'
+    } finally {
+        if (Test-Path -LiteralPath $postWriteLifecycle.Layout.ControlState) {
+            Remove-Item -LiteralPath $postWriteLifecycle.Layout.ControlState -Force
+        }
+    }
+    Add-Result 'post-write lifecycle race blocks legacy DACL rollback' (
+        $postWriteLifecycleRejected -and
+        (Test-PSOBBProtectedAcl -Path `
+            $postWriteLifecycle.Layout.InstallRecord) -and
+        (Get-FileHash -Algorithm SHA256 -LiteralPath `
+            $postWriteLifecycle.Layout.InstallRecord).Hash -ceq
+                $postWriteLifecycleHash) `
+        'new lifecycle evidence leaves the exact protected DACL for review'
+
+    $lateDacl = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $lateDacl)
+    $lateDaclHash = (Get-FileHash -Algorithm SHA256 `
+        -LiteralPath $lateDacl.Layout.InstallRecord).Hash
+    $lateDaclParameters = Get-AclSetterParameters $lateDacl
+    $lateDaclParameters.InternalTestHookPoint = 'acl-before-accept'
+    $lateDaclParameters.InternalTestHook = {
+        param($Context)
+        $acl = Get-Acl -LiteralPath $Context.TargetPath
+        [void]$acl.AddAccessRule(
+            [System.Security.AccessControl.FileSystemAccessRule]::new(
+                [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'),
+                [System.Security.AccessControl.FileSystemRights]::Read,
+                [System.Security.AccessControl.InheritanceFlags]::None,
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow))
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.FileInfo](Get-Item -Force -LiteralPath `
+                $Context.TargetPath), $acl)
+    }
+    $lateDaclRejected = $false
+    try {
+        & $aclSetterScript @lateDaclParameters | Out-Null
+    } catch {
+        $lateDaclRejected = $_.Exception.Message -match
+            'rollback was unsafe or failed'
+    }
+    Add-Result 'late protected-DACL substitution cannot return success' (
+        $lateDaclRejected -and
+        -not (Test-PSOBBProtectedAcl -Path $lateDacl.Layout.InstallRecord) -and
+        (Get-FileHash -Algorithm SHA256 `
+            -LiteralPath $lateDacl.Layout.InstallRecord).Hash -ceq $lateDaclHash) `
+        'final lease readback rejects drift and preserves unknown DACL evidence'
 
     $omittedHiddenPassed = $true
     $omittedHiddenDetails = [System.Collections.Generic.List[string]]::new()
@@ -597,12 +1277,38 @@ try {
         'rollback-after-replace')
     $cleanupBoundaries = @('cleanup-before-remove')
     $publishBoundaries = @('publish-before-move', 'publish-after-move')
+    $aclBoundaries = @('acl-before-write', 'acl-after-write',
+        'acl-before-rollback', 'acl-before-accept')
     $matrixBoundaries = @($preReplaceBoundaries + $postReplaceBoundaries +
-        $rollbackBoundaries + $cleanupBoundaries + $publishBoundaries |
+        $rollbackBoundaries + $cleanupBoundaries + $publishBoundaries +
+        $aclBoundaries |
         Sort-Object -Unique)
     $matrixPassed = @(Compare-Object $declaredBoundaries $matrixBoundaries).
         Count -eq 0
     $matrixDetails = [System.Collections.Generic.List[string]]::new()
+    $aclRollbackBoundary = New-TestFixture
+    [void](Set-TestKnownLegacyInstallationAcl $aclRollbackBoundary)
+    $aclRollbackBoundaryParameters = Get-AclSetterParameters `
+        $aclRollbackBoundary
+    $aclRollbackBoundaryParameters.InternalTestFaultPoints = @(
+        'acl-after-write', 'acl-before-rollback')
+    $aclRollbackBoundaryRejected = $false
+    try {
+        & $aclSetterScript @aclRollbackBoundaryParameters | Out-Null
+    } catch {
+        $aclRollbackBoundaryRejected = $_.Exception.Message -match
+            'rollback was unsafe or failed'
+    }
+    $aclBoundaryPassed = $beforeWritePassed -and $aclRollbackRejected -and
+        $aclRollbackBoundaryRejected -and $lateDaclRejected -and
+        (Test-PSOBBProtectedAcl -Path `
+            $aclRollbackBoundary.Layout.InstallRecord)
+    $matrixPassed = $matrixPassed -and $aclBoundaryPassed
+    $matrixDetails.Add("acl-before-write=$beforeWritePassed")
+    $matrixDetails.Add("acl-after-write=$aclRollbackRejected")
+    $matrixDetails.Add(
+        "acl-before-rollback=$aclRollbackBoundaryRejected")
+    $matrixDetails.Add("acl-before-accept=$lateDaclRejected")
     foreach ($boundary in $preReplaceBoundaries) {
         $fixture = New-TestFixture
         $beforeHash = (Get-FileHash -Algorithm SHA256 `
@@ -1150,18 +1856,40 @@ try {
         (Test-FinalMigrationState $linkRace)) `
         'second handle-bound preflight and retained recovery both fail closed'
 } finally {
+    $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+    $temporaryRoot = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::GetTempPath()).TrimEnd('\')
     foreach ($root in $fixtureRoots) {
         $fullRoot = [System.IO.Path]::GetFullPath($root)
-        $temporaryRoot = [System.IO.Path]::GetFullPath(
-            [System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
-        if ($fullRoot.StartsWith(
+        $isExactFixtureRoot =
+            [string]::Equals(
+                [System.IO.Path]::GetDirectoryName($fullRoot),
                 $temporaryRoot,
                 [System.StringComparison]::OrdinalIgnoreCase) -and
             [System.IO.Path]::GetFileName($fullRoot) -cmatch
-                '^PSOBB-StableInstallationRecordMigrationTests-[a-f0-9]{32}$') {
-            Remove-Item -LiteralPath $fullRoot -Recurse -Force `
-                -ErrorAction SilentlyContinue
+            '^PSOBB-StableInstallationRecordMigrationTests-[a-f0-9]{32}$'
+        if (-not $isExactFixtureRoot) {
+            $cleanupFailures.Add(
+                "Refused to clean an invalid fixture root: $fullRoot")
+            continue
         }
+
+        if (Test-Path -LiteralPath $fullRoot) {
+            try {
+                Remove-Item -LiteralPath $fullRoot -Recurse -Force `
+                    -ErrorAction Stop
+            } catch {
+                $cleanupFailures.Add(
+                    "Fixture cleanup failed for $fullRoot`: $($_.Exception.Message)")
+            }
+        }
+        if (Test-Path -LiteralPath $fullRoot) {
+            $cleanupFailures.Add(
+                "Fixture root remains after cleanup: $fullRoot")
+        }
+    }
+    if ($cleanupFailures.Count -gt 0) {
+        throw ($cleanupFailures -join [Environment]::NewLine)
     }
 }
 

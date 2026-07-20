@@ -1,12 +1,109 @@
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+[CmdletBinding(
+    SupportsShouldProcess,
+    ConfirmImpact = 'High',
+    DefaultParameterSetName = 'Inventory')]
 param(
     [string]$RuntimeRoot,
-    [switch]$MigrateLegacyRuntimeMarkerAcl
+    [Parameter(
+        ParameterSetName = 'RuntimeMarkerMigration',
+        Mandatory = $true)]
+    [switch]$MigrateLegacyRuntimeMarkerAcl,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        Mandatory = $true)]
+    [switch]$MigrateLegacyStableInstallationRecordAcl,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [string]$InternalTestSourcesLockPath,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [string]$InternalTestPolicyPath,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [string[]]$InternalTestFaultPoints,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [string]$InternalTestFaultToken,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [string]$InternalTestHookPoint,
+    [Parameter(
+        ParameterSetName = 'StableInstallationRecordMigration',
+        DontShow = $true)]
+    [scriptblock]$InternalTestHook
 )
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
 . (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
+if (($PSCmdlet.ParameterSetName -ceq 'RuntimeMarkerMigration' -and
+        -not $MigrateLegacyRuntimeMarkerAcl) -or
+    ($PSCmdlet.ParameterSetName -ceq 'StableInstallationRecordMigration' -and
+        -not $MigrateLegacyStableInstallationRecordAcl)) {
+    throw 'An ACL migration parameter set requires its explicit migration switch'
+}
 $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
+if ($MigrateLegacyStableInstallationRecordAcl) {
+    $repairScript = Join-Path $PSScriptRoot `
+        'Repair-PSOBBStableInstallationRecord.ps1'
+    $validationParameters = @{
+        RuntimeRoot = $layout.Root
+        MigrateLegacyStableInstallationRecordAcl = $true
+        WhatIf = $true
+        Confirm = $false
+    }
+    foreach ($name in @(
+            'InternalTestSourcesLockPath', 'InternalTestPolicyPath',
+            'InternalTestFaultPoints', 'InternalTestFaultToken',
+            'InternalTestHookPoint', 'InternalTestHook')) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $validationParameters[$name] = $PSBoundParameters[$name]
+        }
+    }
+    $validation = @(& $repairScript @validationParameters)
+    if ($validation.Count -ne 1 -or
+        -not $validation[0].PSObject.Properties['Kind'] -or
+        [string]$validation[0].Kind -notin @(
+            'stable-installation-record-acl-migration',
+            'stable-installation-record-acl-migration-preview')) {
+        throw 'Stable installation-record ACL validation returned an invalid result'
+    }
+    if (-not [bool]$validation[0].Pending) {
+        return $validation[0]
+    }
+    if (-not $PSCmdlet.ShouldProcess(
+            $layout.InstallRecord,
+            'Replace the exact known legacy Stable installation-record DACL')) {
+        return $validation[0]
+    }
+
+    $applyParameters = @{
+        RuntimeRoot = $layout.Root
+        MigrateLegacyStableInstallationRecordAcl = $true
+        Confirm = $false
+    }
+    foreach ($name in @(
+            'InternalTestSourcesLockPath', 'InternalTestPolicyPath',
+            'InternalTestFaultPoints', 'InternalTestFaultToken',
+            'InternalTestHookPoint', 'InternalTestHook')) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $applyParameters[$name] = $PSBoundParameters[$name]
+        }
+    }
+    $result = @(& $repairScript @applyParameters)
+    if ($result.Count -ne 1 -or
+        -not $result[0].PSObject.Properties['Kind'] -or
+        [string]$result[0].Kind -cne
+            'stable-installation-record-acl-migration' -or
+        [bool]$result[0].Pending) {
+        throw 'Stable installation-record ACL migration returned an invalid result'
+    }
+    return $result[0]
+}
 if ($MigrateLegacyRuntimeMarkerAcl) {
     try {
         Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null

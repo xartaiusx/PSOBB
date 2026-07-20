@@ -363,9 +363,35 @@ profile.
 
 An installation created before the baseline policy update can have the exact
 schema-v2 property set that predates renderer provenance while its client and
-server files are already current. Do not rerun the broad initializer to repair
-that metadata. With both server environments and all clients stopped, preview
-the narrow transaction first:
+server files are already current. Its `stable\installation.json` can also retain
+the one recognized inherited legacy DACL. Do not use the normal recursive ACL
+inventory or the broad initializer to repair either state. With both server
+environments and all clients stopped, preview and then apply only the explicit
+one-file ACL migration:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
+  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
+  -MigrateLegacyStableInstallationRecordAcl `
+  -WhatIf
+
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
+  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
+  -MigrateLegacyStableInstallationRecordAcl `
+  -Confirm:$false
+```
+
+This mode returns before the recursive ACL target inventory. It accepts only
+the exact known legacy record and source/runtime/policy binding, an ordinary
+single-link file, the canonical inherited three-principal FullControl DACL, and
+approved unchanged owner and group. It retains the target and ancestor
+identities, rechecks the globally stopped lifecycle at each mutation boundary,
+and writes only the access DACL. Unknown state is left untouched. Conditional
+rollback restores the captured legacy access SDDL only while the exact target,
+bytes, ownership, stopped state, and captured protected DACL still match. An
+already protected exact legacy record is returned unchanged.
+
+After that prerequisite is exact, preview the narrow metadata transaction:
 
 ```powershell
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -WhatIf
@@ -377,7 +403,7 @@ If the preview recognizes the exact legacy baseline record, apply it with:
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Confirm:$false
 ```
 
-The repair adds only `rendererVersion`, `rendererArchiveSha256`,
+The metadata repair adds only `rendererVersion`, `rendererArchiveSha256`,
 `rendererWrapperSha256`, and `rendererConfigurationSha256` from the current
 source lock, and changes only `clientPatchPolicySha256` to the current empty
 `baseline` policy. It requires the exact known legacy policy hash, current
