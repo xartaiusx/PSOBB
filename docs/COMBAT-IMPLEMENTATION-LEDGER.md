@@ -286,3 +286,80 @@ Each entry records:
   five-minute Twills smokes remain pending
 - Rollback: no runtime rollback is required. Keep the module unpublished; use
   a focused local Git revert only if the adapter contract must be withdrawn.
+
+## 2026-07-20 / combat-canary-stable-shadow-source-v1
+
+- Feature/profile: Phase 0 Stable-derived CombatCanary replacement source gate
+  under the native `baseline` client-patch profile
+- Outcome: source and isolated transaction gate accepted; no canonical runtime
+  materialization, server start, client start, or character login is accepted
+  by this entry
+- Implementation commit: `d446e25` (`feat: add Stable-derived combat
+  fixture`)
+- Server identity: Stable newserv v2026-02-27 commit
+  `a649a4a146d04dba320bb579ac291527db0febb5`; exact executable SHA-256
+  `7e82732ca1dd84fa7cd5bd8261f8bb9f42e3a704c66cef83c0fb51a9802eb1cd`;
+  StableShadow contract SHA-256
+  `472d2a4b443eef5427a1074b7dead87ddd8bc7750f3170a5d2518f3e88963cda`
+- Retail-content result: the immutable Stable server base contributes 5,259
+  files and the exact verified Blue Burst overlay contributes 108 files; the
+  assembled fixture contract therefore retains the Stable retail-content set
+  instead of using the rejected stripped current-upstream package
+- Isolation result: replacement is permitted only from the exact verified
+  CurrentUpstream installation; the existing exact canary client, immutable
+  client manifest, and client binding are reused byte-for-byte; server base,
+  mutable server, player/team/license state, backups, logs, secrets, control,
+  and installation bindings remain isolated from Stable
+- Tests: StableShadow 10/10; startup binding 11/11; synthetic transactions
+  84/84 including StableShadow transition 6/6; launcher 191/191; launcher
+  identity 48/48; CombatCanary lifecycle 32/32; environment isolation 12/12;
+  lifecycle scripts 62/62; schema, PowerShell AST, whitespace, attribution,
+  compensation, and temporary-fixture cleanup checks passed
+- Pre-materialization correction: `ae67089` (`fix: bound Stable manifest
+  parsing`) gives only the exact Stable server-base manifest role a bounded
+  4-MiB/262,144-token/65,536-property-and-item budget. The sealed 2,038,464-byte
+  manifest parsed with exact SHA-256
+  `ec72183bde0dd747c5796b4a92060dba87d20dd0bde2ed236712fd17d8c5f048` in
+  88.6 seconds; a 4-MiB text payload was rejected. Dedicated parser, AST 6/6,
+  StableShadow 10/10, and startup-binding 11/11 checks passed.
+- State result: Stable, CombatCanary, Twills, bank, inventory, equipment,
+  techniques, MAG, registry, shortcuts, and shared RenderDoc state were not
+  changed by the source gate
+- Limitation: exact stopped-runtime `WhatIf`, canonical StableShadow
+  replacement, installed readback, server readiness, five-minute isolated
+  Twills parity, restoration, and five-minute non-destructive canonical smoke
+  remain pending
+- Rollback: no runtime rollback is required for this source-only entry. Use a
+  focused local Git revert only if the StableShadow transition contract must be
+  withdrawn; do not remove retained CurrentUpstream evidence.
+
+## 2026-07-20 / client-safety-hook-transaction-v1
+
+- Feature/profile: shared exact-client hook transaction foundation; no
+  Gameplay feature flag or runtime profile was enabled
+- Outcome: source gate accepted; the component remains inert until a caller
+  supplies an exact-image-gated patch plan and separately proves target-code
+  quiescence
+- Implementation commit: `2d045ab` (`feat: add fail-closed hook
+  transactions`)
+- Safety result: fixed-capacity transactions require exact expected bytes,
+  committed executable ranges, stable explicit owner identities, and exclusive
+  process-wide byte and touched-page claims across static-library copies
+- Mutation result: executable page changes preserve existing CFG target state;
+  cache-flush and protection uncertainty remain owned for retry; rollback is
+  reverse-ordered, compare-before-restore, and reports primary and rollback
+  failures independently
+- Tests: fresh Win32 Release ClientSafety configure/build and CTest 2/2;
+  production and fault-injection MSVC code analysis with zero diagnostics;
+  dependent Gameplay CTest 3/3; dependent Enhancement CTest 2/2; PE readback
+  confirmed x86, ASLR, NX, and CFG; whitespace and attribution scans passed;
+  independent review reported no blocking findings
+- State result: no hook was installed, no runtime binary was published, and
+  Stable, CombatCanary, Twills, saves, registry, shortcuts, and shared
+  RenderDoc state were not changed
+- Limitation: 2-16-byte x86 code writes are not atomic. Gameplay integration
+  must still prove the exact client identity, expected site bytes, exclusive
+  ownership, and a target-code-quiescent install and rollback point before any
+  live observation candidate is allowed
+- Rollback: no runtime rollback is required. Use a focused local Git revert of
+  `2d045ab` only if the source contract must be withdrawn.
