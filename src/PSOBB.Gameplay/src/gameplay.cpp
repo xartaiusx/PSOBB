@@ -207,6 +207,10 @@ void SetGameplayModule(const HMODULE module) noexcept {
 
 }  // namespace psobb::gameplay
 
+extern "C" void InitializeASI() noexcept {
+  static_cast<void>(PSOBBGameplay_Initialize());
+}
+
 BOOL WINAPI PSOBBGameplay_Initialize() {
   if (!InitOnceExecuteOnce(
           &psobb::gameplay::g_initialize_once,

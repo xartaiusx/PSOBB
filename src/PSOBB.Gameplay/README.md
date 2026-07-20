@@ -11,10 +11,11 @@ The module remains disabled when `PSOBB.Gameplay.ini` is absent or when its
 `Enabled=1` can only report `exact_client_ready` after exact file-hash and
 loaded-PE checks pass. All feature bits and hotbar slots remain zero/empty.
 
-This source slice performs no automatic initialization from `DllMain`. An
-owning in-process loader must call `PSOBBGameplay_Initialize` after Windows
-loader-lock work has completed. Runtime deployment remains deferred until that
-activation path is integrated and accepted.
+This source slice performs no automatic initialization from `DllMain`. It
+exports the conventional deferred `InitializeASI` adapter, which delegates to
+the same idempotent `PSOBBGameplay_Initialize` preflight after the module has
+loaded. Runtime deployment remains deferred until that activation path is
+integrated and accepted.
 
 ## Build and test
 
@@ -34,8 +35,9 @@ slice does not deploy or activate it in any runtime.
 
 ## Capability ABI
 
-The ASI exports four undecorated x86 functions:
+The ASI exports five undecorated x86 functions:
 
+- `InitializeASI`
 - `PSOBBGameplay_Initialize`
 - `PSOBBGameplay_GetCapabilities`
 - `PSOBBGameplay_GetVersion`

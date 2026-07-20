@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +15,7 @@
 namespace {
 
 using InitializeFunction = BOOL(WINAPI*)();
+using InitializeAsiFunction = void (*)() noexcept;
 using GetCapabilitiesFunction = BOOL(WINAPI*)(
     psobb::gameplay::GameplayCapabilitiesV1*);
 using GetVersionFunction = const wchar_t*(WINAPI*)();
@@ -88,6 +90,12 @@ class ScopedConfiguration final {
       });
 }
 
+[[nodiscard]] bool CapabilitiesAreEqual(
+    const psobb::gameplay::GameplayCapabilitiesV1& left,
+    const psobb::gameplay::GameplayCapabilitiesV1& right) noexcept {
+  return std::memcmp(&left, &right, sizeof(left)) == 0;
+}
+
 }  // namespace
 
 int wmain(const int argc, wchar_t** argv) {
@@ -136,6 +144,8 @@ int wmain(const int argc, wchar_t** argv) {
     return 1;
   }
 
+  const auto initialize_asi = Resolve<InitializeAsiFunction>(
+      module, "InitializeASI");
   const auto initialize = Resolve<InitializeFunction>(
       module, "PSOBBGameplay_Initialize");
   const auto get_capabilities = Resolve<GetCapabilitiesFunction>(
@@ -144,8 +154,9 @@ int wmain(const int argc, wchar_t** argv) {
       module, "PSOBBGameplay_GetVersion");
   const auto rollback = Resolve<RollbackFunction>(
       module, "PSOBBGameplay_Rollback");
-  if (initialize == nullptr || get_capabilities == nullptr ||
-      get_version == nullptr || rollback == nullptr) {
+  if (initialize_asi == nullptr || initialize == nullptr ||
+      get_capabilities == nullptr || get_version == nullptr ||
+      rollback == nullptr) {
     std::cerr << "One or more undecorated gameplay exports are missing\n";
     FreeLibrary(module);
     return 1;
@@ -159,19 +170,19 @@ int wmain(const int argc, wchar_t** argv) {
     return 1;
   }
 
-  GameplayCapabilitiesV1 before_initialize{};
-  before_initialize.struct_size = sizeof(before_initialize);
-  if (!get_capabilities(&before_initialize) ||
-      before_initialize.state != RuntimeState::cold ||
-      before_initialize.verification_flags != verification_none ||
-      before_initialize.accepted_feature_bits != feature_none ||
-      before_initialize.client_sha256[0] != L'\0') {
-    std::cerr << "Gameplay module performed work before explicit initialization\n";
+  GameplayCapabilitiesV1 before_adapter{};
+  before_adapter.struct_size = sizeof(before_adapter);
+  if (!get_capabilities(&before_adapter) ||
+      before_adapter.state != RuntimeState::cold ||
+      before_adapter.verification_flags != verification_none ||
+      before_adapter.accepted_feature_bits != feature_none ||
+      before_adapter.client_sha256[0] != L'\0') {
+    std::cerr << "Gameplay module performed work before loader initialization\n";
     FreeLibrary(module);
     return 1;
   }
 
-  const bool initialized = initialize() != FALSE;
+  initialize_asi();
   GameplayCapabilitiesV1 capabilities{};
   capabilities.struct_size = sizeof(capabilities);
   const bool capability_read = get_capabilities(&capabilities) != FALSE;
@@ -181,7 +192,7 @@ int wmain(const int argc, wchar_t** argv) {
           ? capabilities.state == RuntimeState::rejected
           : capabilities.state == RuntimeState::disabled_by_config;
   const bool passed =
-      initialized != expected_rejection && capability_read && state_matched &&
+      capability_read && state_matched &&
       capabilities.abi_version == kCapabilityAbiVersion &&
       capabilities.verification_flags == verification_none &&
       capabilities.accepted_feature_bits == feature_none &&
@@ -192,6 +203,18 @@ int wmain(const int argc, wchar_t** argv) {
       std::wstring(get_version()) == kVersion &&
       capabilities.last_fail_closed_reason[0] != L'\0';
 
+  initialize_asi();
+  initialize_asi();
+  const bool initialized_again = initialize() != FALSE;
+  const bool initialized_twice = initialize() != FALSE;
+  GameplayCapabilitiesV1 repeated{};
+  repeated.struct_size = sizeof(repeated);
+  const bool idempotent =
+      get_capabilities(&repeated) != FALSE &&
+      initialized_again != expected_rejection &&
+      initialized_twice != expected_rejection &&
+      CapabilitiesAreEqual(capabilities, repeated);
+
   const bool rollback_passed = rollback() != FALSE;
   GameplayCapabilitiesV1 rolled_back{};
   rolled_back.struct_size = sizeof(rolled_back);
@@ -201,7 +224,7 @@ int wmain(const int argc, wchar_t** argv) {
       rolled_back.accepted_feature_bits == feature_none;
 
   FreeLibrary(module);
-  if (!passed || !rollback_passed || !rollback_state) {
+  if (!passed || !idempotent || !rollback_passed || !rollback_state) {
     std::cerr << "PSOBB.Gameplay ABI smoke test failed\n";
     return 1;
   }
