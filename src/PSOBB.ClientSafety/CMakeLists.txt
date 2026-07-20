@@ -19,6 +19,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_library(psobb_client_safety STATIC
   src/exact_image.cpp
+  src/hook_patch.cpp
   src/sha256.cpp)
 
 add_library(PSOBB::ClientSafety ALIAS psobb_client_safety)
@@ -48,6 +49,32 @@ if(MSVC)
 endif()
 
 if(BUILD_TESTING AND PROJECT_IS_TOP_LEVEL)
+  add_library(psobb_client_safety_hook_testable STATIC
+    src/hook_patch.cpp)
+  add_library(
+    PSOBB::ClientSafetyHookTestable
+    ALIAS psobb_client_safety_hook_testable)
+  target_include_directories(psobb_client_safety_hook_testable
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_compile_definitions(psobb_client_safety_hook_testable PRIVATE
+    PSOBB_CLIENT_SAFETY_TEST_SEAM
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX)
+  if(MSVC)
+    target_compile_options(psobb_client_safety_hook_testable PRIVATE
+      /W4
+      /WX
+      /permissive-
+      /sdl
+      /Brepro
+      /guard:cf
+      /utf-8
+      /Zc:__cplusplus
+      /Zc:inline)
+  endif()
   add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/PSOBB.ClientSafety"
     "${CMAKE_CURRENT_BINARY_DIR}/tests")
