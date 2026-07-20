@@ -42,6 +42,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 . (Join-Path $PSScriptRoot 'PSOBB.CombatCanary.Common.ps1')
 
 $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -869,9 +870,11 @@ try {
                     (Join-Path $stageSystem 'licenses'),
                     (Join-Path $stageSystem 'players'),
                     (Join-Path $stageSystem 'teams'),
-                    $stageControl, $stageBackups, $stageLogs, $stageSecrets)) {
+                    $stageBackups, $stageLogs, $stageSecrets)) {
                 Set-PSOBBProtectedTreeAcl -Path $protectedTree -Root $stageRoot
             }
+            Set-PSOBBLifecyclePathAcl `
+                -Path $stageControl -Root $stageRoot | Out-Null
             foreach ($protectedFile in @(
                     $stageClientBindingPath, $stageStateBindingPath)) {
                 Set-PSOBBProtectedAcl -Path $protectedFile

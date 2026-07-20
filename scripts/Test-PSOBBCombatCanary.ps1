@@ -21,6 +21,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'PSOBB.RuntimeAclPolicy.ps1')
 . (Join-Path $PSScriptRoot 'PSOBB.CombatCanary.Common.ps1')
 
 $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -1067,6 +1068,9 @@ if ($Target -in @('Installation', 'Installed', 'Both')) {
         -Layout $layout -ContractHash $trackedContractHash `
         -SigningFingerprint $trustedFingerprint `
         -ExplicitBuildContractHash $ExpectedBuildContractSha256
+    [void](Assert-PSOBBLifecyclePathAcl `
+            -Path $layout.ControlDirectory -Root $layout.Root `
+            -IsContainer $true)
 }
 
 if ($Target -in @('Snapshot', 'Installed', 'Both')) {

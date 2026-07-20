@@ -11,6 +11,7 @@ Set-StrictMode -Version Latest
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $scriptsRoot = Join-Path $repositoryRoot 'scripts'
 . (Join-Path $scriptsRoot 'PSOBB.Common.ps1')
+. (Join-Path $scriptsRoot 'PSOBB.RuntimeAclPolicy.ps1')
 . (Join-Path $scriptsRoot 'PSOBB.CombatCanary.Common.ps1')
 
 $results = [System.Collections.Generic.List[object]]::new()
@@ -413,6 +414,7 @@ function New-TestSyntheticCombatCanaryHarness {
 
     foreach ($name in @(
             'PSOBB.Common.ps1',
+            'PSOBB.RuntimeAclPolicy.ps1',
             'PSOBB.CombatCanary.Common.ps1',
             'Backup-PSOBB.ps1',
             'Restore-PSOBB.ps1',
@@ -3313,6 +3315,81 @@ try {
         [bool]$initialized.Initialized -and [bool]$initialized.Changed -and
         [bool]$idempotent.Initialized -and -not [bool]$idempotent.Changed -and
         [bool]$installedBeforeMutation.Valid) 'changed=true then changed=false'
+    $initializedControlValid = $false
+    try {
+        [void](Assert-PSOBBLifecyclePathAcl `
+                -Path $canary.ControlDirectory -Root $canary.Root `
+                -IsContainer $true)
+        $initializedControlValid = $true
+    } catch { $initializedControlValid = $false }
+    Add-Result 'Initialize publishes a lifecycle-owned control directory' `
+        $initializedControlValid `
+        'the current user owns the exact protected lifecycle directory'
+
+    $controlAclBeforeOwnerProbe = Get-Acl -LiteralPath $canary.ControlDirectory
+    $controlAccessBeforeOwnerProbe =
+        $controlAclBeforeOwnerProbe.GetSecurityDescriptorSddlForm(
+            [System.Security.AccessControl.AccessControlSections]::Access)
+    $controlGroupBeforeOwnerProbe = $controlAclBeforeOwnerProbe.GetGroup(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    $administratorsSid =
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $ownerOnlyMutation = $false
+    $ownerMismatchRejected = $false
+    $ownerRestored = $false
+    try {
+        $administratorOwned = New-PSOBBLifecycleDacl -IsContainer $true
+        $administratorOwned.SetOwner($administratorsSid)
+        [System.IO.FileSystemAclExtensions]::SetAccessControl(
+            [System.IO.DirectoryInfo](Get-Item -Force -LiteralPath (
+                    $canary.ControlDirectory)),
+            [System.Security.AccessControl.DirectorySecurity]$administratorOwned)
+        $mutatedControlAcl = Get-Acl -LiteralPath $canary.ControlDirectory
+        $ownerOnlyMutation =
+            $mutatedControlAcl.GetOwner(
+                [System.Security.Principal.SecurityIdentifier]).Value -ceq
+                    $administratorsSid.Value -and
+            $mutatedControlAcl.GetGroup(
+                [System.Security.Principal.SecurityIdentifier]).Value -ceq
+                    $controlGroupBeforeOwnerProbe -and
+            $mutatedControlAcl.GetSecurityDescriptorSddlForm(
+                [System.Security.AccessControl.AccessControlSections]::Access) -ceq
+                    $controlAccessBeforeOwnerProbe
+        try {
+            & (Join-Path $transactionScriptsRoot `
+                    'Test-PSOBBCombatCanary.ps1') `
+                -RuntimeRoot $layout.Root -Target Both `
+                -SnapshotPath $created.SnapshotPath `
+                -ExpectedBuildContractSha256 $buildContractHash `
+                -ExpectedTwillsContractSha256 $contractHash `
+                -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint |
+                Out-Null
+        } catch {
+            $ownerMismatchRejected = $_.Exception.Message -ceq
+                ('Protected lifecycle path owner is not the current user: ' +
+                    $canary.ControlDirectory)
+        }
+    } finally {
+        Set-PSOBBLifecyclePathAcl `
+            -Path $canary.ControlDirectory -Root $canary.Root | Out-Null
+        try {
+            [void](Assert-PSOBBLifecyclePathAcl `
+                    -Path $canary.ControlDirectory -Root $canary.Root `
+                    -IsContainer $true)
+            $ownerRestored = $true
+        } catch { $ownerRestored = $false }
+    }
+    $ownerRestoredReadback = & (Join-Path $transactionScriptsRoot `
+            'Test-PSOBBCombatCanary.ps1') `
+        -RuntimeRoot $layout.Root -Target Both `
+        -SnapshotPath $created.SnapshotPath `
+        -ExpectedBuildContractSha256 $buildContractHash `
+        -ExpectedTwillsContractSha256 $contractHash `
+        -ExpectedSigningPublicKeySpkiSha256 $spkiFingerprint
+    Add-Result 'Both rejects an owner-only lifecycle control mutation' (
+        $ownerOnlyMutation -and $ownerMismatchRejected -and $ownerRestored -and
+        [bool]$ownerRestoredReadback.Valid) `
+        'Administrators ownership fails closed and exact current-user ownership restores'
     $sourceGateAfterInstallValid = $false
     try {
         $sourceGateAfterInstall = Get-PSOBBOrdinaryTreeSnapshot `
