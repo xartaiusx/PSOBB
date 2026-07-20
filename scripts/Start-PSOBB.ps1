@@ -5,6 +5,7 @@ param(
     [string]$ServerEnvironment = 'Stable',
     [switch]$Background,
     [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45,
+    [ValidateRange(5, 300)][int]$VerificationTimeoutSeconds = 120,
     [Parameter(DontShow)][switch]$ClientOperationLockHeld
 )
 
@@ -878,8 +879,8 @@ try {
     }
 
     Assert-PSOBBServerEnvironmentIsolation -Layout $rootLayout | Out-Null
-    $installedBinding = if ($serverEnvironmentName -ceq 'CombatCanary') {
-        Get-PSOBBCombatCanaryInstalledBinding -Layout $rootLayout
+    $bindingExpectations = if ($serverEnvironmentName -ceq 'CombatCanary') {
+        Get-PSOBBCombatCanaryInstallationBindingExpectations -Layout $rootLayout
     } else {
         $null
     }
@@ -938,14 +939,14 @@ try {
         controlIdentity = $controlIdentity
         executablePath = $executable
         executableSha256 = $approved.Sha256
-        buildContractSha256 = if ($installedBinding) {
-            [string]$installedBinding.BuildContractSha256
+        buildContractSha256 = if ($bindingExpectations) {
+            [string]$bindingExpectations.BuildContractSha256
         } else { $null }
-        clientBindingSha256 = if ($installedBinding) {
-            [string]$installedBinding.ClientBindingSha256
+        clientBindingSha256 = if ($bindingExpectations) {
+            [string]$bindingExpectations.ClientBindingSha256
         } else { $null }
-        stateBindingSha256 = if ($installedBinding) {
-            [string]$installedBinding.StateBindingSha256
+        stateBindingSha256 = if ($bindingExpectations) {
+            [string]$bindingExpectations.StateBindingSha256
         } else { $null }
         startupRequestId = $startupRequestId
         controlToken = $controlToken
@@ -989,10 +990,19 @@ try {
         throw "The hidden newserv supervisor launch was $($hostProbe.State): $($hostProbe.Detail)"
     }
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+    $verificationDeadline = if ($serverEnvironmentName -ceq 'CombatCanary') {
+        [DateTime]::UtcNow.AddSeconds($VerificationTimeoutSeconds)
+    } else {
+        $null
+    }
+    $listenerDeadline = if ($serverEnvironmentName -ceq 'Stable') {
+        [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
+    } else {
+        $null
+    }
     $serverProcess = $null
     $startResult = $null
-    while ([DateTime]::UtcNow -lt $deadline) {
+    while ($true) {
         $hostProbe = Get-LaunchedSupervisorProbe `
             -Identity $hostIdentity `
             -ProbeAttempts 3 `
@@ -1050,19 +1060,23 @@ try {
                         -Actual ([string]$record.controlToken))) {
                     throw 'The supervisor process record did not match this start request'
                 }
-                if ($installedBinding) {
+                if ($bindingExpectations) {
                     if ([string]$record.buildContractSha256 -cne
-                            [string]$installedBinding.BuildContractSha256 -or
+                            [string]$bindingExpectations.BuildContractSha256 -or
                         [string]$record.clientBindingSha256 -cne
-                            [string]$installedBinding.ClientBindingSha256 -or
+                            [string]$bindingExpectations.ClientBindingSha256 -or
                         [string]$record.stateBindingSha256 -cne
-                            [string]$installedBinding.StateBindingSha256) {
+                            [string]$bindingExpectations.StateBindingSha256) {
                         throw 'The supervisor process record did not retain the sealed combat-canary bindings'
                     }
                 } elseif ($null -ne $record.buildContractSha256 -or
                     $null -ne $record.clientBindingSha256 -or
                     $null -ne $record.stateBindingSha256) {
                     throw 'The Stable supervisor process record contains unexpected combat-canary bindings'
+                }
+                if ($null -eq $listenerDeadline) {
+                    $listenerDeadline = [DateTime]::UtcNow.AddSeconds(
+                        $StartupTimeoutSeconds)
                 }
                 if (Test-PSOBBExactLoopbackServerListeners `
                         -ProcessId $serverProcess.Id) {
@@ -1113,11 +1127,21 @@ try {
                 }
             }
         }
+        $now = [DateTime]::UtcNow
+        if ($null -eq $listenerDeadline) {
+            if ($now -ge $verificationDeadline) {
+                throw "The combat-canary installation verification and child creation did not complete within $VerificationTimeoutSeconds seconds"
+            }
+        } elseif ($now -ge $listenerDeadline) {
+            break
+        }
         Start-Sleep -Milliseconds 250
     }
 
     if ($startResult) {
         Write-Output -NoEnumerate $startResult
+    } elseif ($serverEnvironmentName -ceq 'CombatCanary') {
+        throw "newserv did not reach the exact approved loopback listener set within $StartupTimeoutSeconds seconds after verified child creation"
     } else {
         throw 'newserv did not reach the exact approved loopback listener set before the startup timeout'
     }

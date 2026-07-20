@@ -807,6 +807,91 @@ function Get-PSOBBApprovedNewservExecutableIdentity {
     }
 }
 
+function Get-PSOBBCombatCanaryInstallationBindingExpectations {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Layout)
+
+    $environmentLayout = Get-PSOBBServerEnvironmentLayout `
+        -Layout $Layout -Environment CombatCanary
+    $installRecordPath = Assert-PathWithinRoot `
+        -Path $environmentLayout.InstallRecord `
+        -Root $environmentLayout.EnvironmentRoot
+    $installRecordItem = Get-Item `
+        -Force -LiteralPath $installRecordPath -ErrorAction Stop
+    if ($installRecordItem.PSIsContainer -or
+        ($installRecordItem.Attributes -band
+            [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $installRecordItem.Length -le 0 -or
+        $installRecordItem.Length -gt 256KB -or
+        -not (Test-PSOBBProtectedAcl -Path $installRecordPath)) {
+        throw 'The combat-canary installation binding record is missing, unsafe, or unprotected'
+    }
+
+    $snapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $installRecordPath `
+        -Root $environmentLayout.EnvironmentRoot `
+        -MaximumBytes 256KB `
+        -MaximumDepth 8 `
+        -Label 'combat-canary installation binding record'
+    if (-not (Test-PSOBBProtectedAcl -Path $installRecordPath)) {
+        throw 'The combat-canary installation binding record protection changed while it was read'
+    }
+    $installation = $snapshot.Value
+    [void](Assert-PSOBBStrictDataObjectProperties `
+            -Value $installation `
+            -Label 'combat-canary installation binding record' `
+            -Expected @(
+                'schemaVersion', 'environment', 'environmentId',
+                'initializedAtUtc', 'buildContractSha256',
+                'serverReleaseManifestSha256', 'baseClientManifestSha256',
+                'clientBindingSha256', 'snapshotDirectoryName', 'snapshotId',
+                'snapshotManifestSha256', 'stateBindingSha256',
+                'twillsContractSha256', 'signingPublicKeySpkiSha256',
+                'configurationSha256'))
+
+    foreach ($propertyName in @(
+            'environment', 'environmentId', 'initializedAtUtc',
+            'buildContractSha256', 'serverReleaseManifestSha256',
+            'baseClientManifestSha256', 'clientBindingSha256',
+            'snapshotDirectoryName', 'snapshotId', 'snapshotManifestSha256',
+            'stateBindingSha256', 'twillsContractSha256',
+            'signingPublicKeySpkiSha256', 'configurationSha256')) {
+        if ($installation.$propertyName -isnot [string]) {
+            throw "The combat-canary installation binding record contains a non-string $propertyName"
+        }
+    }
+    $initializedAt = [DateTimeOffset]::MinValue
+    $snapshotId = [Guid]::Empty
+    if ($installation.schemaVersion -isnot [long] -or
+        [long]$installation.schemaVersion -ne 1 -or
+        [string]$installation.environment -cne 'CombatCanary' -or
+        [string]$installation.environmentId -cne 'combat-canary' -or
+        -not [DateTimeOffset]::TryParse(
+            [string]$installation.initializedAtUtc, [ref]$initializedAt) -or
+        [string]$installation.snapshotDirectoryName -cnotmatch
+            '^twills-slot0-[0-9]{8}T[0-9]{9}Z-[a-f0-9]{8}$' -or
+        -not [Guid]::TryParseExact(
+            [string]$installation.snapshotId, 'D', [ref]$snapshotId)) {
+        throw 'The combat-canary installation binding record has an invalid identity'
+    }
+    foreach ($propertyName in @(
+            'buildContractSha256', 'serverReleaseManifestSha256',
+            'baseClientManifestSha256', 'clientBindingSha256',
+            'snapshotManifestSha256', 'stateBindingSha256',
+            'twillsContractSha256', 'signingPublicKeySpkiSha256',
+            'configurationSha256')) {
+        if ([string]$installation.$propertyName -cnotmatch '^[a-f0-9]{64}$') {
+            throw "The combat-canary installation binding record contains an invalid $propertyName"
+        }
+    }
+
+    [pscustomobject]@{
+        BuildContractSha256 = [string]$installation.buildContractSha256
+        ClientBindingSha256 = [string]$installation.clientBindingSha256
+        StateBindingSha256 = [string]$installation.stateBindingSha256
+    }
+}
+
 function Get-PSOBBCombatCanaryInstalledBinding {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)

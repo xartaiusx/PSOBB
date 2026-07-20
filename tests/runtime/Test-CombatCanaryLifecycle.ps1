@@ -468,7 +468,7 @@ Add-Result 'CombatCanary client launch consumes only the sealed native binding' 
     [regex]::Matches(
         $clientSource, 'Get-PSOBBAllClientProcessRecords').Count -ge 2 -and
     $clientSource -match 'ClientBindingSha256' -and
-    $sessionSource -match 'Get-PSOBBCombatCanaryInstalledBinding' -and
+    $sessionSource -notmatch 'Get-PSOBBCombatCanaryInstalledBinding' -and
     $sessionSource -match "PSBoundParameters\.ContainsKey\('WindowMode'\)" -and
     $sessionSource -match "serverEnvironmentName -ceq 'CombatCanary'[\s\S]{0,80}'ProfileDefault'" -and
     $stopClientSource -match 'Get-PSOBBAllClientProcessRecords') `

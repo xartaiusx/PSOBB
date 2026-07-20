@@ -123,15 +123,11 @@ $componentId = Get-PSOBBServerComponentId `
     -ServerEnvironment $serverEnvironmentName
 $gracefulRequested = $false
 $startupAuthenticated = $false
+$installedBinding = $null
 
 try {
     $marker = Assert-PSOBBRuntimeMarker -Layout $rootLayout
     Assert-PSOBBServerEnvironmentIsolation -Layout $rootLayout | Out-Null
-    $installedBinding = if ($serverEnvironmentName -ceq 'CombatCanary') {
-        Get-PSOBBCombatCanaryInstalledBinding -Layout $rootLayout
-    } else {
-        $null
-    }
     Assert-PSOBBLifecyclePathAcl `
         -Path $layout.ControlDirectory -Root $layout.Root -IsContainer $true | Out-Null
     $approved = Get-PSOBBApprovedNewservExecutableIdentity `
@@ -174,14 +170,14 @@ try {
         [string]$startup.controlToken -notmatch '^[A-Za-z0-9_-]{43}$') {
         throw 'The protected supervisor startup state is invalid'
     }
-    if ($installedBinding) {
-        if ([string]$startup.buildContractSha256 -cne
-                [string]$installedBinding.BuildContractSha256 -or
-            [string]$startup.clientBindingSha256 -cne
-                [string]$installedBinding.ClientBindingSha256 -or
-            [string]$startup.stateBindingSha256 -cne
-                [string]$installedBinding.StateBindingSha256) {
-            throw 'The protected supervisor startup state does not match the sealed combat-canary installation'
+    if ($serverEnvironmentName -ceq 'CombatCanary') {
+        foreach ($propertyName in @(
+                'buildContractSha256', 'clientBindingSha256',
+                'stateBindingSha256')) {
+            if ($startup.$propertyName -isnot [string] -or
+                [string]$startup.$propertyName -cnotmatch '^[a-f0-9]{64}$') {
+                throw 'The protected supervisor startup state has an invalid combat-canary binding expectation'
+            }
         }
     } elseif ($null -ne $startup.buildContractSha256 -or
         $null -ne $startup.clientBindingSha256 -or
@@ -229,6 +225,18 @@ try {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    if ($serverEnvironmentName -ceq 'CombatCanary') {
+        $installedBinding = Get-PSOBBCombatCanaryInstalledBinding `
+            -Layout $rootLayout
+        if ([string]$startup.buildContractSha256 -cne
+                [string]$installedBinding.BuildContractSha256 -or
+            [string]$startup.clientBindingSha256 -cne
+                [string]$installedBinding.ClientBindingSha256 -or
+            [string]$startup.stateBindingSha256 -cne
+                [string]$installedBinding.StateBindingSha256) {
+            throw 'The protected supervisor startup binding expectations do not match the verified combat-canary installation'
+        }
+    }
     $child = [System.Diagnostics.Process]::Start($startInfo)
     if (-not $child) {
         throw 'Failed to create the newserv process'

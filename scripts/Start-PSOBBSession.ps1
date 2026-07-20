@@ -8,7 +8,8 @@ param(
     [string]$WindowMode = 'Borderless',
     [switch]$PreserveForeground,
     [string]$RuntimeRoot,
-    [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45
+    [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45,
+    [ValidateRange(5, 300)][int]$VerificationTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,16 +67,15 @@ try {
             -RuntimeRoot $layout.Root `
             -ServerEnvironment $serverEnvironmentName `
             -ClientOperationLockHeld `
-            -StartupTimeoutSeconds $StartupTimeoutSeconds
+            -StartupTimeoutSeconds $StartupTimeoutSeconds `
+            -VerificationTimeoutSeconds $VerificationTimeoutSeconds
         $serverStartedBySession = $true
     }
 
     $serverProcess = Wait-PSOBBServerReady `
         -Layout $serverLayout `
         -TimeoutSeconds $StartupTimeoutSeconds
-    if ($serverEnvironmentName -ceq 'CombatCanary') {
-        Get-PSOBBCombatCanaryInstalledBinding -Layout $layout | Out-Null
-    } else {
+    if ($serverEnvironmentName -ceq 'Stable') {
         & (Join-Path $PSScriptRoot 'Test-PSOBB.ps1') `
             -Suite Baseline `
             -RuntimeRoot $layout.Root | Out-Null
