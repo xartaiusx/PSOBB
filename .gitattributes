@@ -5,6 +5,7 @@
 *.md text eol=lf
 *.cs text eol=lf
 *.csproj text eol=lf
+*.patch text eol=lf whitespace=-blank-at-eol
 *.sln text eol=crlf
 *.png binary
 *.jpg binary

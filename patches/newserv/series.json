@@ -1,0 +1,18 @@
+{
+  "$schema": "https://psobb.local/schemas/newserv-patch-series.schema.json",
+  "schemaVersion": 1,
+  "sourceCommit": "d754a34e271a4fb387be63db34ef0c303e49dcf2",
+  "buildEnvironment": {
+    "NEWSERV_BUILD_REVISION": "d754a34",
+    "SOURCE_DATE_EPOCH": "1783778777"
+  },
+  "patches": [
+    {
+      "order": 1,
+      "path": "0001-deterministic-revision-metadata.patch",
+      "sha256": "ab7349f7eff8c19d9bc5546ef4595b544b89ca0e90c1bdb2c893f42c8efc7303",
+      "scope": "build-metadata",
+      "runtimeBehaviorChanged": false
+    }
+  ]
+}

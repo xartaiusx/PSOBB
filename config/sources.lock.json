@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-19T17:20:00Z",
+  "generatedAtUtc": "2026-07-20T04:07:20Z",
   "components": [
     {
       "id": "newserv-stable-release",
@@ -87,8 +87,74 @@
       "scanState": "Microsoft Defender custom scan passed 2026-07-14 with no new detection for the locked artifact",
       "license": "MIT",
       "redistribution": "Allowed with the upstream MIT license",
-      "compatibility": "source archive acquired outside Git; not built and cannot replace the accepted stable release without the canary suite",
+      "compatibility": "source archive acquired outside Git; the exact deterministic combat-canary build is recorded separately and cannot replace the accepted stable release without the complete promotion suite",
       "rollbackTarget": "newserv-stable-release"
+    },
+    {
+      "id": "newserv-combat-canary-build",
+      "role": "server-build",
+      "sourceUrl": "https://github.com/fuzziqersoftware/newserv.git",
+      "releaseUrl": "https://github.com/fuzziqersoftware/newserv/commit/d754a34e271a4fb387be63db34ef0c303e49dcf2",
+      "version": "d754a34-combat-canary-1",
+      "commit": "d754a34e271a4fb387be63db34ef0c303e49dcf2",
+      "builtAtUtc": "2026-07-20T04:07:20Z",
+      "size": 20157651,
+      "sha256": "3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a",
+      "signatureState": "Unsigned local deterministic MinGW x64 source build; exact binary, build contract, ordered patch series, PATH-derived native execution payloads, full ordinary-file input trees, tracked-only package inventory, release output claims, and ordinal reparse-free manifest are SHA-256 locked",
+      "license": "MIT server with separately preserved dependency notices",
+      "redistribution": "Source licenses permit redistribution with notices; this local combat-canary remains outside Git and is not published",
+      "compatibility": "the definitive offline-input deterministic two-build run produced byte-identical output under exact PATH-derived native-payload and full ordinary-file input-tree gates; package inputs come only from the disposable tracked Git index/worktree with reviewed link resolution and ordinal inventory; current verification also recomputes version, PE imports, and package path-needle absence; native sockets are not OS-denied and runtime promotion remains a separate gate",
+      "rollbackTarget": "newserv-stable-release",
+      "members": [
+        {
+          "path": "config/combat-canary-build.json",
+          "size": 11472,
+          "sha256": "d2019c44b677ae238c005e38f72c12e9da8cc7af9c7ef20395ea4622b67d6e7a",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "config/schemas/combat-canary-build.schema.json",
+          "size": 13873,
+          "sha256": "ab723ad787ada019d65004e5c2be56933b96fd6efbf4688587f67146028f06bd",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "config/native-execution-payloads.json",
+          "size": 186105,
+          "sha256": "645887c7b449c3776d68669358ddc02b18bb01747776513577e156ffe6537ced",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "config/schemas/native-execution-payloads.schema.json",
+          "size": 4414,
+          "sha256": "537f57df4af2eea3ae5b1f5a09b60e75dac3c511ae73b98f35495e0e63425b13",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "patches/newserv/series.json",
+          "size": 537,
+          "sha256": "13860c4d9d08abe6c4ebe16878081ceb67d790c4cc9133f13abe78abc37f0942",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "config/schemas/newserv-patch-series.schema.json",
+          "size": 1671,
+          "sha256": "e0d628cebd7b7bcdd023a013079f74dffbbb9cc31a4cac331e4401df5e667afb",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "release/release-manifest.json",
+          "size": 521493,
+          "sha256": "d9626c5a2159f9478a5ef058dbcdc1dbafda7f3aad57aead9a5a343bc32c7bbb",
+          "authenticode": "NotApplicable"
+        },
+        {
+          "path": "release/newserv-windows.exe",
+          "size": 20157651,
+          "sha256": "3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a",
+          "authenticode": "NotSigned"
+        }
+      ]
     },
     {
       "id": "tethealla-59nl-english",

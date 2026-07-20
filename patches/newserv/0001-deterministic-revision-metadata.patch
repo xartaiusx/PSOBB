@@ -1,0 +1,60 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 34cf112..45664d8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -33,9 +33,10 @@ find_package(resource_file REQUIRED)
+ 
+ # Git metadata
+ 
++find_program(SH_EXECUTABLE NAMES sh REQUIRED)
+ add_custom_command(
+     OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/Revision.cc ${CMAKE_CURRENT_SOURCE_DIR}/src/__Revision__.cc
+-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/src/Revision-generate.sh ${CMAKE_CURRENT_SOURCE_DIR}/src/Revision.cc
++    COMMAND ${SH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/src/Revision-generate.sh ${CMAKE_CURRENT_SOURCE_DIR}/src/Revision.cc
+     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src
+ )
+ add_custom_target(
+diff --git a/src/Revision-generate.sh b/src/Revision-generate.sh
+index 8f8f7da..8177648 100755
+--- a/src/Revision-generate.sh
++++ b/src/Revision-generate.sh
+@@ -3,13 +3,30 @@
+ OUTPUT_FILENAME="$1"
+ OUTPUT_DIRNAME=$(dirname $OUTPUT_FILENAME)
+ 
+-GIT_REVISION_HASH=$(git rev-parse --short HEAD)
+-TIMESTAMP_SECS=$(date +%s)
++if [ -n "${NEWSERV_BUILD_REVISION:-}" ]; then
++  GIT_REVISION_HASH="$NEWSERV_BUILD_REVISION"
++  REVISION_IS_EXPLICIT=1
++else
++  GIT_REVISION_HASH=$(git rev-parse --short HEAD)
++  REVISION_IS_EXPLICIT=0
++fi
++
++if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
++  case "$SOURCE_DATE_EPOCH" in
++    *[!0-9]*|'')
++      echo "SOURCE_DATE_EPOCH must be an unsigned integer" >&2
++      exit 1
++      ;;
++  esac
++  TIMESTAMP_SECS="$SOURCE_DATE_EPOCH"
++else
++  TIMESTAMP_SECS=$(date +%s)
++fi
+ 
+ if [ -z "$GIT_REVISION_HASH" ]; then
+   GIT_REVISION_HASH="????"
+ else
+-  if ! git diff-index --quiet HEAD -- ; then
++  if [ "$REVISION_IS_EXPLICIT" -eq 0 ] && ! git diff-index --quiet HEAD -- ; then
+     GIT_REVISION_HASH="$GIT_REVISION_HASH+"
+   fi
+ fi
+@@ -21,3 +38,5 @@ cat > $OUTPUT_FILENAME <<EOF
+ const char* GIT_REVISION_HASH = "$GIT_REVISION_HASH";
+ const uint64_t BUILD_TIMESTAMP = static_cast<uint64_t>($TIMESTAMP_SECS) * 1000000;
+ EOF
++
++: > "$OUTPUT_DIRNAME/__Revision__.cc"

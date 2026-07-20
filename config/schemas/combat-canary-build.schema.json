@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psobb.local/schemas/combat-canary-build.schema.json",
+  "title": "PSOBB combat-canary server build contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "profileId",
+    "generatedAtUtc",
+    "source",
+    "patchSeries",
+    "dependencies",
+    "signatureVerification",
+    "toolchain",
+    "reproducibility",
+    "validation",
+    "output"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "profileId": { "const": "newserv-combat-canary-build" },
+    "generatedAtUtc": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentId", "commit", "revision"],
+      "properties": {
+        "componentId": { "const": "newserv-canary-source" },
+        "commit": { "const": "d754a34e271a4fb387be63db34ef0c303e49dcf2" },
+        "revision": { "const": "d754a34" }
+      }
+    },
+    "patchSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "const": "patches/newserv/series.json" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "properties": { "id": { "const": "asio" } }, "required": ["id"] }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "properties": { "id": { "const": "phosg" } }, "required": ["id"] }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "properties": { "id": { "const": "resource_dasm" } }, "required": ["id"] }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "properties": { "id": { "const": "libiconv" } }, "required": ["id"] }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "properties": { "id": { "const": "zlib" } }, "required": ["id"] }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "signatureVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolId", "keyring"],
+      "properties": {
+        "toolId": { "const": "gpgv" },
+        "keyring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "size", "sha256", "readOnly"],
+          "properties": {
+            "source": { "const": "trust/newserv-build-signers.gpg" },
+            "size": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "readOnly": { "const": true }
+          }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "generator",
+        "buildType",
+        "staticRuntime",
+        "nativeExecutionManifest",
+        "tools"
+      ],
+      "properties": {
+        "target": { "const": "x86_64-w64-mingw32" },
+        "generator": { "const": "Ninja" },
+        "buildType": { "const": "Release" },
+        "staticRuntime": { "const": true },
+        "nativeExecutionManifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "size",
+            "sha256",
+            "schemaPath",
+            "schemaSize",
+            "schemaSha256"
+          ],
+          "properties": {
+            "path": { "const": "config/native-execution-payloads.json" },
+            "size": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "schemaPath": { "const": "config/schemas/native-execution-payloads.schema.json" },
+            "schemaSize": { "type": "integer", "minimum": 1 },
+            "schemaSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "uniqueItems": true,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "cmd" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "gcc" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "g++" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "objdump" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "cmake" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "ctest" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "ninja" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "mingw32-make" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "git" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "gpgv" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "tar" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "bash" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "sh" } }, "required": ["id"] }] },
+            { "allOf": [{ "$ref": "#/$defs/tool" }, { "properties": { "id": { "const": "subst" } }, "required": ["id"] }] }
+          ],
+          "items": false
+        }
+      }
+    },
+    "reproducibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceDateEpoch",
+        "cleanBuildCount",
+        "pathNormalization",
+        "linkerFlags",
+        "builds"
+      ],
+      "properties": {
+        "sourceDateEpoch": { "const": 1783778777 },
+        "cleanBuildCount": { "const": 2 },
+        "pathNormalization": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "const": "-ffile-prefix-map=<BUILD_DRIVE>:=." },
+            { "const": "-fmacro-prefix-map=<BUILD_DRIVE>:=." },
+            { "const": "-fdebug-prefix-map=<BUILD_DRIVE>:=." }
+          ],
+          "items": false
+        },
+        "linkerFlags": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            { "const": "-static" },
+            { "const": "-Wl,--no-insert-timestamp" }
+          ],
+          "items": false
+        },
+        "builds": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/buildResult" },
+                { "properties": { "run": { "const": 1 } }, "required": ["run"] }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/buildResult" },
+                { "properties": { "run": { "const": 2 } }, "required": ["run"] }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependencyTests", "newservCTest", "deterministic", "packageReparseFree"],
+      "properties": {
+        "dependencyTests": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "passed", "failed"],
+              "properties": {
+                "name": { "const": "zlib CTest" },
+                "passed": { "const": 18 },
+                "failed": { "const": 0 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "passed", "failed"],
+              "properties": {
+                "name": { "const": "phosg CTest" },
+                "passed": { "const": 14 },
+                "failed": { "const": 0 }
+              }
+            }
+          ],
+          "items": false
+        },
+        "newservCTest": { "const": "not-run-fixture-required" },
+        "deterministic": { "const": true },
+        "packageReparseFree": { "const": true }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootRelative",
+        "executable",
+        "releaseManifest",
+        "fileCount",
+        "totalBytes",
+        "versionOutput",
+        "runtimeImports"
+      ],
+      "properties": {
+        "rootRelative": { "const": "combat-canary/server-base/release" },
+        "executable": { "$ref": "#/$defs/outputFile" },
+        "releaseManifest": { "$ref": "#/$defs/outputFile" },
+        "fileCount": { "type": "integer", "minimum": 1 },
+        "totalBytes": { "type": "integer", "minimum": 1 },
+        "versionOutput": {
+          "const": "newserv-d754a34 built 2026-07-11 14:06:17.000000 UTC"
+        },
+        "runtimeImports": {
+          "type": "array",
+          "minItems": 17,
+          "maxItems": 17,
+          "prefixItems": [
+            { "const": "bcrypt.dll" },
+            { "const": "IPHLPAPI.DLL" },
+            { "const": "KERNEL32.dll" },
+            { "const": "api-ms-win-crt-convert-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-environment-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-filesystem-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-heap-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-locale-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-math-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-private-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-runtime-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-stdio-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-string-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-time-l1-1-0.dll" },
+            { "const": "api-ms-win-crt-utility-l1-1-0.dll" },
+            { "const": "MSWSOCK.dll" },
+            { "const": "WS2_32.dll" }
+          ],
+          "items": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source", "size", "sha256", "signature", "commit"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["git", "archive"] },
+        "source": { "type": "string", "minLength": 1 },
+        "size": { "type": ["integer", "null"], "minimum": 0 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "signature": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["path", "size", "sha256", "signerFingerprint"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "size": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "signerFingerprint": { "type": "string", "pattern": "^[0-9A-F]{40}$" }
+          }
+        },
+        "commit": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "command",
+        "pathRoot",
+        "relativePath",
+        "versionMode",
+        "versionArguments",
+        "version",
+        "executableSize",
+        "sha256"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "pattern": "^[A-Za-z0-9+.-]+$" },
+        "pathRoot": { "enum": ["LOCALAPPDATA", "PROGRAMFILES", "SYSTEMROOT"] },
+        "relativePath": {
+          "type": "string",
+          "pattern": "^[^\\\\/:]+(\\\\[^\\\\/:]+)*$"
+        },
+        "versionMode": { "enum": ["command", "file"] },
+        "versionArguments": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "executableSize": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "buildResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run", "size", "sha256"],
+      "properties": {
+        "run": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "outputFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "sha256", "authenticode"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[^\\\\:]+$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "authenticode": { "enum": ["NotSigned", "NotApplicable"] }
+      }
+    }
+  }
+}

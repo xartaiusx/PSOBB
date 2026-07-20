@@ -1,0 +1,332 @@
+{
+  "$schema": "./schemas/combat-canary-build.schema.json",
+  "schemaVersion": 1,
+  "profileId": "newserv-combat-canary-build",
+  "generatedAtUtc": "2026-07-20T03:54:09Z",
+  "source": {
+    "componentId": "newserv-canary-source",
+    "commit": "d754a34e271a4fb387be63db34ef0c303e49dcf2",
+    "revision": "d754a34"
+  },
+  "patchSeries": {
+    "path": "patches/newserv/series.json",
+    "sha256": "13860c4d9d08abe6c4ebe16878081ceb67d790c4cc9133f13abe78abc37f0942"
+  },
+  "dependencies": [
+    {
+      "id": "asio",
+      "kind": "git",
+      "source": "sources/asio",
+      "size": null,
+      "sha256": null,
+      "signature": null,
+      "commit": "bbecff21a23b97c34641f0f1f08b28c91b9c77cf"
+    },
+    {
+      "id": "phosg",
+      "kind": "git",
+      "source": "sources/phosg",
+      "size": null,
+      "sha256": null,
+      "signature": null,
+      "commit": "676878374d1c13cbcb6a8576539093ab0f5d674b"
+    },
+    {
+      "id": "resource_dasm",
+      "kind": "git",
+      "source": "sources/resource_dasm",
+      "size": null,
+      "sha256": null,
+      "signature": null,
+      "commit": "4c15a602efb1ad693705958d5969d6d35cee07f3"
+    },
+    {
+      "id": "libiconv",
+      "kind": "archive",
+      "source": "archives/graphics-lab/libiconv-1.19.tar.gz",
+      "size": 5921103,
+      "sha256": "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6",
+      "signature": {
+        "path": "archives/graphics-lab/libiconv-1.19.tar.gz.sig",
+        "size": 228,
+        "sha256": "30374a9cf2846418fc34977eb2b92094c3edb76021d57de541699e2b5e32dc9b",
+        "signerFingerprint": "E0FFBD975397F77A32AB76ECB6301D9E1BBEAC08"
+      },
+      "commit": null
+    },
+    {
+      "id": "zlib",
+      "kind": "archive",
+      "source": "archives/graphics-lab/zlib-1.3.2.tar.gz",
+      "size": 1502830,
+      "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+      "signature": {
+        "path": "archives/graphics-lab/zlib-1.3.2.tar.gz.asc",
+        "size": 235,
+        "sha256": "977472e4d306906adbe34f8b1fdbf58c46fe8b4ade1c92117816b8281c5ee096",
+        "signerFingerprint": "5ED46A6721D365587791E2AA783FCD8E58BCAFBA"
+      },
+      "commit": null
+    }
+  ],
+  "signatureVerification": {
+    "toolId": "gpgv",
+    "keyring": {
+      "source": "trust/newserv-build-signers.gpg",
+      "size": 1673,
+      "sha256": "d357a046080d5f931c8271c32a53fb72bea1493b8631e69951f6b8d55874fa12",
+      "readOnly": true
+    }
+  },
+  "toolchain": {
+    "target": "x86_64-w64-mingw32",
+    "generator": "Ninja",
+    "buildType": "Release",
+    "staticRuntime": true,
+    "nativeExecutionManifest": {
+      "path": "config/native-execution-payloads.json",
+      "size": 186105,
+      "sha256": "645887c7b449c3776d68669358ddc02b18bb01747776513577e156ffe6537ced",
+      "schemaPath": "config/schemas/native-execution-payloads.schema.json",
+      "schemaSize": 4414,
+      "schemaSha256": "537f57df4af2eea3ae5b1f5a09b60e75dac3c511ae73b98f35495e0e63425b13"
+    },
+    "tools": [
+      {
+        "id": "cmd",
+        "command": "cmd",
+        "pathRoot": "SYSTEMROOT",
+        "relativePath": "system32\\cmd.exe",
+        "versionMode": "file",
+        "versionArguments": [],
+        "version": "10.0.26100.1 (WinBuild.160101.0800)",
+        "executableSize": 344064,
+        "sha256": "65ec268add3973b6dca64222985da47caeaee44a340b0ec1466782914fd743d9"
+      },
+      {
+        "id": "gcc",
+        "command": "gcc",
+        "pathRoot": "LOCALAPPDATA",
+        "relativePath": "Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin\\gcc.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "gcc.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r2) 16.1.0",
+        "executableSize": 2409998,
+        "sha256": "61faf79766e5e4f9170d1a3776ad13b4daf380d11f3d7fbaa0d94c4d71533496"
+      },
+      {
+        "id": "g++",
+        "command": "g++",
+        "pathRoot": "LOCALAPPDATA",
+        "relativePath": "Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin\\g++.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "g++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r2) 16.1.0",
+        "executableSize": 2414094,
+        "sha256": "8b08e1d0695a8cde85b466056a5437ea9798149efa8909ef92fb069304ed911a"
+      },
+      {
+        "id": "objdump",
+        "command": "objdump",
+        "pathRoot": "LOCALAPPDATA",
+        "relativePath": "Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin\\objdump.exe",
+        "versionMode": "command",
+        "versionArguments": [
+          "--version"
+        ],
+        "version": "GNU objdump (Binutils for MinGW-W64 x86_64, built by Brecht Sanders, r2) 2.46.0.20260210",
+        "executableSize": 2562062,
+        "sha256": "726acab4db3267478f323bee4092824c29e583c036e93aaef7e8846f7107b9bf"
+      },
+      {
+        "id": "cmake",
+        "command": "cmake",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "CMake\\bin\\cmake.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "cmake version 4.4.0",
+        "executableSize": 13465160,
+        "sha256": "4510f1883dfad3238602bae9a7a4b441fb4a931a643604aa44336710b6be5f6f"
+      },
+      {
+        "id": "ctest",
+        "command": "ctest",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "CMake\\bin\\ctest.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "ctest version 4.4.0",
+        "executableSize": 14440008,
+        "sha256": "b3fcab80b6f4155ea1312380e7f7d4e463b16a975c991d8d599176f410fa3754"
+      },
+      {
+        "id": "ninja",
+        "command": "ninja",
+        "pathRoot": "LOCALAPPDATA",
+        "relativePath": "Microsoft\\WinGet\\Packages\\Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe\\ninja.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "1.13.2",
+        "executableSize": 603648,
+        "sha256": "e52a7ad9538d9618c67a0bd777964e2eec8a30f68b810a2f6adce1f2daf847b8"
+      },
+      {
+        "id": "mingw32-make",
+        "command": "mingw32-make",
+        "pathRoot": "LOCALAPPDATA",
+        "relativePath": "Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin\\mingw32-make.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "GNU Make 4.4.1",
+        "executableSize": 259598,
+        "sha256": "aed08bfbbd11728c5dd8486b7f7e13904748579d998a0131f7288bac0b32a5e0"
+      },
+      {
+        "id": "git",
+        "command": "git",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "Git\\mingw64\\bin\\git.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "git version 2.55.0.windows.3",
+        "executableSize": 4383048,
+        "sha256": "1a0043555d254618f2d56c936c3d9a1fbfb878bc878416a133c346bc7835eda9"
+      },
+      {
+        "id": "gpgv",
+        "command": "gpgv",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "GnuPG\\bin\\gpgv.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "gpgv (GnuPG) 2.5.21",
+        "executableSize": 694824,
+        "sha256": "10836486cf58d50ef01d4acde14788ab9771b230cc5b96bc3795a6c3948d6cdb"
+      },
+      {
+        "id": "tar",
+        "command": "tar",
+        "pathRoot": "SYSTEMROOT",
+        "relativePath": "system32\\tar.exe",
+        "versionMode": "file",
+        "versionArguments": [],
+        "version": "3.8.4 (WinBuild.160101.0800)",
+        "executableSize": 92176,
+        "sha256": "9b77d4c912f2edae8c241d0ece1094d2ac068b084269ceaf85d7c7b085d2ae86"
+      },
+      {
+        "id": "bash",
+        "command": "bash",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "Git\\usr\\bin\\bash.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "GNU bash, version 5.3.15(1)-release (x86_64-pc-cygwin)",
+        "executableSize": 2456832,
+        "sha256": "acf4ecb52e601f7b4a37db51b07650b5d0315eafd010590e98079fa026da4b7b"
+      },
+      {
+        "id": "sh",
+        "command": "sh",
+        "pathRoot": "PROGRAMFILES",
+        "relativePath": "Git\\usr\\bin\\sh.exe",
+        "versionMode": "command",
+        "versionArguments": ["--version"],
+        "version": "GNU bash, version 5.3.15(1)-release (x86_64-pc-cygwin)",
+        "executableSize": 2456832,
+        "sha256": "acf4ecb52e601f7b4a37db51b07650b5d0315eafd010590e98079fa026da4b7b"
+      },
+      {
+        "id": "subst",
+        "command": "subst",
+        "pathRoot": "SYSTEMROOT",
+        "relativePath": "system32\\subst.exe",
+        "versionMode": "file",
+        "versionArguments": [],
+        "version": "10.0.26100.1 (WinBuild.160101.0800)",
+        "executableSize": 40960,
+        "sha256": "158598ed3d590937c964b43dd91546ffcabab5636b6ce619b4ffc43224013bb6"
+      }
+    ]
+  },
+  "reproducibility": {
+    "sourceDateEpoch": 1783778777,
+    "cleanBuildCount": 2,
+    "pathNormalization": [
+      "-ffile-prefix-map=<BUILD_DRIVE>:=.",
+      "-fmacro-prefix-map=<BUILD_DRIVE>:=.",
+      "-fdebug-prefix-map=<BUILD_DRIVE>:=."
+    ],
+    "linkerFlags": [
+      "-static",
+      "-Wl,--no-insert-timestamp"
+    ],
+    "builds": [
+      {
+        "run": 1,
+        "size": 20157651,
+        "sha256": "3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a"
+      },
+      {
+        "run": 2,
+        "size": 20157651,
+        "sha256": "3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a"
+      }
+    ]
+  },
+  "validation": {
+    "dependencyTests": [
+      {
+        "name": "zlib CTest",
+        "passed": 18,
+        "failed": 0
+      },
+      {
+        "name": "phosg CTest",
+        "passed": 14,
+        "failed": 0
+      }
+    ],
+    "newservCTest": "not-run-fixture-required",
+    "deterministic": true,
+    "packageReparseFree": true
+  },
+  "output": {
+    "rootRelative": "combat-canary/server-base/release",
+    "executable": {
+      "path": "newserv-windows.exe",
+      "size": 20157651,
+      "sha256": "3208b811791e591955a50084276e522cfbfa13f9e807d2287d5ce66f712f717a",
+      "authenticode": "NotSigned"
+    },
+    "releaseManifest": {
+      "path": "release-manifest.json",
+      "size": 521493,
+      "sha256": "d9626c5a2159f9478a5ef058dbcdc1dbafda7f3aad57aead9a5a343bc32c7bbb",
+      "authenticode": "NotApplicable"
+    },
+    "fileCount": 2913,
+    "totalBytes": 56750845,
+    "versionOutput": "newserv-d754a34 built 2026-07-11 14:06:17.000000 UTC",
+    "runtimeImports": [
+      "bcrypt.dll",
+      "IPHLPAPI.DLL",
+      "KERNEL32.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "api-ms-win-crt-environment-l1-1-0.dll",
+      "api-ms-win-crt-filesystem-l1-1-0.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-private-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "api-ms-win-crt-time-l1-1-0.dll",
+      "api-ms-win-crt-utility-l1-1-0.dll",
+      "MSWSOCK.dll",
+      "WS2_32.dll"
+    ]
+  }
+}
