@@ -261,7 +261,10 @@ void TestRangeAwareExpectedBytes() {
   CHECK(!VerifyLoadedImage(
       extended_loaded, image.identity, unmapped_gap_gate, failure));
 
-  const std::array overflow_gate{ExpectedBytes{0xFFFFFFFFU, zero}};
+  const std::array<std::byte, 2> two_zero{
+      std::byte{0x00}, std::byte{0x00}};
+  const std::array overflow_gate{
+      ExpectedBytes{0xFFFFFFFFU, two_zero}};
   CHECK(!VerifyLoadedImage(
       extended_loaded, image.identity, overflow_gate, failure));
 }
