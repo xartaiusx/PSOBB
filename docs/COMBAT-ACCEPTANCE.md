@@ -99,6 +99,13 @@ The later canonical Stable restore-drill prerequisite passed on 2026-07-20.
 Its protected schema-v3 receipt is
 `backups/restore-drill-20260720T105025429Z/drill-result.json`.
 
+The bounded pinned-current runtime attempt later materialized and verified the
+sealed slot-0 Twills installation, but newserv exited before readiness because
+the intentionally stripped combat-lab package lacked Episode 3 definition data
+referenced during item-table loading. It also lacked include data used by the
+pinned client QoL functions. The attempt is rejected and frozen; it is not a
+retail-content or gameplay acceptance. Stable remained stopped and unchanged.
+
 ## Phase 0 acceptance matrix
 
 | Gate | Current status | Required evidence |
@@ -108,14 +115,14 @@ Its protected schema-v3 receipt is
 | Canonical path and remnant audit | Accepted; recheck before materialization | Retired paths absent; nested runtime only |
 | Three Desktop shortcuts | Accepted; recheck before materialization | Exact roles, canonical launcher, no credentials |
 | Saved login/graphics and shared RenderDoc | Preserved; recheck before materialization | Metadata/digest-only readback |
-| CombatCanary layout and ACL isolation | Source verified; canonical migration/recheck pending | Isolation, ACL, and recovery suites |
+| CombatCanary layout and ACL isolation | Materialized and read back 2026-07-20; package frozen after startup rejection | Isolation, ACL, and recovery suites |
 | Reproducible canary server | Source verified 2026-07-20; not live accepted | Offline-input deterministic two-clean-build equality, source-lock proof, and Verify; native sockets are not OS-denied |
-| Sealed Twills snapshot/transaction | Source verified 2026-07-20; no canonical snapshot created | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
-| CombatCanary lifecycle/launcher | Source verified 2026-07-20; not live accepted | Environment-specific start/observe/stop and launcher tests |
+| Sealed Twills snapshot/transaction | Materialized and exact `Both` readback passed 2026-07-20 | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
+| CombatCanary lifecycle/launcher | Source verified; bounded live startup rejected before readiness | Environment-specific start/observe/stop and launcher tests |
 | Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
 | Current real Stable restore drill | Accepted 2026-07-20 | Protected schema-v3 receipt, exact process image, 2/2 accounts, three loopback listeners, and clean termination |
-| CombatCanary materialization | Not started | Clean-tree, stopped-state, signed install readback |
-| Five-minute canary and canonical smokes | Not started | Ledger entry plus restored snapshot proof |
+| CombatCanary materialization | Accepted for the frozen lab package 2026-07-20; not promotable | Clean-tree, stopped-state, signed install readback |
+| Five-minute canary and canonical smokes | Blocked for the frozen package; no gameplay run | Ledger entry plus restored snapshot proof |
 
 ## Rollback boundaries
 

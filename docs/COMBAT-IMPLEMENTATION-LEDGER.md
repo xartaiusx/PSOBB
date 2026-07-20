@@ -178,3 +178,47 @@ Each entry records:
 - Rollback: no runtime rollback is required because the drill used and removed
   an isolated work tree. Revert the focused parser commit locally only if its
   current-format recovery policy must be withdrawn.
+
+## 2026-07-20 / combat-canary-startup-cutoff-v1
+
+- Feature/profile: pinned-current CombatCanary Native startup gate
+- Outcome: rejected and frozen before gameplay; the agreed single startup
+  retry exposed a server-package content dependency outside the combat-lab
+  contract
+- Implementation commits: `84f3be8` (`fix: avoid duplicate canary
+  verification`) and `e07f68b` (`fix: require canary startup directory`)
+- Source and runtime identities: pinned newserv source
+  `d754a34e271a4fb387be63db34ef0c303e49dcf2`; build contract SHA-256
+  `31adbc4c333e0ed45da413aaea7ff4cd3676df23f68268cf0f16a27702297d35`;
+  release-manifest SHA-256
+  `d9626c5a2159f9478a5ef058dbcdc1dbafda7f3aad57aead9a5a343bc32c7bbb`;
+  client binding SHA-256
+  `e022ecf1930c41b0391cc548b27dfb052cdf593b82309ab2baf569a3985df808`;
+  state binding SHA-256
+  `a5045cc374f559fd63bf11bf356a141bd15f2dbe9ccd6ca325aef202da5f1cd6`
+- Tests: startup binding 10/10; lifecycle 32/32; strict lifecycle JSON
+  25/25; background launch 12/12; synthetic state transactions 75/75;
+  exact required-directory repair verified; explicit snapshot plus installed
+  `Both` readback valid
+- Scenario: server-only startup attempt; no client or character login occurred,
+  so active gameplay duration was 0 seconds
+- State result: the sealed slot-0 Twills FOnewearl snapshot and installed
+  canary passed semantic and binding verification; no character, bank,
+  inventory, equipment, technique, MAG, or Stable state was changed
+- Process/network result: the child exited before readiness and no PSOBB
+  process or reserved listener remained
+- Evidence location:
+  `combat-canary/logs/newserv-20260720-142834906.stderr.log`; the earlier
+  pre-reseal and failed-build quarantines remain protected beneath
+  `archives/combat-canary-retained-evidence-20260720`
+- Failure: after the empty Episode 3 map directory removed the original abort,
+  startup reached item-table loading and rejected an auction-pool card whose
+  stripped Episode 3 definition was absent. The same package also lacked
+  include data needed to compile the pinned client QoL functions.
+- Limitation: this package is a non-promotable combat-lab artifact, not a
+  retail-complete newserv release. No five-minute canary or canonical smoke is
+  accepted by this entry.
+- Rollback: keep CombatCanary stopped, verify no reserved listener, and retain
+  the protected installation, snapshot, logs, and quarantines. Stable remains
+  the unchanged Native recovery target. Do not retry this server package;
+  proceed with the separately bound Stable-derived isolated combat fixture.
