@@ -30,9 +30,10 @@ Current accepted facts:
 - The required post-canary five-minute canonical Stable smoke remains pending.
   The 2026-07-21 Stable attempt ran for five minutes but had no client session,
   so elapsed process time was not accepted as gameplay evidence.
-- `PSOBB.Gameplay` 0.2.0 now has a source-only, fixed-capacity observation core.
-  It remains inert: no exact-59NL observation adapter, client hook, runtime
-  deployment, accepted feature bit, or combat behavior is enabled.
+- `PSOBB.Gameplay` 0.3.0 now has a source-ready, fixed-capacity observation
+  core and exact-59NL passive `send_60` adapter. Runtime publication, a
+  permitted in-process evidence consumer, live event acceptance, and all
+  combat behavior remain pending.
 
 ## Locked product boundaries
 
@@ -129,8 +130,9 @@ action-disabled state, and while an item or technique dispatches.
 
 ### Phase 3: PSO2-like control with native actions
 
-1. Observation-only action probe. The allocation-free source ring is complete;
-   the exact-59NL read-only adapter and live acceptance remain pending.
+1. Observation-only action probe. The allocation-free ring and exact-59NL
+   passive adapter passed their source gate; a permitted in-process evidence
+   consumer, isolated runtime publication, and live acceptance remain pending.
 2. Held Normal three-hit native combo.
 3. Held Heavy combo.
 4. Manual mixed-combo override.

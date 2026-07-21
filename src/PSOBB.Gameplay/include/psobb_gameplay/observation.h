@@ -16,7 +16,7 @@ enum class ObservationEventKind : std::uint32_t {
   none = 0U,
   tick = 1U,
   local_action_state_transition = 2U,
-  outbound_subcommand_header = 3U,
+  send60_serialization_attempt = 3U,
 };
 
 #pragma pack(push, 8)

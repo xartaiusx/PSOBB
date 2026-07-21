@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(PSOBBGameplay VERSION 0.2.0 LANGUAGES CXX)
+project(PSOBBGameplay VERSION 0.3.0 LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "PSOBB.Gameplay is a Windows-only x86 component")
@@ -20,7 +20,8 @@ if(NOT TARGET PSOBB::ClientSafety)
 endif()
 
 add_library(psobb_gameplay_core STATIC
-  src/observation_ring.cpp)
+  src/observation_ring.cpp
+  src/send60_probe.cpp)
 
 target_include_directories(psobb_gameplay_core
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

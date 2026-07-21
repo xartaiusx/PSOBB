@@ -585,3 +585,45 @@ Each entry records:
 - Rollback: no runtime rollback is required; keep the module unpublished and
   use a focused local Git revert of `ff811d6` if this source slice must be
   withdrawn.
+
+## 2026-07-21 / gameplay-send60-observation-adapter-v1
+
+- Feature/profile: source-only exact-59NL passive `send_60` serialization
+  observation; no Gameplay runtime profile was published or enabled
+- Outcome: source gate accepted. Runtime publication, an in-process evidence
+  consumer, live event contents, and combat behavior are not accepted by this
+  entry.
+- Implementation checkpoint: the focused local commit containing this entry;
+  no remote operation was performed
+- Exact gate: approved executable identity plus the SHA-256 of the complete
+  11-byte loaded callsite; only the naturally aligned four-byte `E8 rel32`
+  operand is atomically compared and replaced. The page must already be a
+  writable executable image page, and installation never broadens protection.
+- Wrapper result: the project module is pinned before installation, the exact
+  native copy target is invoked once, and only the four-byte
+  `G_ClientIDHeader` for commands `0x43` through `0x48` is offered to the
+  fixed ring. An event means a serialization attempt, not server receipt,
+  attack type, damage, or legal timing.
+- Rollback result: publication stops before compare-and-restore, the complete
+  call instruction is flushed, active callbacks and drains must be quiescent,
+  and foreign mutation is retained for an explicit retry instead of being
+  overwritten.
+- Tests: fresh Win32 Release ClientSafety CTest 3/3 and Gameplay CTest 5/5;
+  MSVC code analysis completed with zero diagnostics; relative-call invocation,
+  cross-primitive ownership, faulted-flush recovery, bounded decode, allocation,
+  SPSC, ABI, and rejected-host paths passed; ProjectLayout passed 14/14.
+- Build result: two clean Release directories produced the same 239,104-byte
+  module, SHA-256
+  `93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be`.
+  PE readback reported x86, ASLR, NX, CFG, the same six undecorated exports,
+  and only `bcrypt.dll` and `KERNEL32.dll` imports. Disassembly showed one
+  indirect call to the exact native copy address in the isolated no-CFG helper.
+- State result: no client, server, or listener was started; Stable,
+  CombatCanary, Twills, the bank, registry, Desktop shortcuts, and shared
+  RenderDoc state were unchanged.
+- Limitation: no permitted in-process consumer currently drains the ring, so
+  event counts and producer/drop counters cannot yet be claimed from a live
+  run. The separate canonical Stable five-minute smoke also remains pending.
+- Rollback: no runtime rollback is required while the module remains
+  unpublished; revert the focused local commit if this source adapter is
+  withdrawn.

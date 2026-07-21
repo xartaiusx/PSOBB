@@ -19,7 +19,7 @@ namespace psobb::gameplay {
 inline constexpr std::uint32_t kCapabilityAbiVersion = 1U;
 inline constexpr std::uint32_t kDisplaySlotCount = 10U;
 inline constexpr std::uint32_t kNoActivePage = 0U;
-inline constexpr wchar_t kVersion[] = L"0.2.0-observation-core";
+inline constexpr wchar_t kVersion[] = L"0.3.0-send60-observation";
 
 enum class RuntimeState : std::uint32_t {
   cold = 0,
@@ -28,12 +28,15 @@ enum class RuntimeState : std::uint32_t {
   exact_client_ready = 3,
   rejected = 4,
   rolled_back = 5,
+  observation_ready = 6,
 };
 
 enum VerificationFlag : std::uint32_t {
   verification_none = 0,
   verification_file_hash_matched = 1U << 0U,
   verification_loaded_pe_contract_matched = 1U << 1U,
+  verification_observation_site_matched = 1U << 2U,
+  verification_observation_hook_installed = 1U << 3U,
 };
 
 enum FeatureBit : std::uint64_t {

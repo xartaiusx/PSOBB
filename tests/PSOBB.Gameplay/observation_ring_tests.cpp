@@ -172,7 +172,7 @@ void TestBindingAndTypedRecords() {
   CHECK(ring.TryRecordTick(10U));
   CHECK(ring.TryRecordLocalStateTransition(
       11U, 0x1234U, 7U, 8U));
-  CHECK(ring.TryRecordOutboundHeader(
+  CHECK(ring.TryRecordSend60Attempt(
       12U, 0x1234U, 0x44332211U, 36U));
 
   ObservationSnapshotV1& snapshot = fixture->snapshot;
@@ -211,7 +211,7 @@ void TestBindingAndTypedRecords() {
   CHECK(outbound.sequence == 3U);
   CHECK(outbound.client_tick == 12U);
   CHECK(outbound.kind ==
-        ObservationEventKind::outbound_subcommand_header);
+        ObservationEventKind::send60_serialization_attempt);
   CHECK(outbound.local_client_id == 0x1234U);
   CHECK(outbound.previous_action_state == 0U);
   CHECK(outbound.next_action_state == 0U);
@@ -270,7 +270,7 @@ void TestRecordAndDrainDoNotAllocate() {
   const bool tick_recorded = ring.TryRecordTick(1U);
   const bool transition_recorded = ring.TryRecordLocalStateTransition(
       2U, 0U, 3U, 4U);
-  const bool outbound_recorded = ring.TryRecordOutboundHeader(
+  const bool outbound_recorded = ring.TryRecordSend60Attempt(
       3U, 0U, 0x04030201U, 12U);
   const bool drained = ring.Drain(snapshot);
   g_track_allocations.store(false, std::memory_order_release);

@@ -1,4 +1,5 @@
 [Gameplay]
-; The module is intentionally inert in this foundation build. Enabled=1 only
-; verifies the exact client and reports exact_client_ready; it installs no hook.
+; Both values must be exactly 1 before passive send_60 observation is enabled.
+; Enabled=1 with Observation=0 performs exact-client verification only.
 Enabled=0
+Observation=0

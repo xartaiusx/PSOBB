@@ -37,7 +37,7 @@ class ObservationRing final {
       std::uint16_t previous_action_state,
       std::uint16_t next_action_state) noexcept;
 
-  [[nodiscard]] bool TryRecordOutboundHeader(
+  [[nodiscard]] bool TryRecordSend60Attempt(
       std::uint32_t client_tick,
       std::uint32_t local_client_id,
       std::uint32_t subcommand_header_le,

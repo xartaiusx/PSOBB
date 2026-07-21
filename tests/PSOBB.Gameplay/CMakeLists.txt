@@ -51,17 +51,35 @@ add_executable(
   PSOBB.Gameplay.ObservationRingTests
   observation_ring_tests.cpp)
 
+add_executable(
+  PSOBB.Gameplay.Send60ProbeTests
+  send60_probe_tests.cpp)
+
 target_compile_features(
   PSOBB.Gameplay.ObservationRingTests PRIVATE cxx_std_20)
+
+target_compile_features(
+  PSOBB.Gameplay.Send60ProbeTests PRIVATE cxx_std_20)
 
 target_include_directories(
   PSOBB.Gameplay.ObservationRingTests PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
 
+target_include_directories(
+  PSOBB.Gameplay.Send60ProbeTests PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
+
 target_link_libraries(
   PSOBB.Gameplay.ObservationRingTests PRIVATE psobb_gameplay_core)
 
+target_link_libraries(
+  PSOBB.Gameplay.Send60ProbeTests PRIVATE psobb_gameplay_core)
+
 set_target_properties(PSOBB.Gameplay.ObservationRingTests PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+set_target_properties(PSOBB.Gameplay.Send60ProbeTests PROPERTIES
   CXX_EXTENSIONS OFF
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -74,8 +92,21 @@ if(MSVC)
     /guard:cf
     /utf-8
     /Zc:__cplusplus)
+
+  target_compile_options(PSOBB.Gameplay.Send60ProbeTests PRIVATE
+    /W4
+    /WX
+    /permissive-
+    /sdl
+    /guard:cf
+    /utf-8
+    /Zc:__cplusplus)
 endif()
 
 add_test(
   NAME PSOBB.Gameplay.ObservationRing
   COMMAND PSOBB.Gameplay.ObservationRingTests)
+
+add_test(
+  NAME PSOBB.Gameplay.Send60Probe
+  COMMAND PSOBB.Gameplay.Send60ProbeTests)

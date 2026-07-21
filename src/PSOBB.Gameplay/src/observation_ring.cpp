@@ -78,14 +78,14 @@ bool ObservationRing::TryRecordLocalStateTransition(
   return TryRecord(event);
 }
 
-bool ObservationRing::TryRecordOutboundHeader(
+bool ObservationRing::TryRecordSend60Attempt(
     const std::uint32_t client_tick,
     const std::uint32_t local_client_id,
     const std::uint32_t subcommand_header_le,
     const std::uint32_t subcommand_byte_count) noexcept {
   ObservationEventV1 event{};
   event.client_tick = client_tick;
-  event.kind = ObservationEventKind::outbound_subcommand_header;
+  event.kind = ObservationEventKind::send60_serialization_attempt;
   event.local_client_id = local_client_id;
   event.subcommand_header_le = subcommand_header_le;
   event.subcommand_byte_count = subcommand_byte_count;
