@@ -8,18 +8,21 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
 namespace {
 
-using InitializeFunction = BOOL(WINAPI*)();
+using InitializeFunction = BOOL(WINAPI*)() noexcept;
 using InitializeAsiFunction = void (*)() noexcept;
 using GetCapabilitiesFunction = BOOL(WINAPI*)(
-    psobb::gameplay::GameplayCapabilitiesV1*);
-using GetVersionFunction = const wchar_t*(WINAPI*)();
-using RollbackFunction = BOOL(WINAPI*)();
+    psobb::gameplay::GameplayCapabilitiesV1*) noexcept;
+using DrainObservationsFunction = BOOL(WINAPI*)(
+    psobb::gameplay::ObservationSnapshotV1*) noexcept;
+using GetVersionFunction = const wchar_t*(WINAPI*)() noexcept;
+using RollbackFunction = BOOL(WINAPI*)() noexcept;
 
 template <typename Function>
 [[nodiscard]] Function Resolve(HMODULE module, const char* name) noexcept {
@@ -96,6 +99,34 @@ class ScopedConfiguration final {
   return std::memcmp(&left, &right, sizeof(left)) == 0;
 }
 
+[[nodiscard]] bool ObservationsAreEmpty(
+    const psobb::gameplay::ObservationSnapshotV1& observations) noexcept {
+  using namespace psobb::gameplay;
+  return observations.struct_size == sizeof(observations) &&
+         observations.abi_version == kObservationAbiVersion &&
+         observations.ring_capacity == kObservationRingCapacity &&
+         observations.event_count == 0U &&
+         observations.dropped_event_count == 0U &&
+         observations.producer_violation_count == 0U &&
+         observations.producer_thread_id == 0U &&
+         observations.reserved == 0U &&
+         std::all_of(
+             std::begin(observations.events),
+             std::end(observations.events),
+             [](const ObservationEventV1& event) {
+               const ObservationEventV1 empty{};
+               return std::memcmp(&event, &empty, sizeof(event)) == 0;
+             });
+}
+
+[[nodiscard]] bool DrainIsEmpty(
+    const DrainObservationsFunction drain,
+    psobb::gameplay::ObservationSnapshotV1& observations) noexcept {
+  observations.struct_size = sizeof(observations);
+  return drain(&observations) != FALSE &&
+         ObservationsAreEmpty(observations);
+}
+
 }  // namespace
 
 int wmain(const int argc, wchar_t** argv) {
@@ -104,6 +135,10 @@ int wmain(const int argc, wchar_t** argv) {
   static_assert(std::is_trivially_copyable_v<DisplaySlotV1>);
   static_assert(std::is_standard_layout_v<GameplayCapabilitiesV1>);
   static_assert(std::is_trivially_copyable_v<GameplayCapabilitiesV1>);
+  static_assert(std::is_standard_layout_v<ObservationEventV1>);
+  static_assert(std::is_trivially_copyable_v<ObservationEventV1>);
+  static_assert(std::is_standard_layout_v<ObservationSnapshotV1>);
+  static_assert(std::is_trivially_copyable_v<ObservationSnapshotV1>);
   static_assert(sizeof(DisplaySlotV1) == 16U);
   static_assert(offsetof(DisplaySlotV1, logical_action_id) == 4U);
   static_assert(offsetof(DisplaySlotV1, flags) == 8U);
@@ -117,6 +152,9 @@ int wmain(const int argc, wchar_t** argv) {
   static_assert(offsetof(GameplayCapabilitiesV1, version) == 322U);
   static_assert(
       offsetof(GameplayCapabilitiesV1, last_fail_closed_reason) == 386U);
+  static_assert(sizeof(ObservationEventV1) == 32U);
+  static_assert(sizeof(ObservationSnapshotV1) == 65'568U);
+  static_assert(offsetof(ObservationSnapshotV1, events) == 32U);
 
   if (argc != 3) {
     std::wcerr << L"Usage: abi-smoke <PSOBB.Gameplay.asi> "
@@ -150,13 +188,15 @@ int wmain(const int argc, wchar_t** argv) {
       module, "PSOBBGameplay_Initialize");
   const auto get_capabilities = Resolve<GetCapabilitiesFunction>(
       module, "PSOBBGameplay_GetCapabilities");
+  const auto drain_observations = Resolve<DrainObservationsFunction>(
+      module, "PSOBBGameplay_DrainObservations");
   const auto get_version = Resolve<GetVersionFunction>(
       module, "PSOBBGameplay_GetVersion");
   const auto rollback = Resolve<RollbackFunction>(
       module, "PSOBBGameplay_Rollback");
   if (initialize_asi == nullptr || initialize == nullptr ||
-      get_capabilities == nullptr || get_version == nullptr ||
-      rollback == nullptr) {
+      get_capabilities == nullptr || drain_observations == nullptr ||
+      get_version == nullptr || rollback == nullptr) {
     std::cerr << "One or more undecorated gameplay exports are missing\n";
     FreeLibrary(module);
     return 1;
@@ -166,6 +206,19 @@ int wmain(const int argc, wchar_t** argv) {
   undersized.struct_size = sizeof(undersized) - 1U;
   if (get_capabilities(nullptr) || get_capabilities(&undersized)) {
     std::cerr << "Capability ABI accepted an invalid output buffer\n";
+    FreeLibrary(module);
+    return 1;
+  }
+
+  auto observations = std::make_unique<ObservationSnapshotV1>();
+  observations->struct_size = sizeof(*observations) - 1U;
+  if (drain_observations(nullptr) || drain_observations(observations.get())) {
+    std::cerr << "Observation ABI accepted an invalid output buffer\n";
+    FreeLibrary(module);
+    return 1;
+  }
+  if (!DrainIsEmpty(drain_observations, *observations)) {
+    std::cerr << "Cold observation ABI was not exact and empty\n";
     FreeLibrary(module);
     return 1;
   }
@@ -201,7 +254,8 @@ int wmain(const int argc, wchar_t** argv) {
       SlotsAreEmpty(capabilities) &&
       capabilities.client_sha256[0] == L'\0' &&
       std::wstring(get_version()) == kVersion &&
-      capabilities.last_fail_closed_reason[0] != L'\0';
+      capabilities.last_fail_closed_reason[0] != L'\0' &&
+      DrainIsEmpty(drain_observations, *observations);
 
   initialize_asi();
   initialize_asi();
@@ -221,7 +275,8 @@ int wmain(const int argc, wchar_t** argv) {
   const bool rollback_state =
       get_capabilities(&rolled_back) &&
       rolled_back.state == RuntimeState::rolled_back &&
-      rolled_back.accepted_feature_bits == feature_none;
+      rolled_back.accepted_feature_bits == feature_none &&
+      DrainIsEmpty(drain_observations, *observations);
 
   FreeLibrary(module);
   if (!passed || !idempotent || !rollback_passed || !rollback_state) {

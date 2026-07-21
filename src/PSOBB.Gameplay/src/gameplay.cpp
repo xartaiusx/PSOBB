@@ -1,4 +1,5 @@
 #include "gameplay_internal.h"
+#include "observation_ring.h"
 
 #include "psobb_client_safety/exact_image.h"
 #include "psobb_gameplay/api.h"
@@ -23,12 +24,17 @@ namespace {
 constexpr wchar_t kIniSection[] = L"Gameplay";
 constexpr wchar_t kIniFileName[] = L"PSOBB.Gameplay.ini";
 
+[[nodiscard]] std::uint32_t CurrentGameplayThreadId() noexcept {
+  return static_cast<std::uint32_t>(GetCurrentThreadId());
+}
+
 HMODULE g_module = nullptr;
 INIT_ONCE g_initialize_once = INIT_ONCE_STATIC_INIT;
 std::atomic_bool g_initialize_result{false};
 std::atomic<RuntimeState> g_state{RuntimeState::cold};
 std::atomic_uint32_t g_verification_flags{verification_none};
 std::atomic_uint64_t g_accepted_feature_bits{feature_none};
+ObservationRing g_observations{CurrentGameplayThreadId};
 SRWLOCK g_status_lock = SRWLOCK_INIT;
 std::array<wchar_t, 256> g_last_reason{};
 
@@ -211,7 +217,7 @@ extern "C" void InitializeASI() noexcept {
   static_cast<void>(PSOBBGameplay_Initialize());
 }
 
-BOOL WINAPI PSOBBGameplay_Initialize() {
+BOOL WINAPI PSOBBGameplay_Initialize() noexcept {
   if (!InitOnceExecuteOnce(
           &psobb::gameplay::g_initialize_once,
           psobb::gameplay::InitializeOnceCallback,
@@ -226,7 +232,7 @@ BOOL WINAPI PSOBBGameplay_Initialize() {
 }
 
 BOOL WINAPI PSOBBGameplay_GetCapabilities(
-    psobb::gameplay::GameplayCapabilitiesV1* capabilities) {
+    psobb::gameplay::GameplayCapabilitiesV1* capabilities) noexcept {
   using namespace psobb::gameplay;
   if (capabilities == nullptr ||
       capabilities->struct_size < sizeof(GameplayCapabilitiesV1)) {
@@ -263,17 +269,33 @@ BOOL WINAPI PSOBBGameplay_GetCapabilities(
   return TRUE;
 }
 
-BOOL WINAPI PSOBBGameplay_Rollback() {
+BOOL WINAPI PSOBBGameplay_DrainObservations(
+    psobb::gameplay::ObservationSnapshotV1* observations) noexcept {
+  if (observations == nullptr ||
+      observations->struct_size <
+          sizeof(psobb::gameplay::ObservationSnapshotV1)) {
+    return FALSE;
+  }
+  return psobb::gameplay::g_observations.Drain(*observations)
+             ? TRUE
+             : FALSE;
+}
+
+BOOL WINAPI PSOBBGameplay_Rollback() noexcept {
   using namespace psobb::gameplay;
   // Complete one-time preflight before publishing the final no-write state.
   // A rejected preflight is still complete and requires no restoration.
   static_cast<void>(PSOBBGameplay_Initialize());
+  if (!g_observations.TryResetQuiescent()) {
+    SetLastReason(L"Observation drain is active; rollback must be retried");
+    return FALSE;
+  }
   g_accepted_feature_bits.store(feature_none, std::memory_order_release);
   g_state.store(RuntimeState::rolled_back, std::memory_order_release);
   SetLastReason(L"No gameplay hook or write exists; rollback is complete");
   return TRUE;
 }
 
-const wchar_t* WINAPI PSOBBGameplay_GetVersion() {
+const wchar_t* WINAPI PSOBBGameplay_GetVersion() noexcept {
   return psobb::gameplay::kVersion;
 }

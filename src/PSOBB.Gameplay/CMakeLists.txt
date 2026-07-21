@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(PSOBBGameplay VERSION 0.1.0 LANGUAGES CXX)
+project(PSOBBGameplay VERSION 0.2.0 LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "PSOBB.Gameplay is a Windows-only x86 component")
@@ -12,17 +12,21 @@ endif()
 
 include(CTest)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
 if(NOT TARGET PSOBB::ClientSafety)
   add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/../PSOBB.ClientSafety"
     "${CMAKE_CURRENT_BINARY_DIR}/client-safety"
     EXCLUDE_FROM_ALL)
 endif()
+
+add_library(psobb_gameplay_core STATIC
+  src/observation_ring.cpp)
+
+target_include_directories(psobb_gameplay_core
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+target_compile_features(psobb_gameplay_core PUBLIC cxx_std_20)
 
 add_library(PSOBB.Gameplay SHARED
   src/dllmain.cpp
@@ -41,24 +45,35 @@ target_include_directories(PSOBB.Gameplay PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 target_link_libraries(PSOBB.Gameplay PRIVATE
+  psobb_gameplay_core
   PSOBB::ClientSafety)
 
+target_compile_features(PSOBB.Gameplay PRIVATE cxx_std_20)
+
 set_target_properties(PSOBB.Gameplay PROPERTIES
+  CXX_EXTENSIONS OFF
   PREFIX ""
   OUTPUT_NAME "PSOBB.Gameplay"
-  SUFFIX ".asi")
+  SUFFIX ".asi"
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+set_target_properties(psobb_gameplay_core PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
-  target_compile_options(PSOBB.Gameplay PRIVATE
-    /W4
-    /WX
-    /permissive-
-    /sdl
-    /Brepro
-    /guard:cf
-    /utf-8
-    /Zc:__cplusplus
-    /Zc:inline)
+  foreach(target psobb_gameplay_core PSOBB.Gameplay)
+    target_compile_options(${target} PRIVATE
+      /W4
+      /WX
+      /permissive-
+      /sdl
+      /Brepro
+      /guard:cf
+      /utf-8
+      /Zc:__cplusplus
+      /Zc:inline)
+  endforeach()
 
   target_link_options(PSOBB.Gameplay PRIVATE
     /Brepro

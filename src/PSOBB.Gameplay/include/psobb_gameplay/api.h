@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "psobb_gameplay/observation.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -17,7 +19,7 @@ namespace psobb::gameplay {
 inline constexpr std::uint32_t kCapabilityAbiVersion = 1U;
 inline constexpr std::uint32_t kDisplaySlotCount = 10U;
 inline constexpr std::uint32_t kNoActivePage = 0U;
-inline constexpr wchar_t kVersion[] = L"0.1.0-inert-foundation";
+inline constexpr wchar_t kVersion[] = L"0.2.0-observation-core";
 
 enum class RuntimeState : std::uint32_t {
   cold = 0,
@@ -107,8 +109,11 @@ static_assert(
 
 }  // namespace psobb::gameplay
 
-PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_Initialize();
+PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_Initialize() noexcept;
 PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_GetCapabilities(
-    psobb::gameplay::GameplayCapabilitiesV1* capabilities);
-PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_Rollback();
-PSOBB_GAMEPLAY_API const wchar_t* WINAPI PSOBBGameplay_GetVersion();
+    psobb::gameplay::GameplayCapabilitiesV1* capabilities) noexcept;
+PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_DrainObservations(
+    psobb::gameplay::ObservationSnapshotV1* observations) noexcept;
+PSOBB_GAMEPLAY_API BOOL WINAPI PSOBBGameplay_Rollback() noexcept;
+PSOBB_GAMEPLAY_API const wchar_t* WINAPI
+PSOBBGameplay_GetVersion() noexcept;

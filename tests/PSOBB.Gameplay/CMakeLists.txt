@@ -1,5 +1,11 @@
 add_executable(PSOBB.Gameplay.AbiSmoke abi_smoke.cpp)
 
+target_compile_features(PSOBB.Gameplay.AbiSmoke PRIVATE cxx_std_20)
+
+set_target_properties(PSOBB.Gameplay.AbiSmoke PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 target_compile_definitions(PSOBB.Gameplay.AbiSmoke PRIVATE
   UNICODE
   _UNICODE
@@ -40,3 +46,36 @@ set_tests_properties(
   PSOBB.Gameplay.AbiDisabledConfig
   PSOBB.Gameplay.AbiRejectsUnpinnedHost
   PROPERTIES RUN_SERIAL TRUE)
+
+add_executable(
+  PSOBB.Gameplay.ObservationRingTests
+  observation_ring_tests.cpp)
+
+target_compile_features(
+  PSOBB.Gameplay.ObservationRingTests PRIVATE cxx_std_20)
+
+target_include_directories(
+  PSOBB.Gameplay.ObservationRingTests PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
+
+target_link_libraries(
+  PSOBB.Gameplay.ObservationRingTests PRIVATE psobb_gameplay_core)
+
+set_target_properties(PSOBB.Gameplay.ObservationRingTests PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if(MSVC)
+  target_compile_options(PSOBB.Gameplay.ObservationRingTests PRIVATE
+    /W4
+    /WX
+    /permissive-
+    /sdl
+    /guard:cf
+    /utf-8
+    /Zc:__cplusplus)
+endif()
+
+add_test(
+  NAME PSOBB.Gameplay.ObservationRing
+  COMMAND PSOBB.Gameplay.ObservationRingTests)

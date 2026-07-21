@@ -38,6 +38,7 @@ obj/
 TestResults/
 *.user
 *.suo
+CMakeUserPresets.json
 
 # Generated archives and binaries
 *.zip

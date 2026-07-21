@@ -1,5 +1,6 @@
 EXPORTS
   InitializeASI
+  PSOBBGameplay_DrainObservations=_PSOBBGameplay_DrainObservations@4
   PSOBBGameplay_GetCapabilities=_PSOBBGameplay_GetCapabilities@4
   PSOBBGameplay_GetVersion=_PSOBBGameplay_GetVersion@0
   PSOBBGameplay_Initialize=_PSOBBGameplay_Initialize@0
