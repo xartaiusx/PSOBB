@@ -21,12 +21,18 @@ Current accepted facts:
   passed the 2026-07-20 source-only gate for the deterministic server build,
   sealed-state transaction, environment-aware lifecycle/launcher, ACL, and
   recovery boundaries.
-- That source result is not CombatCanary acceptance. Canonical marker
-  migration, a current real restore drill, materialization, and both
-  five-minute Twills smokes remain pending.
-- The gate published and verified an immutable canary server artifact only. It
-  did not select a playable server or install clients, bindings, snapshots, or
-  mutable canary state.
+- The current Stable restore drill passed, and the Stable-derived CombatCanary
+  was materialized with the complete Stable retail-content base and isolated
+  client, server, account, player, team, backup, log, and control state.
+- The five-minute isolated Native scenario passed on 2026-07-20. Restart,
+  slot-0 Twills relog, graceful save/disconnect, and exact sealed-state reset
+  passed on 2026-07-21.
+- The required post-canary five-minute canonical Stable smoke remains pending.
+  The 2026-07-21 Stable attempt ran for five minutes but had no client session,
+  so elapsed process time was not accepted as gameplay evidence.
+- `PSOBB.Gameplay` 0.2.0 now has a source-only, fixed-capacity observation core.
+  It remains inert: no exact-59NL observation adapter, client hook, runtime
+  deployment, accepted feature bit, or combat behavior is enabled.
 
 ## Locked product boundaries
 
@@ -88,11 +94,12 @@ The public contracts are:
    transactional initialization/reset, compensation, and read-back verification.
 4. Source-verified: environment-aware lifecycle and launcher controls that
    preserve the three Stable Desktop shortcuts and foreground-preserving Play.
-5. Pending: preview and apply the exact legacy marker migration if required,
-   complete a current real Stable restore drill, then materialize CombatCanary
-   only from a clean tree with every PSOBB process and listener stopped.
-6. Pending: run the isolated and canonical five-minute Twills checks, restore the
-   isolated snapshot, and record exact evidence and rollback commands.
+5. Completed: current Stable restore drill and Stable-derived CombatCanary
+   materialization from a stopped, clean-tree gate.
+6. Completed for CombatCanary: isolated five-minute Twills scenario,
+   restart/relog, semantic save check, and exact sealed-state restoration.
+7. Pending: separate non-destructive five-minute canonical Stable smoke with an
+   actual slot-0 Twills Forest session, then final Phase 0 closure.
 
 ### Phase 1: existing QoL, one candidate at a time
 
@@ -122,7 +129,8 @@ action-disabled state, and while an item or technique dispatches.
 
 ### Phase 3: PSO2-like control with native actions
 
-1. Observation-only action probe.
+1. Observation-only action probe. The allocation-free source ring is complete;
+   the exact-59NL read-only adapter and live acceptance remain pending.
 2. Held Normal three-hit native combo.
 3. Held Heavy combo.
 4. Manual mixed-combo override.

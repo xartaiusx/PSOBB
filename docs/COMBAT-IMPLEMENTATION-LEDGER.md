@@ -506,3 +506,82 @@ Each entry records:
 - Rollback: restore only through `Reset-PSOBBCombatCanaryState.ps1` from sealed
   snapshot ID `dda85ff8-9c23-497d-b3b4-285efe6781ad`, then require exact
   `Target Both` readback before another candidate.
+
+## 2026-07-21 / combat-canary-native-relog-reset-v1
+
+- Feature/profile: isolated Stable-derived CombatCanary using the Native
+  `baseline` client profile; no Gameplay module or combat enhancement was
+  published or enabled
+- Outcome: restart/relog, bounded save-delta verification, and exact isolated
+  state reset accepted. The separate five-minute canonical Stable smoke remains
+  pending and is not accepted by this entry.
+- Verification implementation: `937c920` (`test: verify bounded canary live
+  deltas`)
+- Relog result: the exact foreground-preserving 59NL client started at
+  2026-07-21T21:13:00Z. The server recorded a real session from 21:14:10Z
+  through 21:15:13Z, including slot-0 Twills load, game/map load, graceful
+  character, bank, system, and card save, disconnect, and normal server
+  shutdown.
+- Bounded delta: the character gained 50 seconds of play time through exactly
+  two changed bytes. The six noncharacter state files were byte-exact, all 28
+  inventory records remained present, and no item identity, descriptor,
+  quantity, equipment, technique, MAG, or bank-ownership change was accepted.
+- Reset result: at 2026-07-21T21:19:47Z, the isolated state was transactionally
+  reset to snapshot ID `dda85ff8-9c23-497d-b3b4-285efe6781ad`, manifest SHA-256
+  `90ba01ca235d929d434c8ca146423e2260ea8463eaacb8a0cb07a18cb95bf4bb`.
+  The binding matched and all seven mutable canary state files were byte-exact
+  to the sealed snapshot.
+- Tests: complete combat-canary state suite 170/170; focused live-delta,
+  strict-policy, state-reader, and reset suites 24/24, 13/13, 25/25, and 14/14;
+  independent review found no remaining P0, P1, or P2 issue.
+- Stable smoke result: a later Stable server ran from 21:24:49Z through
+  21:30:15Z and shut down normally, but recorded no client session, character
+  load, save, or disconnect. Its prelaunch backup remained byte-exact. Elapsed
+  process time alone is not an active Twills smoke.
+- Limitation: a later complete `Target Both` hash pass exceeded its 120-second
+  command bound and is not claimed. The focused bound-manifest and seven-file
+  reset comparisons passed; the canonical active Stable Forest smoke remains
+  required before Phase 0 closure.
+- Rollback: keep both environments stopped and use
+  `Reset-PSOBBCombatCanaryState.ps1` with the bound sealed snapshot directory;
+  never copy individual player, bank, license, system, card, or team files.
+
+## 2026-07-21 / gameplay-observation-core-v1
+
+- Feature/profile: bounded source-only observation ABI and SPSC evidence ring;
+  no Gameplay feature flag or runtime profile was enabled
+- Outcome: source gate accepted; no native hook, live event observation,
+  gameplay input, process-memory write, runtime publication, or combat behavior
+  is accepted by this entry
+- Implementation commit: `ff811d6` (`feat: add bounded combat observations`)
+- ABI result: module `0.2.0-observation-core`; existing capability ABI v1 and
+  904-byte layout unchanged; observation ABI v1 uses 32-byte events and a
+  65,568-byte, 2,048-event snapshot
+- Concurrency result: actual-thread single-producer binding, acquire/release
+  publication, non-waiting single-consumer drain, saturating counters, nonzero
+  bounded sequencing, caller-proven producer quiescence, and reset/drain
+  exclusion. The record path performs no allocation, blocking lock, file I/O,
+  IPC, or logging.
+- Build result: strict target-scoped C++20/x86 with compiler extensions off,
+  static CRT, warnings as errors, SDL checks, reproducible compilation, and CFG
+  protection; the portable preset discovers an installed Visual Studio
+  generator that supports `Win32` rather than pinning a machine-specific
+  version.
+- Tests: fresh Win32 Release configure and clean build; MSVC code analysis with
+  zero diagnostics; CTest 4/4; allocation counter remained zero; 50,000-event
+  concurrent SPSC ordering, true 32-bit cursor rollover, sequence exhaustion,
+  saturating counters, wrong-thread producer, and reset/drain boundaries
+  passed; ProjectLayout 14/14; whitespace and changed-file attribution scans
+  passed; independent re-review found no P0, P1, or P2 issue.
+- PE result: `pei-i386` with ASLR, NX, and CFG; six undecorated exports including
+  `PSOBBGameplay_DrainObservations`; only `bcrypt.dll` and `KERNEL32.dll`
+  imports were reported.
+- State result: no runtime was started or changed by this source gate. Twills,
+  saves, registry, shortcuts, Stable, CombatCanary, and shared RenderDoc state
+  were unchanged.
+- Limitation: exact hook sites, adapter publication, action-state mapping,
+  packet evidence, runtime-load proof, and both required live checkpoints remain
+  pending. The observation probe itself is not yet complete.
+- Rollback: no runtime rollback is required; keep the module unpublished and
+  use a focused local Git revert of `ff811d6` if this source slice must be
+  withdrawn.

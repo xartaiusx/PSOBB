@@ -106,6 +106,20 @@ referenced during item-table loading. It also lacked include data used by the
 pinned client QoL functions. The attempt is rejected and frozen; it is not a
 retail-content or gameplay acceptance. Stable remained stopped and unchanged.
 
+## 2026-07-21 Stable-derived canary status
+
+The rejected stripped package was replaced by a Stable-derived CombatCanary
+that retains the complete verified Stable retail-content base while keeping all
+mutable server and Twills state isolated. Its five-minute Native Forest scenario
+passed on 2026-07-20. The 2026-07-21 restart/relog loaded slot-0 Twills, entered
+a game, saved and disconnected gracefully, and was followed by an exact reset
+to sealed snapshot `dda85ff8-9c23-497d-b3b4-285efe6781ad`.
+
+The separate canonical Stable smoke is still pending. Stable ran for about five
+minutes on 2026-07-21, but the server recorded no client session, character
+load, save, or disconnect. That process-only interval is not gameplay evidence.
+Stable's prelaunch backup remained byte-exact to the post-attempt state.
+
 ## Phase 0 acceptance matrix
 
 | Gate | Current status | Required evidence |
@@ -115,15 +129,15 @@ retail-content or gameplay acceptance. Stable remained stopped and unchanged.
 | Canonical path and remnant audit | Accepted; recheck before materialization | Retired paths absent; nested runtime only |
 | Three Desktop shortcuts | Accepted; recheck before materialization | Exact roles, canonical launcher, no credentials |
 | Saved login/graphics and shared RenderDoc | Preserved; recheck before materialization | Metadata/digest-only readback |
-| CombatCanary layout and ACL isolation | Materialized and read back 2026-07-20; package frozen after startup rejection | Isolation, ACL, and recovery suites |
-| Reproducible canary server | Source verified 2026-07-20; not live accepted | Offline-input deterministic two-clean-build equality, source-lock proof, and Verify; native sockets are not OS-denied |
+| CombatCanary layout and ACL isolation | Stable-derived replacement materialized and read back 2026-07-20; rejected stripped package retained only as frozen evidence | Isolation, ACL, and recovery suites |
+| Reproducible canary server | Stable-derived server reached live readiness and Native gameplay; pinned-current build remains source-canary only | Exact Stable artifact binding, deterministic pinned-current build proof, and loopback-only listener evidence |
 | Sealed Twills snapshot/transaction | Materialized and exact `Both` readback passed 2026-07-20 | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
-| ClientSafety and inert Gameplay ABI | Source-only foundation accepted 2026-07-20; not deployed | Exact identity and range-bound byte-gate tests, fixed x86 ABI, static analysis, hardening and export readback |
-| CombatCanary lifecycle/launcher | Source verified; bounded live startup rejected before readiness | Environment-specific start/observe/stop and launcher tests |
+| ClientSafety and inert Gameplay ABI | ClientSafety plus Gameplay 0.2.0 fixed observation ring accepted source-only; no adapter or deployment | Exact identity and range-bound byte-gate tests, fixed x86 ABI, static analysis, hardening, concurrency tests, and export readback |
+| CombatCanary lifecycle/launcher | Live start, observation, graceful stop, restart, and foreground preservation accepted | Environment-specific start/observe/stop and launcher tests |
 | Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
 | Current real Stable restore drill | Accepted 2026-07-20 | Protected schema-v3 receipt, exact process image, 2/2 accounts, three loopback listeners, and clean termination |
-| CombatCanary materialization | Accepted for the frozen lab package 2026-07-20; not promotable | Clean-tree, stopped-state, signed install readback |
-| Five-minute canary and canonical smokes | Blocked for the frozen package; no gameplay run | Ledger entry plus restored snapshot proof |
+| CombatCanary materialization | Stable-derived replacement accepted 2026-07-20; stripped lab package rejected and frozen | Clean-tree, stopped-state, signed install readback, and complete Stable retail-content binding |
+| Five-minute canary and canonical smokes | Canary Native scenario, restart/relog, and exact reset accepted; canonical Stable smoke pending | Ledger entry plus restored snapshot proof and a separate active Stable Forest scenario |
 
 ## Rollback boundaries
 
