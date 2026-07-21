@@ -154,6 +154,34 @@ identity. Do not clone Twills or reuse one account twice. Passive FOnewearl
 specialization is deferred until combat/save/multiplayer parity is stable and
 a separate balance specification is approved.
 
+## Lean engineering gate
+
+- Build one complete feature slice on the last accepted profile and remove
+  candidate-only code when the slice is rejected. Do not build a general combat
+  framework ahead of verified behavior.
+- Use standard-library, .NET base-library, existing Windows wrapper, and pinned
+  newserv capabilities before introducing a dependency. A production dependency
+  must replace more owned complexity or risk than it adds and retain exact
+  version, license, provenance, and rollback evidence.
+- Keep native runtime state compact and strongly typed. The action hot path uses
+  fixed-capacity storage and performs no allocation, blocking, file/IPC access,
+  or unbounded logging. Platform and exact-client violations stay isolated
+  behind `PSOBB.ClientSafety` interfaces.
+- Put pure action state, cancellation, expiry, and bounded evidence logic in a
+  platform-independent, table-tested Gameplay core. Keep the ASI as a thin
+  exact-client adapter and keep repeatable x86 configure/build/test settings in
+  tracked CMake presets with target-scoped compiler policy.
+- Keep launcher and orchestration code direct: typed nullable C# models and
+  cancellable asynchronous I/O in the launcher; bounded stopped-runtime
+  PowerShell transactions for lifecycle work; closed, versioned JSON contracts
+  for durable data.
+- Do not optimize from intuition. First prove correctness, then use action-state,
+  packet, build/test, and frame-time evidence to identify a material cost. Retain
+  the simpler implementation when a candidate has no measured benefit.
+- Apply modernization to the files required by the active slice. Broad style,
+  dependency, test-framework, or accepted legacy-module migrations do not block
+  the next combat test and remain separate focused changes.
+
 ## Explicit deferrals
 
 Dodge/step attacks, counters, sprint, dash/aerial actions, charged-technique
@@ -181,3 +209,10 @@ private code, quests, tables, branding, music, art, or animation assets.
 - [Ragol features](https://ragol.org/features)
 - [Destiny item-reader design](https://playpso.net/forums/topic/800-about-item-readers-destiny-reader-beta/)
 - [Schthack server features](https://gc.schtserv.wiki/index.php/Server_Features)
+- [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)
+- [MSVC SDL checks](https://learn.microsoft.com/en-us/cpp/build/reference/sdl-enable-additional-security-checks)
+- [MSVC Control Flow Guard](https://learn.microsoft.com/en-us/cpp/build/reference/guard-enable-control-flow-guard)
+- [CMake presets](https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html)
+- [.NET C# coding conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions)
+- [PowerShell Script Analyzer](https://learn.microsoft.com/en-us/powershell/utility-modules/psscriptanalyzer/overview)
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)

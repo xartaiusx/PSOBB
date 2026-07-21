@@ -84,10 +84,40 @@ These instructions apply to the entire repository.
 
 - Preserve existing C++20/x86, C#/.NET, PowerShell, schema, naming, and test
   conventions. Prefer small reviewable changes and exact typed contracts.
+- Prefer the C++ standard library, .NET base class library, Windows APIs already
+  wrapped by the project, and existing newserv primitives before adding code or
+  dependencies. A new production dependency requires a missing proven need,
+  exact version/license/provenance, and a clear reduction in owned code or risk.
+- Implement the smallest complete vertical slice. Do not add a framework,
+  generic abstraction, configuration field, protocol field, or extension point
+  for a hypothetical future consumer. Extract shared machinery only after a
+  concrete feature needs it or duplicated behavior has two proven consumers.
+- In C++, prefer value types, fixed-width integers at binary boundaries, strong
+  enums, `constexpr` tables, bounded views, RAII, and explicit ownership. Keep
+  Windows/client-specific behavior behind narrow interfaces and keep the C ABI
+  fixed-size, versioned, and non-throwing.
+- Keep native compiler policy target-scoped and express repeatable configure,
+  build, and test workflows through tracked CMake presets. Keep machine-local
+  paths and overrides out of tracked presets.
+- In C#, keep nullable analysis and warnings-as-errors enabled, use typed models,
+  use asynchronous APIs for I/O with cancellation, and avoid reflection,
+  `dynamic`, service-location, and sync-over-async unless a measured requirement
+  justifies them.
+- Keep JSON contracts versioned, bounded, and closed to unknown properties where
+  compatibility permits. Validate before use and fail closed on duplicate,
+  ambiguous, oversized, or unsupported input.
+- Measure before optimizing. Preserve the simplest correct implementation until
+  profiling identifies a relevant cost, then record the baseline, candidate,
+  and regression threshold with the feature evidence.
+- Do not pause the combat roadmap for broad style, framework, test-library, or
+  legacy-module migrations. Repair existing code when it blocks a verified
+  slice or when that component is already the focused change.
 - Real-time action paths must not allocate, block, perform file or IPC I/O, or
   emit unbounded logs. Diagnostics use a fixed ring buffer and default off.
 - PowerShell is stopped-runtime orchestration only, never a real-time gameplay
-  controller.
+  controller. State-changing commands use advanced-function contracts,
+  `ShouldProcess` where applicable, literal canonical paths, bounded input, and
+  deterministic cleanup.
 - Repository text and commit messages must not contain secrets, private
   identifiers, runtime paths outside the canonical boundary, proprietary
   bytes, or assistant/code-generation vendor attribution.
