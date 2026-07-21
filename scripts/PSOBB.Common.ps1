@@ -984,6 +984,238 @@ function Get-PSOBBCombatCanaryInstalledBinding {
     $verification
 }
 
+function Get-PSOBBGameplayObservationAuthority {
+    [CmdletBinding()]
+    param(
+        [string]$RepositoryRoot = $script:PSOBBRepositoryRoot
+    )
+
+    $safeRepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\')
+    $sourcesSnapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path (Join-Path $safeRepositoryRoot 'config\sources.lock.json') `
+        -Root $safeRepositoryRoot -MaximumBytes 8MB -MaximumDepth 40 `
+        -Label 'PSOBB source lock'
+    $sources = $sourcesSnapshot.Value
+    [void](Assert-PSOBBStrictDataObjectProperties -Value $sources `
+            -Expected @('schemaVersion', 'generatedAtUtc', 'components',
+                'behaviorReferences') -Label 'PSOBB source lock')
+    if ($sources.schemaVersion -isnot [long] -or
+        [long]$sources.schemaVersion -ne 1 -or
+        $sources.components -isnot [System.Array]) {
+        throw 'The PSOBB source lock has an unsupported schema'
+    }
+
+    $gameplayComponents = @($sources.components | Where-Object {
+            [string]$_.id -ceq 'project-owned-psobb-gameplay'
+        })
+    $loaderComponents = @($sources.components | Where-Object {
+            [string]$_.id -ceq 'ultimate-asi-loader-x86'
+        })
+    if ($gameplayComponents.Count -ne 1 -or $loaderComponents.Count -ne 1) {
+        throw 'The Gameplay overlay authorities are not uniquely source-locked'
+    }
+    $gameplayComponent = $gameplayComponents[0]
+    $loaderComponent = $loaderComponents[0]
+    if ([string]$gameplayComponent.sourceUrl -cne
+            'repo:src/PSOBB.Gameplay/build-manifest.json' -or
+        $gameplayComponent.size -isnot [long] -or
+        [long]$gameplayComponent.size -lt 1 -or
+        $gameplayComponent.sha256 -isnot [string] -or
+        [string]$gameplayComponent.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'The Gameplay source-lock component is invalid'
+    }
+
+    $manifestPath = Join-Path $safeRepositoryRoot `
+        'src\PSOBB.Gameplay\build-manifest.json'
+    $manifestSnapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $manifestPath -Root $safeRepositoryRoot -MaximumBytes 1MB `
+        -MaximumDepth 32 -Label 'PSOBB.Gameplay build manifest'
+    if ($manifestSnapshot.Length -ne [long]$gameplayComponent.size -or
+        [string]$manifestSnapshot.Sha256 -cne
+            [string]$gameplayComponent.sha256) {
+        throw 'The Gameplay build manifest changed after source locking'
+    }
+    $manifest = $manifestSnapshot.Value
+    [void](Assert-PSOBBStrictDataObjectProperties -Value $manifest `
+            -Expected @('schemaVersion', 'componentId', 'version', 'builtAtUtc',
+                'baseClient', 'toolchain', 'sourceInputs', 'artifacts',
+                'verification', 'license', 'redistribution', 'acceptance',
+                'knownLimitations') -Label 'PSOBB.Gameplay build manifest')
+    $manifestArtifacts = @($manifest.artifacts)
+    $lockedArtifacts = @($gameplayComponent.runtimeArtifacts | Where-Object {
+            [string]$_.path -ceq 'PSOBB.Gameplay.asi'
+        })
+    if ($manifest.schemaVersion -isnot [long] -or
+        [long]$manifest.schemaVersion -ne 1 -or
+        [string]$manifest.componentId -cne 'project-owned-psobb-gameplay' -or
+        [string]$manifest.version -cne '0.3.0' -or
+        [string]$manifest.baseClient.sha256 -cne
+            'dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535' -or
+        [long]$manifest.baseClient.size -ne 6971904 -or
+        $manifestArtifacts.Count -ne 1 -or $lockedArtifacts.Count -ne 1) {
+        throw 'The Gameplay build authority is not the exact observation build'
+    }
+    $manifestArtifact = $manifestArtifacts[0]
+    $lockedArtifact = $lockedArtifacts[0]
+    if ([string]$manifestArtifact.relativeBuildPath -cne
+            'src/PSOBB.Gameplay/bin/build-x86/Release/PSOBB.Gameplay.asi' -or
+        [string]$manifestArtifact.runtimeName -cne 'PSOBB.Gameplay.asi' -or
+        [string]$manifestArtifact.machine -cne 'x86' -or
+        [long]$manifestArtifact.size -le 0 -or
+        [string]$manifestArtifact.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]$lockedArtifact.buildPath -cne
+            [string]$manifestArtifact.relativeBuildPath -or
+        [long]$lockedArtifact.size -ne [long]$manifestArtifact.size -or
+        [string]$lockedArtifact.sha256 -cne
+            [string]$manifestArtifact.sha256) {
+        throw 'The Gameplay artifact authority is inconsistent'
+    }
+    $expectedExports = @(
+        'InitializeASI',
+        'PSOBBGameplay_DrainObservations',
+        'PSOBBGameplay_GetCapabilities',
+        'PSOBBGameplay_GetVersion',
+        'PSOBBGameplay_Initialize',
+        'PSOBBGameplay_Rollback')
+    if ([string]::Join("`n", @($manifest.verification.exports)) -cne
+            [string]::Join("`n", $expectedExports) -or
+        [string]::Join("`n", @($manifest.verification.securityProperties)) -cne
+            "ASLR`nNX`nControl Flow Guard" -or
+        -not [bool]$manifest.verification.cleanRebuildHashesMatched) {
+        throw 'The Gameplay artifact verification authority is incomplete'
+    }
+
+    $loaderMembers = @($loaderComponent.members | Where-Object {
+            [string]$_.path -ceq 'dinput8.dll'
+        })
+    if ([string]$loaderComponent.version -cne 'v9.7.2' -or
+        $loaderComponent.size -isnot [long] -or
+        [long]$loaderComponent.size -le 0 -or
+        $loaderComponent.sha256 -isnot [string] -or
+        [string]$loaderComponent.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $loaderMembers.Count -ne 1 -or
+        [long]$loaderMembers[0].size -le 0 -or
+        [string]$loaderMembers[0].sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'The x86 Gameplay loader authority is invalid'
+    }
+
+    [pscustomobject]@{
+        BuildManifestPath = $manifestPath
+        BuildManifestSize = [long]$manifestSnapshot.Length
+        BuildManifestSha256 = [string]$manifestSnapshot.Sha256
+        ModulePath = Join-Path $safeRepositoryRoot `
+            ([string]$manifestArtifact.relativeBuildPath).Replace('/', '\')
+        ModuleSize = [long]$manifestArtifact.size
+        ModuleSha256 = [string]$manifestArtifact.sha256
+        LoaderArchiveSize = [long]$loaderComponent.size
+        LoaderArchiveSha256 = [string]$loaderComponent.sha256
+        LoaderMemberPath = 'dinput8.dll'
+        LoaderSize = [long]$loaderMembers[0].size
+        LoaderSha256 = [string]$loaderMembers[0].sha256
+    }
+}
+
+function Get-PSOBBGameplayObservationConfigurationIdentity {
+    [CmdletBinding()]
+    param()
+
+    $text = "[Gameplay]`r`nEnabled=1`r`nObservation=1`r`n"
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text)
+    try {
+        [pscustomobject]@{
+            Text = $text
+            Size = [long]$bytes.Length
+            Sha256 = [Convert]::ToHexString(
+                [System.Security.Cryptography.SHA256]::HashData($bytes)
+            ).ToLowerInvariant()
+        }
+    } finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Get-PSOBBCombatCanaryGameplayOverlayEntries {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$GameplayOverlay,
+        [Parameter(Mandatory)][string]$ClientRoot,
+        [switch]$VerifyFiles
+    )
+
+    [void](Assert-PSOBBStrictDataObjectProperties `
+            -Value $GameplayOverlay `
+            -Expected @(
+                'loaderPath', 'loaderSize', 'loaderSha256',
+                'modulePath', 'moduleSize', 'moduleSha256',
+                'configurationPath', 'configurationSize',
+                'configurationSha256') `
+            -Label 'combat-canary gameplay overlay')
+    $configurationIdentity = Get-PSOBBGameplayObservationConfigurationIdentity
+    $specifications = @(
+        [pscustomobject]@{
+            Prefix = 'loader'
+            BindingPath = 'runtime/client/dinput8.dll'
+            ClientPath = 'dinput8.dll'
+            MaximumSize = 16MB
+        },
+        [pscustomobject]@{
+            Prefix = 'module'
+            BindingPath = 'runtime/client/plugins/PSOBB.Gameplay.asi'
+            ClientPath = 'plugins/PSOBB.Gameplay.asi'
+            MaximumSize = 4MB
+        },
+        [pscustomobject]@{
+            Prefix = 'configuration'
+            BindingPath = 'runtime/client/plugins/PSOBB.Gameplay.ini'
+            ClientPath = 'plugins/PSOBB.Gameplay.ini'
+            MaximumSize = 4KB
+        })
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($specification in $specifications) {
+        $pathProperty = $specification.Prefix + 'Path'
+        $sizeProperty = $specification.Prefix + 'Size'
+        $hashProperty = $specification.Prefix + 'Sha256'
+        if ($GameplayOverlay.$pathProperty -isnot [string] -or
+            [string]$GameplayOverlay.$pathProperty -cne
+                [string]$specification.BindingPath -or
+            $GameplayOverlay.$sizeProperty -isnot [long] -or
+            [long]$GameplayOverlay.$sizeProperty -lt 1 -or
+            [long]$GameplayOverlay.$sizeProperty -gt
+                [long]$specification.MaximumSize -or
+            $GameplayOverlay.$hashProperty -isnot [string] -or
+            [string]$GameplayOverlay.$hashProperty -cnotmatch '^[a-f0-9]{64}$') {
+            throw "The combat-canary gameplay $($specification.Prefix) binding is invalid"
+        }
+        if ($specification.Prefix -ceq 'configuration' -and
+            ([long]$GameplayOverlay.$sizeProperty -ne
+                [long]$configurationIdentity.Size -or
+                [string]$GameplayOverlay.$hashProperty -cne
+                    [string]$configurationIdentity.Sha256)) {
+            throw 'The combat-canary gameplay observation configuration is not canonical'
+        }
+        $entry = [pscustomobject]@{
+            path = [string]$specification.ClientPath
+            size = [long]$GameplayOverlay.$sizeProperty
+            sha256 = [string]$GameplayOverlay.$hashProperty
+        }
+        if ($VerifyFiles) {
+            $filePath = Join-Path $ClientRoot `
+                ([string]$specification.ClientPath).Replace('/', '\')
+            [void](Assert-PSOBBOrdinaryContainedPath `
+                    -Path $filePath -Root $ClientRoot -Kind File `
+                    -Label "combat-canary gameplay $($specification.Prefix)")
+            $item = Get-Item -Force -LiteralPath $filePath -ErrorAction Stop
+            if ([string]$item.LinkType -ceq 'HardLink' -or
+                $item.Length -ne [long]$entry.size -or
+                (Get-LowerSha256 -Path $filePath) -cne [string]$entry.sha256) {
+                throw "The combat-canary gameplay $($specification.Prefix) file changed"
+            }
+        }
+        $entries.Add($entry)
+    }
+    $entries.ToArray()
+}
+
 function Get-PSOBBCombatCanaryClientLaunchContract {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Layout)
@@ -994,26 +1226,34 @@ function Get-PSOBBCombatCanaryClientLaunchContract {
     $bindingPath = Assert-PathWithinRoot `
         -Path (Join-Path $environmentLayout.EnvironmentRoot 'client-binding.json') `
         -Root $Layout.Root
-    if (-not (Test-Path -LiteralPath $bindingPath -PathType Leaf) -or
-        (Get-LowerSha256 $bindingPath) -cne [string]$verification.ClientBindingSha256) {
+    $bindingSnapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $bindingPath -Root $environmentLayout.EnvironmentRoot `
+        -MaximumBytes 256KB -MaximumDepth 12 `
+        -Label 'combat-canary client binding'
+    if ([string]$bindingSnapshot.Sha256 -cne
+        [string]$verification.ClientBindingSha256) {
         throw 'The combat-canary client binding changed after installed-state verification'
     }
-    $binding = Get-Content -Raw -LiteralPath $bindingPath |
-        ConvertFrom-Json -Depth 10 -DateKind String
+    $binding = $bindingSnapshot.Value
+    $schemaVersion = if ($binding.schemaVersion -is [long]) {
+        [long]$binding.schemaVersion
+    } else { -1L }
     $expectedProperties = @(
         'schemaVersion', 'environment', 'environmentId', 'profile', 'renderer',
         'serverAddress', 'patchPort', 'gamePorts', 'clientExecutablePath',
         'clientExecutableSize', 'clientExecutableSha256', 'clientProfileSha256',
         'baseClientManifestSha256', 'createdAtUtc')
+    if ($schemaVersion -eq 2) { $expectedProperties += 'gameplayOverlay' }
     $actualProperties = @($binding.PSObject.Properties.Name | Sort-Object)
-    if (Compare-Object -ReferenceObject @($expectedProperties | Sort-Object) `
-            -DifferenceObject $actualProperties) {
-        throw 'The combat-canary client binding does not have its exact schema-1 property set'
+    if ($schemaVersion -notin @(1, 2) -or
+        $null -ne (Compare-Object `
+            -ReferenceObject @($expectedProperties | Sort-Object) `
+            -DifferenceObject $actualProperties)) {
+        throw 'The combat-canary client binding does not have its exact supported property set'
     }
     $clientExecutable = Join-Path $environmentLayout.Client 'Psobb.exe'
     $profilePath = Join-Path $environmentLayout.Client 'client-profile.json'
-    if ([int]$binding.schemaVersion -ne 1 -or
-        [string]$binding.environment -cne 'CombatCanary' -or
+    if ([string]$binding.environment -cne 'CombatCanary' -or
         [string]$binding.environmentId -cne 'combat-canary' -or
         [string]$binding.profile -cne 'baseline' -or
         [string]$binding.renderer -cne 'Native' -or
@@ -1036,8 +1276,37 @@ function Get-PSOBBCombatCanaryClientLaunchContract {
         (Get-LowerSha256 $profilePath) -cne [string]$binding.clientProfileSha256) {
         throw 'The combat-canary native client binding is invalid or changed after verification'
     }
-    $profile = Get-Content -Raw -LiteralPath $profilePath |
-        ConvertFrom-Json -Depth 15 -DateKind String
+    $gameplayOverlayEntries = @(if ($schemaVersion -eq 2) {
+        $entries = @(Get-PSOBBCombatCanaryGameplayOverlayEntries `
+                -GameplayOverlay $binding.gameplayOverlay `
+                -ClientRoot $environmentLayout.Client -VerifyFiles)
+        $authority = Get-PSOBBGameplayObservationAuthority
+        $loaderEntry = @($entries | Where-Object {
+                [string]$_.path -ceq 'dinput8.dll'
+            })
+        $moduleEntry = @($entries | Where-Object {
+                [string]$_.path -ceq 'plugins/PSOBB.Gameplay.asi'
+            })
+        if ($loaderEntry.Count -ne 1 -or $moduleEntry.Count -ne 1 -or
+            [long]$loaderEntry[0].size -ne [long]$authority.LoaderSize -or
+            [string]$loaderEntry[0].sha256 -cne
+                [string]$authority.LoaderSha256 -or
+            [long]$moduleEntry[0].size -ne [long]$authority.ModuleSize -or
+            [string]$moduleEntry[0].sha256 -cne
+                [string]$authority.ModuleSha256) {
+            throw 'The combat-canary Gameplay overlay is not source-authorized'
+        }
+        $entries
+    })
+    $profileSnapshot = Read-PSOBBStrictJsonSnapshot `
+        -Path $profilePath -Root $environmentLayout.Client `
+        -MaximumBytes 256KB -MaximumDepth 15 `
+        -Label 'combat-canary client profile'
+    if ([string]$profileSnapshot.Sha256 -cne
+        [string]$binding.clientProfileSha256) {
+        throw 'The combat-canary client profile changed after binding verification'
+    }
+    $profile = $profileSnapshot.Value
     if ([int]$profile.schemaVersion -ne 5 -or
         [string]$profile.channel -cne 'combat-canary' -or
         [string]$profile.profileId -cne 'safe-native-4x3' -or
@@ -1056,6 +1325,7 @@ function Get-PSOBBCombatCanaryClientLaunchContract {
         BindingPath = $bindingPath
         ProfilePath = $profilePath
         ClientExecutable = $clientExecutable
+        GameplayOverlayEntries = $gameplayOverlayEntries
     }
 }
 

@@ -1,5 +1,8 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 
 namespace PSOBB.Launcher.Services;
 
@@ -13,14 +16,17 @@ internal sealed partial class ExactRuntimeIdentityProbe
         string containmentRoot,
         ApprovedFileIdentity expected,
         Dictionary<string, SealedFileIdentity> sealedFiles,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long maximumBytes = MaximumIdentityFileBytes,
+        bool requireSingleLink = false)
     {
         var file = await ReadFileAndTrackAsync(
             path,
             containmentRoot,
-            MaximumIdentityFileBytes,
+            maximumBytes,
             sealedFiles,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            requireSingleLink: requireSingleLink).ConfigureAwait(false);
         if (file.Identity.Size != expected.Size
             || !file.Identity.Sha256.Equals(expected.Sha256, StringComparison.Ordinal))
         {
@@ -95,13 +101,15 @@ internal sealed partial class ExactRuntimeIdentityProbe
         long maximumBytes,
         Dictionary<string, SealedFileIdentity> sealedFiles,
         CancellationToken cancellationToken,
-        ProtectedRuntimeAclScope? protectedAclScope = null)
+        ProtectedRuntimeAclScope? protectedAclScope = null,
+        bool requireSingleLink = false)
     {
         var content = await ReadFileContentAsync(
             path,
             containmentRoot,
             maximumBytes,
             protectedAclScope,
+            requireSingleLink,
             cancellationToken).ConfigureAwait(false);
         if (sealedFiles.TryGetValue(content.Identity.Path, out var prior)
             && (prior.Size != content.Identity.Size
@@ -126,6 +134,7 @@ internal sealed partial class ExactRuntimeIdentityProbe
                 sealedFile.ContainmentRoot,
                 sealedFile.MaximumBytes,
                 sealedFile.ProtectedAclScope,
+                sealedFile.RequireSingleLink,
                 cancellationToken).ConfigureAwait(false);
             if (current.Identity.Size != sealedFile.Size
                 || !current.Identity.Sha256.Equals(sealedFile.Sha256, StringComparison.Ordinal))
@@ -141,6 +150,7 @@ internal sealed partial class ExactRuntimeIdentityProbe
         string containmentRoot,
         long maximumBytes,
         ProtectedRuntimeAclScope? protectedAclScope,
+        bool requireSingleLink,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -156,6 +166,10 @@ internal sealed partial class ExactRuntimeIdentityProbe
             FileShare.Read,
             bufferSize: 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (requireSingleLink)
+        {
+            RequireExactlyOneLink(stream.SafeFileHandle);
+        }
         if (stream.Length is <= 0 || stream.Length > maximumBytes || stream.Length > int.MaxValue)
         {
             throw new InvalidDataException("An identity file is empty or oversized.");
@@ -170,14 +184,53 @@ internal sealed partial class ExactRuntimeIdentityProbe
         {
             ProtectedRuntimeFileAcl.Require(safePath, containmentRoot, finalAclScope);
         }
+        if (requireSingleLink)
+        {
+            RequireExactlyOneLink(stream.SafeFileHandle);
+        }
         var identity = new SealedFileIdentity(
             safePath,
             Path.GetFullPath(containmentRoot),
             maximumBytes,
+            requireSingleLink,
             protectedAclScope,
             bytes.LongLength,
             Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
         return new(bytes, identity);
+    }
+
+    private static void RequireExactlyOneLink(SafeFileHandle handle)
+    {
+        if (!GetFileInformationByHandle(handle, out var information))
+        {
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
+        if (information.NumberOfLinks != 1)
+        {
+            throw new InvalidDataException(
+                "A combat-canary Gameplay overlay file is hard-linked.");
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+        SafeFileHandle file,
+        out ByHandleFileInformation information);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        internal uint FileAttributes;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        internal uint VolumeSerialNumber;
+        internal uint FileSizeHigh;
+        internal uint FileSizeLow;
+        internal uint NumberOfLinks;
+        internal uint FileIndexHigh;
+        internal uint FileIndexLow;
     }
 
     private static string EnsureSafePath(string containmentRoot, string path, bool mustExist)

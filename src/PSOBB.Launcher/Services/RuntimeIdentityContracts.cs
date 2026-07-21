@@ -158,6 +158,7 @@ internal sealed partial class ExactRuntimeIdentityProbe
         string Path,
         string ContainmentRoot,
         long MaximumBytes,
+        bool RequireSingleLink,
         ProtectedRuntimeAclScope? ProtectedAclScope,
         long Size,
         string Sha256);

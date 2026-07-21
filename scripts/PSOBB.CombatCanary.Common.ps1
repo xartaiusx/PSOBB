@@ -632,11 +632,15 @@ function Test-PSOBBCombatCanaryRuntimeClientManifest {
         [object[]]$ActualEntries,
 
         [Parameter(Mandatory)]
-        $ClientProfileEntry
+        $ClientProfileEntry,
+
+        [AllowEmptyCollection()]
+        [object[]]$GameplayOverlayEntries = @()
     )
 
     if ($BaseEntries.Count -lt 1 -or $BaseEntries.Count -gt 65536 -or
-        $ActualEntries.Count -gt ($BaseEntries.Count + 40)) {
+        $ActualEntries.Count -gt ($BaseEntries.Count + 43) -or
+        $GameplayOverlayEntries.Count -notin @(0, 3)) {
         return $false
     }
 
@@ -644,9 +648,15 @@ function Test-PSOBBCombatCanaryRuntimeClientManifest {
         [System.StringComparer]::OrdinalIgnoreCase)
     $actualByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
+    $overlayByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($set in @(
             [pscustomobject]@{ Entries = $BaseEntries; Map = $baseByPath },
-            [pscustomobject]@{ Entries = $ActualEntries; Map = $actualByPath })) {
+            [pscustomobject]@{ Entries = $ActualEntries; Map = $actualByPath },
+            [pscustomobject]@{
+                Entries = $GameplayOverlayEntries
+                Map = $overlayByPath
+            })) {
         foreach ($entry in @($set.Entries)) {
             if ($null -eq $entry) { return $false }
             $properties = @($entry.PSObject.Properties.Name | Sort-Object)
@@ -672,6 +682,24 @@ function Test-PSOBBCombatCanaryRuntimeClientManifest {
                 return $false
             }
             $set.Map.Add($path, $entry)
+        }
+    }
+
+    $overlayLimits = [ordered]@{
+        'dinput8.dll' = 16MB
+        'plugins/PSOBB.Gameplay.asi' = 4MB
+        'plugins/PSOBB.Gameplay.ini' = 4KB
+    }
+    if ($GameplayOverlayEntries.Count -eq 3) {
+        foreach ($expectedPath in $overlayLimits.Keys) {
+            if (-not $overlayByPath.ContainsKey($expectedPath) -or
+                [string]$overlayByPath[$expectedPath].path -cne $expectedPath -or
+                [int64]$overlayByPath[$expectedPath].size -lt 1 -or
+                [int64]$overlayByPath[$expectedPath].size -gt
+                    [int64]$overlayLimits[$expectedPath] -or
+                $baseByPath.ContainsKey($expectedPath)) {
+                return $false
+            }
         }
     }
 
@@ -756,6 +784,16 @@ function Test-PSOBBCombatCanaryRuntimeClientManifest {
             }
             continue
         }
+        if ($overlayByPath.ContainsKey($path)) {
+            $expectedOverlay = $overlayByPath[$path]
+            if ([string]$expectedOverlay.path -cne $path -or
+                [int64]$actual.size -ne [int64]$expectedOverlay.size -or
+                [string]$actual.sha256 -cne
+                    [string]$expectedOverlay.sha256) {
+                return $false
+            }
+            continue
+        }
 
         $maximum = [int64]0
         if ($generatedGameGuard.Contains($path)) {
@@ -776,9 +814,19 @@ function Test-PSOBBCombatCanaryRuntimeClientManifest {
         $mutableBytes += $size
     }
 
+    $overlayPresent = $true
+    foreach ($expectedPath in $overlayByPath.Keys) {
+        if (-not $actualByPath.ContainsKey($expectedPath) -or
+            [string]$actualByPath[$expectedPath].path -cne $expectedPath) {
+            $overlayPresent = $false
+            break
+        }
+    }
+
     $actualByPath.ContainsKey('client-profile.json') -and
         [string]$actualByPath['client-profile.json'].path -ceq
             'client-profile.json' -and
+        $overlayPresent -and
         $mutableBytes -le [uint64](64MB)
 }
 

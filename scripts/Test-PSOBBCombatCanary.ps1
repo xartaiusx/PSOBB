@@ -1340,13 +1340,23 @@ function Get-PSOBBCombatCanaryInstallation {
     $bindingJson = $bindingSnapshot.Value
     $binding = ConvertTo-PSOBBCombatCanaryPowerShellObject `
         -JsonObject $bindingJson -RoleLabel 'combat canary client binding'
+    $bindingSchemaVersion = if ($binding.schemaVersion -is [long]) {
+        [long]$binding.schemaVersion
+    } else { -1L }
+    $bindingProperties = @('schemaVersion', 'environment', 'environmentId',
+        'profile', 'renderer', 'serverAddress', 'patchPort', 'gamePorts',
+        'clientExecutablePath', 'clientExecutableSize',
+        'clientExecutableSha256', 'clientProfileSha256',
+        'baseClientManifestSha256', 'createdAtUtc')
+    if ($bindingSchemaVersion -eq 2) {
+        $bindingProperties += 'gameplayOverlay'
+    }
+    if ($bindingSchemaVersion -notin @(1, 2)) {
+        throw 'The combat-canary client binding schema is unsupported'
+    }
     Assert-PSOBBCombatCanaryVerifierExactProperties -Value $binding `
         -Label 'Combat-canary client binding' `
-        -Expected @('schemaVersion', 'environment', 'environmentId', 'profile',
-            'renderer', 'serverAddress', 'patchPort', 'gamePorts',
-            'clientExecutablePath', 'clientExecutableSize',
-            'clientExecutableSha256', 'clientProfileSha256',
-            'baseClientManifestSha256', 'createdAtUtc')
+        -Expected $bindingProperties
     $clientProfilePath = Join-Path $Layout.Client 'client-profile.json'
     $clientProfileSnapshot = Read-PSOBBCombatCanaryStrictJsonObject `
         -LiteralPath $clientProfilePath -Root $Layout.Client -MaximumBytes 256KB `
@@ -1357,10 +1367,34 @@ function Get-PSOBBCombatCanaryInstallation {
         size = [int64]$clientProfileSnapshot.Length
         sha256 = [string]$clientProfileSnapshot.Sha256
     }
+    $gameplayOverlayEntries = @(if ($bindingSchemaVersion -eq 2) {
+        $entries = @(Get-PSOBBCombatCanaryGameplayOverlayEntries `
+                -GameplayOverlay $binding.gameplayOverlay `
+                -ClientRoot $Layout.Client -VerifyFiles)
+        $authority = Get-PSOBBGameplayObservationAuthority `
+            -RepositoryRoot $script:RepositoryRoot
+        $loaderEntry = @($entries | Where-Object {
+                [string]$_.path -ceq 'dinput8.dll'
+            })
+        $moduleEntry = @($entries | Where-Object {
+                [string]$_.path -ceq 'plugins/PSOBB.Gameplay.asi'
+            })
+        if ($loaderEntry.Count -ne 1 -or $moduleEntry.Count -ne 1 -or
+            [long]$loaderEntry[0].size -ne [long]$authority.LoaderSize -or
+            [string]$loaderEntry[0].sha256 -cne
+                [string]$authority.LoaderSha256 -or
+            [long]$moduleEntry[0].size -ne [long]$authority.ModuleSize -or
+            [string]$moduleEntry[0].sha256 -cne
+                [string]$authority.ModuleSha256) {
+            throw 'The combat-canary Gameplay overlay is not bound to its tracked build authorities'
+        }
+        $entries
+    })
     if (-not (Test-PSOBBCombatCanaryRuntimeClientManifest `
             -BaseEntries @($baseManifest.files) `
             -ActualEntries $actualRuntimeClientEntries `
-            -ClientProfileEntry $clientProfileEntry)) {
+            -ClientProfileEntry $clientProfileEntry `
+            -GameplayOverlayEntries $gameplayOverlayEntries)) {
         throw 'The combat-canary runtime client contains an unapproved mutable or changed file'
     }
     $approvedClient = Get-PSOBBCombatCanaryApprovedClientIdentity `
@@ -1368,8 +1402,7 @@ function Get-PSOBBCombatCanaryInstallation {
     $baseClientExecutables = @($baseManifest.files | Where-Object {
             [string]$_.path -ceq 'Psobb.exe'
         })
-    if ([int]$binding.schemaVersion -ne 1 -or
-        [string]$binding.environment -cne 'CombatCanary' -or
+    if ([string]$binding.environment -cne 'CombatCanary' -or
         [string]$binding.environmentId -cne 'combat-canary' -or
         [string]$binding.profile -cne 'baseline' -or
         [string]$binding.renderer -cne 'Native' -or

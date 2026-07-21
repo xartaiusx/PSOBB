@@ -5,6 +5,7 @@ using System.Net;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -870,6 +871,124 @@ public sealed class RuntimeIdentityProbeTests
     }
 
     [TestMethod]
+    public async Task ObserveAsync_CombatCanaryAcceptsExactGameplayOverlayBinding()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.EnableCombatCanaryGameplayOverlay();
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Running, result.State, result.Detail);
+        Assert.IsTrue(result.IdentityAuthenticated);
+    }
+
+    [TestMethod]
+    public async Task ObserveAsync_CombatCanaryRejectsGameplayOverlayAtUnexpectedPath()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.EnableCombatCanaryGameplayOverlay(
+            loaderPath: "runtime/client/plugins/dinput8.dll");
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Faulted, result.State);
+        Assert.IsFalse(result.IdentityAuthenticated);
+        StringAssert.Contains(result.Detail, "unexpected 'loaderPath'");
+    }
+
+    [TestMethod]
+    public async Task ObserveAsync_CombatCanaryRejectsChangedGameplayOverlayFile()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.EnableCombatCanaryGameplayOverlay();
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+        File.WriteAllBytes(
+            Path.Combine(
+                fixture.Runtime.Root,
+                "combat-canary",
+                "runtime",
+                "client",
+                "plugins",
+                "PSOBB.Gameplay.asi"),
+            "changed-gameplay-module"u8.ToArray());
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Faulted, result.State);
+        Assert.IsFalse(result.IdentityAuthenticated);
+        StringAssert.Contains(result.Detail, "tracked size and SHA-256");
+    }
+
+    [TestMethod]
+    public async Task ObserveAsync_CombatCanaryRejectsHardLinkedGameplayOverlayFile()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.EnableCombatCanaryGameplayOverlay();
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+        var modulePath = Path.Combine(
+            fixture.Runtime.Root,
+            "combat-canary",
+            "runtime",
+            "client",
+            "plugins",
+            "PSOBB.Gameplay.asi");
+        var sourcePath = Path.Combine(
+            fixture.Runtime.Root,
+            "combat-canary",
+            "gameplay-module-hardlink-source");
+        File.Move(modulePath, sourcePath);
+        Assert.IsTrue(CreateHardLinkW(modulePath, sourcePath, 0));
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Faulted, result.State);
+        Assert.IsFalse(result.IdentityAuthenticated);
+        StringAssert.Contains(result.Detail, "hard-linked");
+    }
+
+    [TestMethod]
+    public async Task ObserveAsync_CombatCanaryRejectsOversizedGameplayOverlayBeforeHashing()
+    {
+        using var fixture = new IdentityFixture();
+        fixture.EnableCombatCanaryGameplayOverlay();
+        fixture.ConfigureValidCombatCanaryServer(processId: 61);
+        fixture.ConfigureValidCombatCanaryClient(processId: 71);
+        var modulePath = Path.Combine(
+            fixture.Runtime.Root,
+            "combat-canary",
+            "runtime",
+            "client",
+            "plugins",
+            "PSOBB.Gameplay.asi");
+        using (var stream = new FileStream(modulePath, FileMode.Create, FileAccess.Write))
+        {
+            stream.SetLength((4 * 1024 * 1024) + 1);
+        }
+
+        var result = await fixture.Probe.ObserveAsync(
+            fixture.Runtime.Root,
+            ServerEnvironmentKind.CombatCanary);
+
+        Assert.AreEqual(LauncherLifecycleState.Faulted, result.State);
+        Assert.IsFalse(result.IdentityAuthenticated);
+        StringAssert.Contains(result.Detail, "empty or oversized");
+    }
+
+    [TestMethod]
     public async Task ObserveAsync_CombatCanarySelectsStableShadowFromInstalledBuildHash()
     {
         using var fixture = new IdentityFixture();
@@ -1024,9 +1143,14 @@ public sealed class RuntimeIdentityProbeTests
         private readonly byte[] _clientBytes = "approved-client"u8.ToArray();
         private readonly byte[] _combatServerBytes = "approved-combat-server"u8.ToArray();
         private readonly byte[] _stableServerBytes = "approved-stable-server"u8.ToArray();
+        private readonly byte[] _gameplayLoaderBytes = "approved-gameplay-loader"u8.ToArray();
+        private readonly byte[] _gameplayModuleBytes = "approved-gameplay-module"u8.ToArray();
+        private readonly byte[] _gameplayConfigurationBytes =
+            "[Gameplay]\r\nEnabled=1\r\nObservation=1\r\n"u8.ToArray();
         private readonly ECDsa _signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly object _nativeGraphics;
         private CombatHashes? _combatHashes;
+        private string? _gameplayLoaderPath;
         private bool _stableShadowActive;
 
         public IdentityFixture()
@@ -1207,6 +1331,22 @@ public sealed class RuntimeIdentityProbeTests
                 process,
                 profileBytes,
                 hashes.ClientBindingSha256);
+        }
+
+        public void EnableCombatCanaryGameplayOverlay(
+            string loaderPath = "runtime/client/dinput8.dll")
+        {
+            _gameplayLoaderPath = loaderPath;
+            _combatHashes = null;
+            Runtime.CreateFile(
+                "combat-canary/runtime/client/dinput8.dll",
+                _gameplayLoaderBytes);
+            Runtime.CreateFile(
+                "combat-canary/runtime/client/plugins/PSOBB.Gameplay.asi",
+                _gameplayModuleBytes);
+            Runtime.CreateFile(
+                "combat-canary/runtime/client/plugins/PSOBB.Gameplay.ini",
+                _gameplayConfigurationBytes);
         }
 
         public void WriteSelfConsistentPartialStableProfile(int processId)
@@ -1471,23 +1611,53 @@ public sealed class RuntimeIdentityProbeTests
                 stateFiles = 4,
             });
             Runtime.CreateFile("combat-canary/state-binding.json", stateBindingBytes);
-            var bindingBytes = JsonSerializer.SerializeToUtf8Bytes(new
-            {
-                schemaVersion = 1,
-                environment = "CombatCanary",
-                environmentId = "combat-canary",
-                profile = "baseline",
-                renderer = "Native",
-                serverAddress = "127.0.0.1",
-                patchPort = 11000,
-                gamePorts = RequiredGamePorts,
-                clientExecutablePath = "runtime/client/Psobb.exe",
-                clientExecutableSize = _clientBytes.LongLength,
-                clientExecutableSha256 = Hash(_clientBytes),
-                clientProfileSha256 = Hash(profileBytes),
-                baseClientManifestSha256 = Hash(baseManifestBytes),
-                createdAtUtc = StartTimeUtc.AddMinutes(-4).ToString("o"),
-            });
+            var bindingBytes = _gameplayLoaderPath is null
+                ? JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    schemaVersion = 1,
+                    environment = "CombatCanary",
+                    environmentId = "combat-canary",
+                    profile = "baseline",
+                    renderer = "Native",
+                    serverAddress = "127.0.0.1",
+                    patchPort = 11000,
+                    gamePorts = RequiredGamePorts,
+                    clientExecutablePath = "runtime/client/Psobb.exe",
+                    clientExecutableSize = _clientBytes.LongLength,
+                    clientExecutableSha256 = Hash(_clientBytes),
+                    clientProfileSha256 = Hash(profileBytes),
+                    baseClientManifestSha256 = Hash(baseManifestBytes),
+                    createdAtUtc = StartTimeUtc.AddMinutes(-4).ToString("o"),
+                })
+                : JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    schemaVersion = 2,
+                    environment = "CombatCanary",
+                    environmentId = "combat-canary",
+                    profile = "baseline",
+                    renderer = "Native",
+                    serverAddress = "127.0.0.1",
+                    patchPort = 11000,
+                    gamePorts = RequiredGamePorts,
+                    clientExecutablePath = "runtime/client/Psobb.exe",
+                    clientExecutableSize = _clientBytes.LongLength,
+                    clientExecutableSha256 = Hash(_clientBytes),
+                    clientProfileSha256 = Hash(profileBytes),
+                    baseClientManifestSha256 = Hash(baseManifestBytes),
+                    createdAtUtc = StartTimeUtc.AddMinutes(-4).ToString("o"),
+                    gameplayOverlay = new
+                    {
+                        loaderPath = _gameplayLoaderPath,
+                        loaderSize = _gameplayLoaderBytes.LongLength,
+                        loaderSha256 = Hash(_gameplayLoaderBytes),
+                        modulePath = "runtime/client/plugins/PSOBB.Gameplay.asi",
+                        moduleSize = _gameplayModuleBytes.LongLength,
+                        moduleSha256 = Hash(_gameplayModuleBytes),
+                        configurationPath = "runtime/client/plugins/PSOBB.Gameplay.ini",
+                        configurationSize = _gameplayConfigurationBytes.LongLength,
+                        configurationSha256 = Hash(_gameplayConfigurationBytes),
+                    },
+                });
             Runtime.CreateFile("combat-canary/client-binding.json", bindingBytes);
 
             var hashes = new CombatHashes(
@@ -1827,4 +1997,11 @@ public sealed class RuntimeIdentityProbeTests
             return Task.CompletedTask;
         }
     }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkW(
+        string fileName,
+        string existingFileName,
+        nint securityAttributes);
 }

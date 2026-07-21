@@ -627,3 +627,39 @@ Each entry records:
 - Rollback: no runtime rollback is required while the module remains
   unpublished; revert the focused local commit if this source adapter is
   withdrawn.
+
+## 2026-07-21 / gameplay-overlay-binding-v1
+
+- Feature/profile: source-only CombatCanary binding support for the exact
+  observation overlay; no client or server runtime was changed.
+- Outcome: schema 1 remains the closed Native recovery contract. Schema 2 adds
+  exactly `dinput8.dll`, `plugins/PSOBB.Gameplay.asi`, and
+  `plugins/PSOBB.Gameplay.ini`; partial, generic, extra, case-variant,
+  hard-linked, oversized, or identity-drifted files fail closed.
+- Authority: the tracked Gameplay build manifest binds 34 direct and
+  transitive source inputs, exact 59NL, the six exported functions, x86
+  ASLR/NX/CFG, and the 239,104-byte module SHA-256
+  `93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be`.
+  The source lock independently binds Ultimate ASI Loader v9.7.2 and its exact
+  x86 `dinput8.dll` member.
+- Installation contract: `installation.json` remains schema 1. Its existing
+  `clientBindingSha256` is the commit seal for either client-binding schema, so
+  the lifecycle receipt and process identity contracts do not widen.
+- Read safety: PowerShell parses one strict bounded snapshot for each sealed
+  binding/profile. The launcher rejects overlay length before allocation,
+  verifies one hard link through the open file handle, hashes each exact file,
+  and rechecks the sealed set at the end of observation.
+- Tests: runtime client policy 24/24; launcher runtime-identity probe 53/53;
+  full launcher 196/196; CombatCanary startup binding 11/11;
+  ProjectLayout 14/14; Gameplay CTest 5/5;
+  ClientSafety CTest 3/3; attribution scan zero.
+- Runtime verification: the final exhaustive schema-1 installed-tree check
+  reached its 300-second command ceiling without an error result and is
+  recorded as incomplete, not passed or failed. No PSOBB process or reserved
+  listener remained afterward. The focused schema-1 compatibility and closed
+  manifest tests passed.
+- Limitation: this entry proves only source authority and closed binding
+  validation. Publication, loader/module load proof, observation evidence,
+  rollback, and live Twills acceptance remain pending.
+- Rollback: no runtime rollback is required; revert the focused local commit
+  containing this entry if the dual-schema source contract is withdrawn.

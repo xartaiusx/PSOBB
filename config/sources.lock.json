@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-20T04:07:20Z",
+  "generatedAtUtc": "2026-07-21T23:33:30Z",
   "components": [
     {
       "id": "newserv-stable-release",
@@ -794,6 +794,40 @@
           "buildPath": "src/PSOBB.Enhancement/bin/build-x86/Release/PSOBB.Enhancement.asi",
           "size": 216576,
           "sha256": "b67a6f64ad35ad8535a7ba7fa5be18f186757fa8af2e31b1d6e1c0dea26a716e",
+          "authenticode": "NotSigned"
+        }
+      ]
+    },
+    {
+      "id": "project-owned-psobb-gameplay",
+      "role": "project-owned-client-gameplay-observation",
+      "sourceUrl": "repo:src/PSOBB.Gameplay/build-manifest.json",
+      "releaseUrl": null,
+      "version": "0.3.0",
+      "checkedAtUtc": "2026-07-21T23:19:09Z",
+      "retrievedAtUtc": "2026-07-21T23:19:09Z",
+      "size": 8768,
+      "sha256": "e6ff481e8a890be1cae6c46493ddbd1d1848d8fe3d810bf92c2e642ab333cdf7",
+      "signatureState": "Source-controlled build manifest is hash-locked; the exact x86 observation artifact is unsigned",
+      "scanState": "Project-built source and artifact; two clean builds produced the exact artifact hash; Gameplay CTest 5/5, ClientSafety CTest 3/3, MSVC static analysis, six-export inspection, and x86 ASLR/NX/CFG inspection passed; runtime-load and live observation acceptance remain pending",
+      "license": "No standalone PSOBB.Gameplay license is present; no redistribution license is asserted",
+      "redistribution": "Local project build only; no redistribution rights are asserted for the component or artifact; proprietary client files remain excluded",
+      "compatibility": "Exact 59NL only; passively observes selected native send_60 serialization attempts and remains inert unless its exact adjacent configuration enables both Gameplay and Observation; it does not dispatch actions or synthetic packets",
+      "rollbackTarget": "baseline",
+      "members": [
+        {
+          "path": "src/PSOBB.Gameplay/PSOBB.Gameplay.ini.example",
+          "size": 186,
+          "sha256": "60aa4432367e951cf30619086ffe5b265bda6ab07be7236daf10ad74c6d13d29",
+          "authenticode": "NotApplicable"
+        }
+      ],
+      "runtimeArtifacts": [
+        {
+          "path": "PSOBB.Gameplay.asi",
+          "buildPath": "src/PSOBB.Gameplay/bin/build-x86/Release/PSOBB.Gameplay.asi",
+          "size": 239104,
+          "sha256": "93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be",
           "authenticode": "NotSigned"
         }
       ]

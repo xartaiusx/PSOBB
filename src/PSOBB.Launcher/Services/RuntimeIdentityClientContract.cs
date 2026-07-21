@@ -8,6 +8,26 @@ namespace PSOBB.Launcher.Services;
 
 internal sealed partial class ExactRuntimeIdentityProbe
 {
+    private static readonly string[] CombatClientBindingProperties =
+    [
+        "schemaVersion", "environment", "environmentId", "profile", "renderer",
+        "serverAddress", "patchPort", "gamePorts", "clientExecutablePath",
+        "clientExecutableSize", "clientExecutableSha256", "clientProfileSha256",
+        "baseClientManifestSha256", "createdAtUtc",
+    ];
+    private static readonly string[] CombatGameplayOverlayProperties =
+    [
+        "loaderPath", "loaderSize", "loaderSha256",
+        "modulePath", "moduleSize", "moduleSha256",
+        "configurationPath", "configurationSize", "configurationSha256",
+    ];
+    private const string CombatGameplayLoaderPath = "runtime/client/dinput8.dll";
+    private const string CombatGameplayModulePath = "runtime/client/plugins/PSOBB.Gameplay.asi";
+    private const string CombatGameplayConfigurationPath = "runtime/client/plugins/PSOBB.Gameplay.ini";
+    private const long CombatGameplayConfigurationSize = 38;
+    private const string CombatGameplayConfigurationSha256 =
+        "c4f171ac109d93442a6cebb1099cfb963d6ea4bb7b72f07666a581d86e198f5d";
+
     private static readonly string[] Schema5ProfileProperties =
     [
         "schemaVersion", "builtAtUtc", "channel", "profileId", "nativeGraphics",
@@ -401,18 +421,19 @@ internal sealed partial class ExactRuntimeIdentityProbe
             sealedFiles,
             cancellationToken).ConfigureAwait(false);
         var binding = bindingFile.Document.RootElement;
+        var schemaVersion = RequiredInt32(binding, "schemaVersion");
         RequireExactProperties(
             binding,
-            [
-                "schemaVersion", "environment", "environmentId", "profile", "renderer",
-                "serverAddress", "patchPort", "gamePorts", "clientExecutablePath",
-                "clientExecutableSize", "clientExecutableSha256", "clientProfileSha256",
-                "baseClientManifestSha256", "createdAtUtc",
-            ],
+            schemaVersion switch
+            {
+                1 => CombatClientBindingProperties,
+                2 => [.. CombatClientBindingProperties, "gameplayOverlay"],
+                _ => throw new InvalidDataException(
+                    "The combat-canary client binding schema is unsupported."),
+            },
             "combat-canary client binding");
         RequiredDateTimeOffset(binding, "createdAtUtc");
         if (bindingFile.Identity.Sha256 != installation.ClientBindingSha256
-            || RequiredInt32(binding, "schemaVersion") != 1
             || !RequiredString(binding, "environment").Equals("CombatCanary", StringComparison.Ordinal)
             || !RequiredString(binding, "environmentId").Equals("combat-canary", StringComparison.Ordinal)
             || !RequiredString(binding, "profile").Equals("baseline", StringComparison.Ordinal)
@@ -429,7 +450,103 @@ internal sealed partial class ExactRuntimeIdentityProbe
         {
             throw new InvalidDataException("The combat-canary client binding is not exact or installation-sealed.");
         }
+        if (schemaVersion == 2)
+        {
+            await ValidateCombatGameplayOverlayAsync(
+                contract,
+                RequiredObject(binding, "gameplayOverlay"),
+                sealedFiles,
+                cancellationToken).ConfigureAwait(false);
+        }
         return bindingFile.Identity.Sha256;
+    }
+
+    private async Task ValidateCombatGameplayOverlayAsync(
+        RuntimeEnvironmentContract contract,
+        JsonElement overlay,
+        Dictionary<string, SealedFileIdentity> sealedFiles,
+        CancellationToken cancellationToken)
+    {
+        RequireExactProperties(
+            overlay,
+            CombatGameplayOverlayProperties,
+            "combat-canary Gameplay overlay");
+
+        await RequireCombatGameplayOverlayFileAsync(
+            contract,
+            overlay,
+            "loaderPath",
+            "loaderSize",
+            "loaderSha256",
+            CombatGameplayLoaderPath,
+            16 * 1024 * 1024,
+            sealedFiles,
+            cancellationToken).ConfigureAwait(false);
+        await RequireCombatGameplayOverlayFileAsync(
+            contract,
+            overlay,
+            "modulePath",
+            "moduleSize",
+            "moduleSha256",
+            CombatGameplayModulePath,
+            4 * 1024 * 1024,
+            sealedFiles,
+            cancellationToken).ConfigureAwait(false);
+        await RequireCombatGameplayOverlayFileAsync(
+            contract,
+            overlay,
+            "configurationPath",
+            "configurationSize",
+            "configurationSha256",
+            CombatGameplayConfigurationPath,
+            4 * 1024,
+            sealedFiles,
+            cancellationToken).ConfigureAwait(false);
+        if (RequiredInt64(overlay, "configurationSize") != CombatGameplayConfigurationSize
+            || !RequiredSha256(overlay, "configurationSha256").Equals(
+                CombatGameplayConfigurationSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The combat-canary Gameplay observation configuration is not canonical.");
+        }
+    }
+
+    private async Task RequireCombatGameplayOverlayFileAsync(
+        RuntimeEnvironmentContract contract,
+        JsonElement overlay,
+        string pathProperty,
+        string sizeProperty,
+        string sha256Property,
+        string expectedRelativePath,
+        long maximumSize,
+        Dictionary<string, SealedFileIdentity> sealedFiles,
+        CancellationToken cancellationToken)
+    {
+        var relativePath = RequiredString(overlay, pathProperty);
+        if (!relativePath.Equals(expectedRelativePath, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"The combat-canary Gameplay overlay has an unexpected '{pathProperty}'.");
+        }
+
+        var path = Path.Combine(
+            contract.EnvironmentRoot,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var size = RequiredInt64(overlay, sizeProperty);
+        if (size <= 0 || size > maximumSize)
+        {
+            throw new InvalidDataException(
+                $"The combat-canary Gameplay overlay has an invalid '{sizeProperty}'.");
+        }
+        await RequireFileIdentityAsync(
+            path,
+            contract.EnvironmentRoot,
+            new(size, RequiredSha256(overlay, sha256Property)),
+            sealedFiles,
+            cancellationToken,
+            maximumBytes: maximumSize,
+            requireSingleLink: true).ConfigureAwait(false);
     }
 
     private async Task ValidateClientStartupReceiptAsync(

@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "componentId": "project-owned-psobb-gameplay",
+  "version": "0.3.0",
+  "builtAtUtc": "2026-07-21T23:19:09Z",
+  "baseClient": {
+    "relativePath": "Psobb.exe",
+    "size": 6971904,
+    "sha256": "dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535"
+  },
+  "toolchain": {
+    "generator": "Visual Studio 18 2026",
+    "platform": "Win32",
+    "configuration": "Release",
+    "compiler": "MSVC x86 19.51.36248.0",
+    "windowsSdk": "10.0.28000.0",
+    "cmakeMinimum": "3.25",
+    "cmakeVersion": "4.4.0",
+    "languageStandard": "C++20",
+    "runtimeLibrary": "MultiThreaded",
+    "compileOptions": [
+      "/W4",
+      "/WX",
+      "/permissive-",
+      "/sdl",
+      "/Brepro",
+      "/guard:cf",
+      "/utf-8",
+      "/Zc:__cplusplus",
+      "/Zc:inline"
+    ],
+    "linkOptions": [
+      "/Brepro",
+      "/DYNAMICBASE",
+      "/INCREMENTAL:NO",
+      "/NXCOMPAT",
+      "/GUARD:CF"
+    ]
+  },
+  "sourceInputs": [
+    {
+      "path": "src/PSOBB.Gameplay/CMakeLists.txt",
+      "size": 2186,
+      "sha256": "0d7949825b0727bbc4bd72b3abaf8d46b6b9a0e8cb600a06b045bf083a54450a"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/CMakePresets.json",
+      "size": 724,
+      "sha256": "00f6b254327cb2766e5efae3d55abff72e3fb720de094238bd438f37d37f2ea7"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/include/psobb_gameplay/api.h",
+      "size": 3889,
+      "sha256": "931dab80100eac9d765b84508e821a4f7e504c5b12e9ee7935724622e057f313"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/include/psobb_gameplay/observation.h",
+      "size": 2889,
+      "sha256": "f726256b07281b32f66165d50fe7d6f776babd60eca312a52b28e6fb0f36f957"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/PSOBB.Gameplay.ini.example",
+      "size": 186,
+      "sha256": "60aa4432367e951cf30619086ffe5b265bda6ab07be7236daf10ad74c6d13d29"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/README.md",
+      "size": 3950,
+      "sha256": "09dba56bbc6e8745ed1316c814c173d284c89bad07a95786009a182ab1d862f8"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/dllmain.cpp",
+      "size": 242,
+      "sha256": "42049e613c73ce2cc1ed5d69657c0d40d7474d1282f72e509779f88748a2f585"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/exports.def",
+      "size": 319,
+      "sha256": "000a41c99c5e9a6d79f1b00b2e44bd6c01cbc24ce9e54e0137a042b2d094f837"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/gameplay_internal.h",
+      "size": 147,
+      "sha256": "a18359a936b224c266cdbbcb915856402cd60773c84a95361d9f08665142626f"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/gameplay.cpp",
+      "size": 17132,
+      "sha256": "959ba8c830cc0678ba6189c1480163f911daa3a58a4d55c7ae8025ee7d39ad17"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_ring.cpp",
+      "size": 5999,
+      "sha256": "28d379dcebc3a83de3a7405b33171fc1b91f1fc9833bf9e619cd0e7c4fa69df6"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_ring.h",
+      "size": 2423,
+      "sha256": "b9d03439a1b9ddcd28f4583534731ebfe6be14f02a107ab92da7a3662a507eb3"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/send60_probe.cpp",
+      "size": 1292,
+      "sha256": "dca154c92078990c49256cea0353b2aafa7547a229c553c417c958b38c040713"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/send60_probe.h",
+      "size": 634,
+      "sha256": "37a0a723decd0f42e3c791c868581e085b5588aabd70a673ec4f614edc593c16"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/abi_smoke.cpp",
+      "size": 10716,
+      "sha256": "429c9bfbb876c0d29bc4c92b335d3b1c5d758ead31ce1b807dc3fe929880e262"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/CMakeLists.txt",
+      "size": 2817,
+      "sha256": "32b9381cd3ec82ae983c0f4c2b1d6d6d2e17dfb57bf4740cce9b47eff207fe03"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/observation_ring_tests.cpp",
+      "size": 18176,
+      "sha256": "9b9c345a0653fd028e0b4e75d1d3c5ac9e4a9db39adba6dea8b79bbdf44c4987"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/send60_probe_tests.cpp",
+      "size": 3398,
+      "sha256": "a28a4b38ea49b744a178cd9789982aabcef7417d654eff36526f246fd416ddbb"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/CMakeLists.txt",
+      "size": 2856,
+      "sha256": "8262540c5099f525f9ffb4d1e1f996b3daeb27d6b2fbceb539ed41b885e4ce68"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/CMakePresets.json",
+      "size": 728,
+      "sha256": "e82c6ab8b2355832a6b0fcafdc6fe9532f9d1e564399f961499f0ed591abaeb3"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/include/psobb_client_safety/exact_image.h",
+      "size": 1925,
+      "sha256": "8e9d4f9fb1f52770e534db6471d8abb0055e97fb8a0f0cf4eb034a14fc60cc95"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/include/psobb_client_safety/hook_patch.h",
+      "size": 2812,
+      "sha256": "aee918720b230655d1990b6bd7d80eb799f4d8b89f3351f7e548e12fd335cbc2"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/include/psobb_client_safety/relative_call_hook.h",
+      "size": 2013,
+      "sha256": "ca17f9db7d5c096d7eae222a50e95356f9692e488fcc67af94ebb4dc4ae08f58"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/README.md",
+      "size": 2623,
+      "sha256": "8bb191640edb38d0a2de222a68bc11eba83200196fde7a3e3f124f0fe9514aa1"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/exact_image.cpp",
+      "size": 9780,
+      "sha256": "966398606b1ac331fde8ceedd9ffb6fe0c6960742636f6e038d5930fe7c05a7e"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/hook_patch_test_seam.h",
+      "size": 778,
+      "sha256": "51415084168949d90f59aac636dfc7d74c25f7e16af12b6dec8726b7c815a21c"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/hook_patch.cpp",
+      "size": 28878,
+      "sha256": "a71f0745f8f263b8950fec879918c3644572bdeb1d697929082b7ff996d6f4bd"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/relative_call_hook_test_seam.h",
+      "size": 585,
+      "sha256": "f47083671ee8b337df22c72b8bc4add73ec2b9e71d551847ae24a1cc4432e952"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/relative_call_hook.cpp",
+      "size": 17978,
+      "sha256": "04f4edb499668de2408569f0eb78a65c9e4f79028230617efd967aa1c811bc32"
+    },
+    {
+      "path": "src/PSOBB.ClientSafety/src/sha256.cpp",
+      "size": 3834,
+      "sha256": "6583951e2d5e26f629a1b005945e5198365ceaf955c2f5d60dfa6c74842bf752"
+    },
+    {
+      "path": "tests/PSOBB.ClientSafety/CMakeLists.txt",
+      "size": 2184,
+      "sha256": "b59ea8d5ba724e035318a1bad31977b751a5a19606695f4e9595de1ec994fe24"
+    },
+    {
+      "path": "tests/PSOBB.ClientSafety/exact_image_tests.cpp",
+      "size": 9706,
+      "sha256": "ebc92e51680f17952d986f151a79cd950409eeae5429e567bd08d630cf075dc2"
+    },
+    {
+      "path": "tests/PSOBB.ClientSafety/hook_patch_tests.cpp",
+      "size": 41377,
+      "sha256": "51ffecaff232542574e7d9e6af6e5af259a2cd5c837a03d956a5ac36a0c7c464"
+    },
+    {
+      "path": "tests/PSOBB.ClientSafety/relative_call_hook_tests.cpp",
+      "size": 12704,
+      "sha256": "82c049133c5a2eb2cde179880f358c06061ebc641c550d6c7dcca6fa1fde5da9"
+    }
+  ],
+  "artifacts": [
+    {
+      "relativeBuildPath": "src/PSOBB.Gameplay/bin/build-x86/Release/PSOBB.Gameplay.asi",
+      "runtimeName": "PSOBB.Gameplay.asi",
+      "machine": "x86",
+      "size": 239104,
+      "sha256": "93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be",
+      "authenticode": "NotSigned"
+    }
+  ],
+  "verification": {
+    "cleanRebuildHashesMatched": true,
+    "gameplayCtest": "5/5 passed",
+    "clientSafetyCtest": "3/3 passed",
+    "staticAnalysis": "MSVC native static analysis passed with zero diagnostics",
+    "exactClientContract": "Exact 59NL executable SHA-256 and send_60 callsite bytes are pinned; live host proof remains pending",
+    "exports": [
+      "InitializeASI",
+      "PSOBBGameplay_DrainObservations",
+      "PSOBBGameplay_GetCapabilities",
+      "PSOBBGameplay_GetVersion",
+      "PSOBBGameplay_Initialize",
+      "PSOBBGameplay_Rollback"
+    ],
+    "securityProperties": [
+      "ASLR",
+      "NX",
+      "Control Flow Guard"
+    ]
+  },
+  "license": "No standalone PSOBB.Gameplay license is present; this manifest asserts no redistribution license.",
+  "redistribution": "Local project build only; no redistribution rights are asserted for the component or artifact. The proprietary base client is excluded.",
+  "acceptance": "Source/build/test authority only. CombatCanary publication, runtime-load proof, live observation, rollback, and Stable promotion remain pending.",
+  "knownLimitations": [
+    "Observation records prove selected native send_60 serialization attempts, not server receipt, attack type, damage, or legal combo timing.",
+    "No action dispatch, held combo, input buffer, or hotbar behavior is implemented.",
+    "CombatCanary publication and live Twills observation acceptance remain pending."
+  ]
+}

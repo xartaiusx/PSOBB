@@ -34,6 +34,10 @@ Current accepted facts:
   core and exact-59NL passive `send_60` adapter. Runtime publication, a
   permitted in-process evidence consumer, live event acceptance, and all
   combat behavior remain pending.
+- CombatCanary client binding schema 2 is source-ready and closes over exactly
+  the approved x86 loader, Gameplay observation module, and canonical
+  observation configuration. Schema 1 remains the exact Native recovery
+  contract; no overlay has been published yet.
 
 ## Locked product boundaries
 
