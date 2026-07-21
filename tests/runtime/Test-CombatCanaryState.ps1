@@ -1013,18 +1013,24 @@ function Test-RealPublishedCombatCanaryPackage {
         [Parameter(Mandatory)]$CanaryLayout
     )
 
-    $buildPath = Join-Path $RepositoryRoot 'config\combat-canary-build.json'
-    $buildJson = Read-PSOBBCombatCanaryStrictJsonObject `
-        -LiteralPath $buildPath -Root $RepositoryRoot -MaximumBytes 512KB `
-        -RoleLabel 'published combat-canary build contract'
-    $build = ConvertTo-PSOBBCombatCanaryPowerShellObject `
-        -JsonObject $buildJson -RoleLabel 'published combat-canary build contract'
-    [void](Assert-PSOBBCombatCanaryBuildContractIdentity -Build $build)
-    $manifestPath = Join-Path $CanaryLayout.ServerBase 'release-manifest.json'
+    $rootLayout = Get-PSOBBLayout -RuntimeRoot $CanaryLayout.Root
+    $binding = Get-PSOBBCombatCanaryInstallationBindingExpectations `
+        -Layout $rootLayout
+    $selection = Get-PSOBBCombatCanaryBuildContractSelection `
+        -RepositoryRoot $RepositoryRoot `
+        -ExpectedSha256 ([string]$binding.BuildContractSha256)
+    $build = $selection.Value
+    $manifestName = if ([string]$selection.Artifact -ceq 'CurrentUpstream') {
+        [string]$build.output.releaseManifest.path
+    } else {
+        [string]$build.output.releaseManifestName
+    }
+    $manifestPath = Join-Path $CanaryLayout.ServerBase $manifestName
     $manifestItem = Get-Item -Force -LiteralPath $manifestPath
-    if ($manifestItem.Length -ne [int64]$build.output.releaseManifest.size -or
-        (Get-LowerSha256 $manifestPath) -cne
-            [string]$build.output.releaseManifest.sha256) {
+    if ([string]$selection.Artifact -ceq 'CurrentUpstream' -and
+        ($manifestItem.Length -ne [int64]$build.output.releaseManifest.size -or
+            (Get-LowerSha256 $manifestPath) -cne
+                [string]$build.output.releaseManifest.sha256)) {
         throw 'Published release manifest differs from the frozen build contract'
     }
     $manifestJson = Read-PSOBBCombatCanaryStrictJsonObject `
@@ -1032,16 +1038,62 @@ function Test-RealPublishedCombatCanaryPackage {
         -MaximumBytes 16MB -RoleLabel 'published release manifest'
     $manifest = ConvertTo-PSOBBCombatCanaryPowerShellObject `
         -JsonObject $manifestJson -RoleLabel 'published release manifest'
-    Assert-PSOBBCombatCanaryExactProperties -Value $manifest `
-        -RoleLabel 'published release manifest' `
-        -Expected @('schemaVersion', 'profileId', 'sourceCommit',
-            'patchSeriesSha256', 'files') | Out-Null
-    if ([int]$manifest.schemaVersion -ne 1 -or
-        [string]$manifest.profileId -cne [string]$build.profileId -or
-        [string]$manifest.sourceCommit -cne [string]$build.source.commit -or
-        [string]$manifest.patchSeriesSha256 -cne
-            [string]$build.patchSeries.sha256) {
-        throw 'Published release manifest is not bound to the frozen contract'
+    if ([string]$selection.Artifact -ceq 'CurrentUpstream') {
+        [void](Assert-PSOBBCombatCanaryExactProperties -Value $manifest `
+                -RoleLabel 'published release manifest' `
+                -Expected @('schemaVersion', 'profileId', 'sourceCommit',
+                    'patchSeriesSha256', 'files'))
+        if ([int]$manifest.schemaVersion -ne 1 -or
+            [string]$manifest.profileId -cne [string]$build.profileId -or
+            [string]$manifest.sourceCommit -cne [string]$build.source.commit -or
+            [string]$manifest.patchSeriesSha256 -cne
+                [string]$build.patchSeries.sha256) {
+            throw 'Published release manifest is not bound to the frozen contract'
+        }
+        $expectedFileCount = [int]$build.output.fileCount
+        $expectedTotalBytes = [int64]$build.output.totalBytes
+        $expectedExecutable = $build.output.executable
+    } else {
+        [void](Assert-PSOBBCombatCanaryExactProperties -Value $manifest `
+                -RoleLabel 'published StableShadow release manifest' `
+                -Expected @('schemaVersion', 'profileId',
+                    'serverComponentId', 'serverCommit',
+                    'serverBaseManifestSha256', 'patchDataManifestSha256',
+                    'files'))
+        $serverBaseManifestPath = Assert-PathWithinRoot `
+            -Path (Join-Path $rootLayout.Root (
+                [string]$build.source.serverBaseManifestRelativePath)) `
+            -Root $rootLayout.Root
+        $patchDataManifestPath = Assert-PathWithinRoot `
+            -Path (Join-Path $rootLayout.Root (
+                [string]$build.source.patchManifestRelativePath)) `
+            -Root $rootLayout.Root
+        $installationJson = Read-PSOBBCombatCanaryStrictJsonObject `
+            -LiteralPath $CanaryLayout.InstallRecord `
+            -Root $CanaryLayout.EnvironmentRoot -MaximumBytes 256KB `
+            -RequireProtectedAcl -RoleLabel 'published canary installation'
+        $installation = ConvertTo-PSOBBCombatCanaryPowerShellObject `
+            -JsonObject $installationJson `
+            -RoleLabel 'published canary installation'
+        if ([int]$manifest.schemaVersion -ne 1 -or
+            [string]$manifest.profileId -cne [string]$build.profileId -or
+            [string]$manifest.serverComponentId -cne
+                [string]$build.source.serverComponentId -or
+            [string]$manifest.serverCommit -cne
+                [string]$build.source.serverCommit -or
+            [string]$manifest.serverBaseManifestSha256 -cne
+                (Get-LowerSha256 $serverBaseManifestPath) -or
+            [string]$manifest.patchDataManifestSha256 -cne
+                (Get-LowerSha256 $patchDataManifestPath) -or
+            [string]$installation.buildContractSha256 -cne
+                [string]$selection.Hash -or
+            [string]$installation.serverReleaseManifestSha256 -cne
+                (Get-LowerSha256 $manifestPath)) {
+            throw 'Published StableShadow manifest is not installation-bound'
+        }
+        $expectedFileCount = @($manifest.files).Count
+        $expectedTotalBytes = $null
+        $expectedExecutable = $build.source.serverExecutable
     }
     $paths = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
@@ -1075,21 +1127,25 @@ function Test-RealPublishedCombatCanaryPackage {
                 $CanaryLayout.ServerBase, $_.FullName).Replace('\', '/')
         } | Where-Object { $_ -cne 'release-manifest.json' })
     $executable = Join-Path $CanaryLayout.ServerBase 'newserv-windows.exe'
-    if ($paths.Count -ne [int]$build.output.fileCount -or
-        $bytes -ne [int64]$build.output.totalBytes -or
+    if ($null -eq $expectedTotalBytes) {
+        $expectedTotalBytes = $bytes
+    }
+    if ($paths.Count -ne $expectedFileCount -or
+        $bytes -ne $expectedTotalBytes -or
         $actual.Count -ne $paths.Count -or
         @($actual | Where-Object { -not $paths.Contains($_) }).Count -ne 0 -or
         (Get-Item -Force -LiteralPath $executable).Length -ne
-            [int64]$build.output.executable.size -or
+            [int64]$expectedExecutable.size -or
         (Get-LowerSha256 $executable) -cne
-            [string]$build.output.executable.sha256) {
+            [string]$expectedExecutable.sha256) {
         throw 'Published package does not match its exact frozen inventory'
     }
     [pscustomobject]@{
         Valid = $true
+        ServerArtifact = [string]$selection.Artifact
         Files = $paths.Count
         Bytes = $bytes
-        BuildContractSha256 = Get-LowerSha256 $buildPath
+        BuildContractSha256 = [string]$selection.Hash
         ReleaseManifestSha256 = Get-LowerSha256 $manifestPath
     }
 }
@@ -1310,6 +1366,7 @@ try {
     $fixturePolicyHash = Get-LowerSha256 (
         Join-Path $repositoryRoot 'config\client-patch-profiles.json')
     $fixtureInstall.installationId = $fixtureInstallationId
+    $fixtureInstall.runtimeRoot = $layout.Root
     $installEntries = @($backupManifest.files | Where-Object {
             [string]$_.path -ceq 'stable/installation.json'
         })
@@ -1335,6 +1392,7 @@ try {
         $backupManifestPath,
         ($backupManifest | ConvertTo-Json -Depth 10),
         [System.Text.UTF8Encoding]::new($false))
+    Set-PSOBBProtectedTreeAcl -Path $fixtureBackup -Root $stable.Backups
     $stalePolicyRejected = $false
     try {
         & (Join-Path $scriptsRoot 'Restore-PSOBB.ps1') `
@@ -2168,10 +2226,17 @@ try {
                 $node.GetCommandName() -ceq
                     'Assert-PSOBBCombatCanaryBuildContractIdentity'
             }, $true))
+    $verifierSelectionCalls = @($verifierAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -ceq
+                    'Get-PSOBBCombatCanaryBuildContractSelection'
+            }, $true))
     Add-Result 'Installed verifier consumes the shared frozen build identity gate' (
         @($verifierParseErrors).Count -eq 0 -and
-        $verifierIdentityCalls.Count -eq 1) `
-        'one exact shared-helper consumer and no stale schema copy'
+        $verifierIdentityCalls.Count -eq 0 -and
+        $verifierSelectionCalls.Count -eq 3) `
+        'three artifact-selection consumers and no stale schema copy'
 
     $licenseSemanticsExact = $true
     try {
@@ -2946,9 +3011,9 @@ try {
         -Source $created.SnapshotPath -SnapshotsRoot $canary.Snapshots `
         -PrivateKeyPath $privateKeyPath -RawText -Mutation {
         param($text, $account)
-        [regex]::new('(?m)^(\s*)"Password"\s*:').Replace(
+        [regex]::new('"Password"\s*:').Replace(
             $text,
-            '$1"\u0050assword":"duplicate",' + "`r`n" + '$1"Password":',
+            '"\u0050assword":"duplicate","Password":',
             1)
     }
     Assert-RejectedWithoutText -Name `
@@ -2993,10 +3058,14 @@ try {
         -Key 'DefaultDropModeV4Battle' -JsonValue '"SERVER_SHARED"'
     $configText = Set-ConfigScalar -Text $configText `
         -Key 'DefaultDropModeV4Challenge' -JsonValue '"SERVER_SHARED"'
-    $configText = Set-ConfigScalar -Text $configText `
-        -Key 'CensorCredentials' -JsonValue 'true'
-    $configText = Set-ConfigScalar -Text $configText `
-        -Key 'AllowSameAccountConcurrentLogins' -JsonValue 'false'
+    $isCurrentUpstream = [string]$published.ServerArtifact -ceq
+        'CurrentUpstream'
+    if ($isCurrentUpstream) {
+        $configText = Set-ConfigScalar -Text $configText `
+            -Key 'CensorCredentials' -JsonValue 'true'
+        $configText = Set-ConfigScalar -Text $configText `
+            -Key 'AllowSameAccountConcurrentLogins' -JsonValue 'false'
+    }
     $patchPortPattern =
         '(?m)^\s*"bb-patch"\s*:\s*\[\["127\.0\.0\.1",\s*11000\],\s*"patch",\s*"patch_server_bb"\]\s*,?\s*(?://.*)?$'
     $data1PortPattern =
@@ -3018,20 +3087,35 @@ try {
     $criticalConfigKeys = @(
         'ServerName', 'LocalAddress', 'ExternalAddress', 'DNSServerPort',
         'IPStackListen', 'PPPStackListen', 'PPPRawListen', 'HTTPListen',
-        'RunInteractiveShell', 'CensorCredentials',
-        'AllowSameAccountConcurrentLogins', 'AllowUnregisteredUsers',
+        'RunInteractiveShell', 'AllowUnregisteredUsers',
         'CheatModeBehavior', 'DefaultDropModeV4Normal',
         'DefaultDropModeV4Battle', 'DefaultDropModeV4Challenge',
         'BBEXPShareMultiplier', 'EnableSwitchAssistByDefault',
         'RareNotificationsEnabledByDefaultV3V4', 'CommandData',
         'AutoPatches', 'BBRequiredPatches', 'bb-patch', 'bb-data1', 'bb-data2')
+    if ($isCurrentUpstream) {
+        $criticalConfigKeys += @(
+            'CensorCredentials', 'AllowSameAccountConcurrentLogins')
+    }
     $criticalConfigKeysUnique = @($criticalConfigKeys | Where-Object {
             [regex]::Matches(
                 $configText,
                 '(?m)^\s*"' + [regex]::Escape($_) + '"\s*:').Count -ne 1
         }).Count -eq 0
+    $artifactSpecificConfigReady = if ($isCurrentUpstream) {
+        [regex]::Matches($configText,
+            '(?m)^\s*"CensorCredentials"\s*:\s*true\s*,?').Count -eq 1 -and
+        [regex]::Matches($configText,
+            '(?m)^\s*"AllowSameAccountConcurrentLogins"\s*:\s*false\s*,?').Count -eq 1
+    } else {
+        [regex]::Matches($configText,
+            '(?m)^\s*"CensorCredentials"\s*:').Count -eq 0 -and
+        [regex]::Matches($configText,
+            '(?m)^\s*"AllowSameAccountConcurrentLogins"\s*:').Count -eq 0
+    }
     $configReady =
         $criticalConfigKeysUnique -and
+        $artifactSpecificConfigReady -and
         [regex]::Matches($configText,
             '(?m)^\s*"ServerName"\s*:\s*"PSOBB Combat"\s*,?').Count -eq 1 -and
         [regex]::Matches($configText,
@@ -3069,11 +3153,7 @@ try {
         [regex]::Matches($configText,
             '(?m)^\s*"CommandData"\s*:\s*"DISABLED"\s*,?').Count -eq 1 -and
         @(Get-ActiveConfigStringArray -Text $configText -Key 'AutoPatches').Count -eq 0 -and
-        @(Get-ActiveConfigStringArray -Text $configText -Key 'BBRequiredPatches').Count -eq 0 -and
-        [regex]::Matches($configText,
-            '(?m)^\s*"CensorCredentials"\s*:\s*true\s*,?').Count -eq 1 -and
-        [regex]::Matches($configText,
-            '(?m)^\s*"AllowSameAccountConcurrentLogins"\s*:\s*false\s*,?').Count -eq 1
+        @(Get-ActiveConfigStringArray -Text $configText -Key 'BBRequiredPatches').Count -eq 0
     $exactPortPolicy =
         [regex]::Matches($configText, $patchPortPattern).Count -eq 1 -and
         [regex]::Matches($configText, $data1PortPattern).Count -eq 1 -and
@@ -3084,7 +3164,7 @@ try {
         [regex]::Matches($changedDispatchConfig, $data1PortPattern).Count -eq 0
     Add-Result 'final build and baseline config inputs read back exactly' (
         [bool]$published.Valid -and $configReady -and $exactPortPolicy) `
-        "files=$($published.Files)"
+        "artifact=$($published.ServerArtifact); files=$($published.Files)"
     Add-Result 'real Stable base client matches its exact 59NL binding' `
         ([bool]$publishedClient.Valid) "files=$($publishedClient.Files)"
         Complete-TestSection

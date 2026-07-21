@@ -416,6 +416,8 @@ function Invoke-PSOBBCombatCanaryBoundedFileSnapshot {
         [Parameter(DontShow = $true)]
         [scriptblock]$InternalTestAfterIdentity,
 
+        [switch]$RequireProtectedAcl,
+
         [Parameter(DontShow = $true)]
         [switch]$AllowWriteShare
     )
@@ -465,6 +467,10 @@ function Invoke-PSOBBCombatCanaryBoundedFileSnapshot {
                 -Context $lease -RoleLabel $RoleLabel)
         if ([long]$lease.Stream.Length -ne $length) {
             throw "The $RoleLabel changed while its locked bytes were consumed"
+        }
+        if ($RequireProtectedAcl -and
+            -not (Test-PSOBBProtectedAcl -Path $lease.Path)) {
+            throw "The $RoleLabel does not have its protected file ACL"
         }
         $value = & $Consumer ([byte[]]$bytes)
         [pscustomobject]@{
@@ -2120,6 +2126,9 @@ function Read-PSOBBCombatCanaryStrictJsonObject {
         [Parameter(ParameterSetName = 'Path')]
         [switch]$PassThruSnapshot,
 
+        [Parameter(ParameterSetName = 'Path')]
+        [switch]$RequireProtectedAcl,
+
         [Parameter(DontShow = $true, ParameterSetName = 'Path')]
         [scriptblock]$InternalTestAfterInitialValidation,
 
@@ -2136,6 +2145,7 @@ function Read-PSOBBCombatCanaryStrictJsonObject {
         -LiteralPath $LiteralPath -Root $Root -MaximumBytes $MaximumBytes `
         -RoleLabel $RoleLabel -ExpectedSha256 $ExpectedSha256 `
         -ExpectedLength $ExpectedLength `
+        -RequireProtectedAcl:$RequireProtectedAcl `
         -InternalTestAfterInitialValidation $InternalTestAfterInitialValidation `
         -InternalTestAfterIdentity $InternalTestAfterIdentity `
         -Consumer {
