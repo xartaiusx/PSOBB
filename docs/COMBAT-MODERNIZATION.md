@@ -36,8 +36,12 @@ Current accepted facts:
   combat behavior remain pending.
 - CombatCanary client binding schema 2 is source-ready and closes over exactly
   the approved x86 loader, Gameplay observation module, and canonical
-  observation configuration. Schema 1 remains the exact Native recovery
-  contract; no overlay has been published yet.
+  observation configuration. Its stopped-runtime publisher and exact rollback
+  passed the bounded source/fixture gate on 2026-07-26. Schema 1 remains the
+  exact Native recovery contract; no overlay has been published yet.
+- The complete canonical installed-state verifier passed read-only in 207.08
+  seconds on 2026-07-26. The canary remained at its exact schema-1 binding, so
+  module load, live observation evidence, and combat behavior remain pending.
 
 ## Locked product boundaries
 
@@ -135,8 +139,9 @@ action-disabled state, and while an item or technique dispatches.
 ### Phase 3: PSO2-like control with native actions
 
 1. Observation-only action probe. The allocation-free ring and exact-59NL
-   passive adapter passed their source gate; a permitted in-process evidence
-   consumer, isolated runtime publication, and live acceptance remain pending.
+   passive adapter and stopped-runtime publication transaction passed their
+   source gates; a permitted in-process evidence consumer, isolated runtime
+   publication, and live acceptance remain pending.
 2. Held Normal three-hit native combo.
 3. Held Heavy combo.
 4. Manual mixed-combo override.

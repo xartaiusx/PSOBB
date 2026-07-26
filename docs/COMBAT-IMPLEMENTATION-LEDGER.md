@@ -663,3 +663,67 @@ Each entry records:
   rollback, and live Twills acceptance remain pending.
 - Rollback: no runtime rollback is required; revert the focused local commit
   containing this entry if the dual-schema source contract is withdrawn.
+
+## 2026-07-26 / gameplay-overlay-publication-gate-v1
+
+- Feature/profile: stopped-runtime publication and rollback for the exact
+  CombatCanary Gameplay observation overlay; no runtime profile was published
+  or enabled by this entry
+- Outcome: the source/fixture gate passed. The publisher transactionally moves
+  only the pinned x86 loader, `PSOBB.Gameplay.asi`, canonical observation
+  configuration, schema-2 binding, and installation commit seal. Exact rollback
+  restores schema 1 and removes the overlay. Stable and canonical canary state
+  were not changed.
+- Implementation checkpoint: the focused local commit containing this entry;
+  no remote operation was performed
+- Filesystem safety: every protected-directory ACL change holds an exact native
+  handle lease across all existing ancestors and the target. Directory moves
+  hold both parent chains plus a DELETE-capable exact source handle and use
+  no-replace `FileRenameInfo`. File replacement records both candidate and
+  displaced identities before continuing.
+- Recovery result: activation and rollback are durable before their first live
+  mutation, authenticate exact original/candidate identities, compensate normal
+  faults, and recover abrupt exits. The rollback completion marker is staged,
+  hashed, atomically published, and verified after recovery before transaction
+  evidence is retired.
+- Bounded verifier result: the real child-process harness accepted the exact
+  closed installed-binding JSON contract, rejected an extra property, rejected
+  excess output above a 256 KiB cap per stream, and terminated a timed-out
+  verifier process. Its deadline uses a monotonic stopwatch, the production
+  child limit is 220 seconds within a 285-second outer operation budget, and
+  stdout/stderr share one five-second drain window. A successful child must
+  leave at least 45 seconds before the live transaction can begin. Monotonic
+  admission is rechecked after durable staging and before the first live-target
+  mutation; checks after each live commit/removal and final readback retain
+  bounded time for compensation or completion.
+- Tests: Gameplay publisher Core 50/50 in 94 seconds; mixed-case selector and
+  `after-loader` abrupt-exit regression 27/27; all six activation
+  and all eight rollback abrupt-exit boundaries passed in isolated invocations;
+  aggregate hard-exit invocations are rejected unless one exact boundary is
+  selected;
+  StableShadow 18/18; live delta 24/24; verifier-scope regression 49/49;
+  runtime client policy 24/24; startup binding 11/11; ProjectLayout 14/14.
+- Canonical readback: an exact Activate `WhatIf` returned `Changed=false` and
+  `Pending=true`. The complete installed verifier returned `Valid=true`,
+  `Target=Installed`, `Environment=CombatCanary`, and client-binding SHA-256
+  `e022ecf1930c41b0391cc548b27dfb052cdf593b82309ab2baf569a3985df808`
+  in 207.08 seconds. No transaction began.
+- Review result: independent final review found no P0 after the handle-bound
+  rename/ACL changes. Its case-insensitive selector and wall-clock deadline
+  findings were fixed and behaviorally regressed. The in-transaction Stable
+  fingerprint intentionally covers only Stable `Psobb.exe` and its installation
+  authority; the fixture additionally proves the broader publisher-owned
+  surface is unchanged.
+- State result: both environments were stopped, no reserved listener or test
+  process remained, failed test fixtures were identity-validated and removed,
+  and the canonical canary remains schema-1 Native. Twills, saves, bank,
+  shortcuts, registry, shared RenderDoc state, and retail server content were
+  not modified.
+- Limitation: the overlay has not been canonically published or loaded. No
+  in-process consumer exists yet, no live event was drained, and neither the
+  isolated observation scenario nor its required canonical Twills smoke is
+  accepted by this entry.
+- Rollback: no runtime rollback is required while schema 1 remains installed.
+  Withdraw this source slice only with a focused local Git revert; after a
+  future publication, use `Set-PSOBBCombatCanaryGameplay.ps1 -Action Rollback`
+  with both environments stopped and require complete installed readback.

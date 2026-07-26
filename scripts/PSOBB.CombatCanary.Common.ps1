@@ -80,6 +80,14 @@ namespace PSOBBCombatCanary {
             ref FileDispositionInformation information,
             uint bufferSize);
 
+        [DllImport("kernel32.dll", EntryPoint = "SetFileInformationByHandle",
+            SetLastError = true)]
+        private static extern bool SetFileInformationByHandleBuffer(
+            SafeFileHandle file,
+            int informationClass,
+            IntPtr information,
+            uint bufferSize);
+
         public static ByHandleFileInformation GetInformation(SafeFileHandle file) {
             ByHandleFileInformation information;
             if (!GetFileInformationByHandle(file, out information)) {
@@ -110,6 +118,101 @@ namespace PSOBBCombatCanary {
                     (uint)Marshal.SizeOf<FileDispositionInformation>())) {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
+        }
+
+        public static void Rename(SafeFileHandle file, string destination) {
+            if (file == null || file.IsInvalid || file.IsClosed) {
+                throw new ArgumentException("The source handle is not open.", "file");
+            }
+            if (String.IsNullOrWhiteSpace(destination)) {
+                throw new ArgumentException("The destination is empty.", "destination");
+            }
+            byte[] nameBytes = Encoding.Unicode.GetBytes(destination);
+            int rootOffset = IntPtr.Size == 8 ? 8 : 4;
+            int lengthOffset = checked(rootOffset + IntPtr.Size);
+            int nameOffset = checked(lengthOffset + sizeof(uint));
+            int bufferSize = checked(nameOffset + nameBytes.Length + sizeof(char));
+            IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+            try {
+                byte[] cleared = new byte[bufferSize];
+                Marshal.Copy(cleared, 0, buffer, bufferSize);
+                Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
+                Marshal.WriteInt32(buffer, lengthOffset, nameBytes.Length);
+                Marshal.Copy(nameBytes, 0, IntPtr.Add(buffer, nameOffset),
+                    nameBytes.Length);
+                if (!SetFileInformationByHandleBuffer(
+                        file, 3, buffer, checked((uint)bufferSize))) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            } finally {
+                Array.Clear(nameBytes, 0, nameBytes.Length);
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+    }
+
+    public sealed class BoundedMemoryStream : MemoryStream {
+        private readonly long maximumLength;
+
+        public BoundedMemoryStream(long maximumLength) {
+            if (maximumLength < 1 || maximumLength > 1048576) {
+                throw new ArgumentOutOfRangeException("maximumLength");
+            }
+            this.maximumLength = maximumLength;
+        }
+
+        private void EnsureWriteFits(int count) {
+            if (count < 0 || Position > maximumLength - count) {
+                throw new InvalidDataException(
+                    "The redirected process output exceeded its byte bound.");
+            }
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) {
+            EnsureWriteFits(count);
+            base.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer) {
+            EnsureWriteFits(buffer.Length);
+            base.Write(buffer);
+        }
+
+        public override void WriteByte(byte value) {
+            EnsureWriteFits(1);
+            base.WriteByte(value);
+        }
+
+        public override System.Threading.Tasks.Task WriteAsync(
+                byte[] buffer, int offset, int count,
+                System.Threading.CancellationToken cancellationToken) {
+            EnsureWriteFits(count);
+            return base.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public override System.Threading.Tasks.ValueTask WriteAsync(
+                ReadOnlyMemory<byte> buffer,
+                System.Threading.CancellationToken cancellationToken = default) {
+            EnsureWriteFits(buffer.Length);
+            return base.WriteAsync(buffer, cancellationToken);
+        }
+
+        public string ReadUtf8AndClear() {
+            byte[] bytes = ToArray();
+            try {
+                return new UTF8Encoding(false, true).GetString(bytes);
+            } finally {
+                Array.Clear(bytes, 0, bytes.Length);
+                SetLength(0);
+            }
+        }
+
+        protected override void Dispose(bool disposing) {
+            if (disposing && TryGetBuffer(out ArraySegment<byte> buffer) &&
+                    buffer.Array != null) {
+                Array.Clear(buffer.Array, 0, buffer.Array.Length);
+            }
+            base.Dispose(disposing);
         }
     }
 }
