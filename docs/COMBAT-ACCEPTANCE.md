@@ -38,9 +38,15 @@ private key, save, capture, runtime log, or proprietary byte in Git evidence.
 5. Start isolated CombatCanary without stealing foreground focus.
 6. Run one five-minute active, feature-specific Twills scenario. Measure from
    scenario start to finish; do not replace activity with an idle sleep.
-7. Capture bounded action-state/packet evidence. Capture paired five-minute
-   PresentMon traces when frame behavior is relevant. Use RenderDoc only for
-   rendering/HUD work and never during credential entry.
+7. Capture bounded action-state/packet evidence. For an explicit Gameplay
+   evidence run, require the in-process bounded consumer to become ready and a
+   protected no-clobber run manifest to bind the process, client, module,
+   configuration, and evidence identities. After both environments are
+   stopped, require the read-only parser to validate the fixed file, committed
+   prefix, lifecycle, identities, and counters and return only its bounded
+   summary. Capture paired five-minute PresentMon traces when frame behavior is
+   relevant. Use RenderDoc only for rendering/HUD work and never during
+   credential entry.
 8. Save, quit, relog, stop gracefully, and verify character, bank, inventory,
    equipment, techniques, MAG, sidecars, installation state, and rollback
    evidence. Restore and reverify the isolated snapshot.
@@ -132,7 +138,7 @@ Stable's prelaunch backup remained byte-exact to the post-attempt state.
 | CombatCanary layout and ACL isolation | Stable-derived replacement materialized and read back 2026-07-20; rejected stripped package retained only as frozen evidence | Isolation, ACL, and recovery suites |
 | Reproducible canary server | Stable-derived server reached live readiness and Native gameplay; pinned-current build remains source-canary only | Exact Stable artifact binding, deterministic pinned-current build proof, and loopback-only listener evidence |
 | Sealed Twills snapshot/transaction | Materialized and exact `Both` readback passed 2026-07-20 | Strict JSON, exact inventories, independent state suite, and rollback fault matrix |
-| ClientSafety and passive Gameplay ABI | ClientSafety atomic relative-call primitive, Gameplay 0.3.0 exact-59NL `send_60` adapter, and bounded schema-1/schema-2 publication/rollback transaction accepted source-only; complete installed readback passed 2026-07-26; no runtime publication or live event drain | Exact identity/site digest and target gates, fixed x86 ABI, static analysis, hardening, concurrency tests, deterministic build, export readback, transactional publication, and exact rollback |
+| ClientSafety and passive Gameplay ABI | ClientSafety atomic relative-call primitive; Gameplay 0.4.0 exact-59NL `send_60` adapter, permitted in-process bounded consumer, protected run manifest, and stopped-runtime parser are source-ready with the bounded schema-1/schema-2 publication/rollback transaction; complete installed readback passed 2026-07-26; runtime publication, live Twills acceptance, and action-state mapping remain pending | Exact identity/site digest and target gates, fixed x86 ABI, static analysis, hardening, concurrency tests, deterministic build, export readback, bounded evidence readback, transactional publication, and exact rollback |
 | CombatCanary lifecycle/launcher | Live start, observation, graceful stop, restart, and foreground preservation accepted | Environment-specific start/observe/stop and launcher tests |
 | Canonical runtime-marker ACL migration | Not run | Exact known-legacy preview, apply, and recursive ACL readback |
 | Current real Stable restore drill | Accepted 2026-07-20 | Protected schema-v3 receipt, exact process image, 2/2 accounts, three loopback listeners, and clean termination |

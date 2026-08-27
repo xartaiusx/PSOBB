@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-21T23:33:30Z",
+  "generatedAtUtc": "2026-07-26T12:08:25Z",
   "components": [
     {
       "id": "newserv-stable-release",
@@ -803,16 +803,16 @@
       "role": "project-owned-client-gameplay-observation",
       "sourceUrl": "repo:src/PSOBB.Gameplay/build-manifest.json",
       "releaseUrl": null,
-      "version": "0.3.0",
-      "checkedAtUtc": "2026-07-21T23:19:09Z",
-      "retrievedAtUtc": "2026-07-21T23:19:09Z",
-      "size": 8768,
-      "sha256": "e6ff481e8a890be1cae6c46493ddbd1d1848d8fe3d810bf92c2e642ab333cdf7",
+      "version": "0.4.0",
+      "checkedAtUtc": "2026-07-26T12:08:25Z",
+      "retrievedAtUtc": "2026-07-26T12:08:25Z",
+      "size": 10636,
+      "sha256": "854cd7342eda8d4adbff365b3059dba913e257511694f4b46ccfb82b33ce982e",
       "signatureState": "Source-controlled build manifest is hash-locked; the exact x86 observation artifact is unsigned",
-      "scanState": "Project-built source and artifact; two clean builds produced the exact artifact hash; Gameplay CTest 5/5, ClientSafety CTest 3/3, MSVC static analysis, six-export inspection, and x86 ASLR/NX/CFG inspection passed; runtime-load and live observation acceptance remain pending",
+      "scanState": "Project-built source and artifact; two clean builds produced the exact artifact hash; Gameplay CTest 7/7, ClientSafety CTest 3/3, MSVC static analysis, six-export inspection, and x86 ASLR/NX/CFG inspection passed; handle-locked launch identity, explicit native finalization, monotonic duration, and the stopped-runtime verifier are source-ready; runtime publication and live Twills acceptance remain pending",
       "license": "No standalone PSOBB.Gameplay license is present; no redistribution license is asserted",
       "redistribution": "Local project build only; no redistribution rights are asserted for the component or artifact; proprietary client files remain excluded",
-      "compatibility": "Exact 59NL only; passively observes selected native send_60 serialization attempts and remains inert unless its exact adjacent configuration enables both Gameplay and Observation; it does not dispatch actions or synthetic packets",
+      "compatibility": "Exact 59NL only; passively observes selected native send_60 serialization attempts and remains inert unless its exact adjacent configuration enables both Gameplay and Observation; its opt-in bounded evidence consumer writes an exact versioned header and fixed-capacity event records, requires explicit process-bound finalization, and proves five minutes with monotonic time and heartbeat liveness; it does not dispatch actions or synthetic packets",
       "rollbackTarget": "baseline",
       "members": [
         {
@@ -826,8 +826,8 @@
         {
           "path": "PSOBB.Gameplay.asi",
           "buildPath": "src/PSOBB.Gameplay/bin/build-x86/Release/PSOBB.Gameplay.asi",
-          "size": 239104,
-          "sha256": "93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be",
+          "size": 922112,
+          "sha256": "faf10ce76154895d4229a3db17a4bbae5a48bae9971e8a74c6e6706b580dff64",
           "authenticode": "NotSigned"
         }
       ]

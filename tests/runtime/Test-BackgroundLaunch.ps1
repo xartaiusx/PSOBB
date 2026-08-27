@@ -109,7 +109,8 @@ Add-Result `
 
 $detachedClientStart =
     $credentialSource -match 'CreateProcessW\(' -and
-    $credentialSource -match 'false,\s*\r?\n\s*CreateNoWindow,' -and
+    $credentialSource -match
+        'false,\s*\r?\n\s*CreateNoWindow\s*\|\s*CreateUnicodeEnvironment,' -and
     $credentialSource -match 'ShowWindow = preserveForeground \? SwShowNoActivate : SwShowNormal' -and
     $credentialSource -match '\[PSOBBClientProcessLauncher\]::Start\('
 Add-Result `

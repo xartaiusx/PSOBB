@@ -15,6 +15,7 @@ static_assert(
 using ObservationThreadIdProvider = std::uint32_t (*)() noexcept;
 
 struct ObservationRingTestAccess;
+class ObservationEvidenceSession;
 
 class ObservationRing final {
  public:
@@ -55,8 +56,13 @@ class ObservationRing final {
   [[nodiscard]] bool TryRecord(
       ObservationEventV1 event) noexcept;
   [[nodiscard]] std::uint32_t CurrentThreadId() const noexcept;
+  [[nodiscard]] bool TryClaimEvidenceConsumer() noexcept;
+  [[nodiscard]] bool DrainClaimed(
+      ObservationSnapshotV1& snapshot) noexcept;
+  void ReleaseEvidenceConsumer() noexcept;
 
   friend struct ObservationRingTestAccess;
+  friend class ObservationEvidenceSession;
 
   ObservationThreadIdProvider thread_id_provider_;
   std::array<ObservationEventV1, kObservationRingCapacity> events_{};

@@ -38,9 +38,9 @@ $exact = @($base + $profile)
 $authority = Get-PSOBBGameplayObservationAuthority `
     -RepositoryRoot $repositoryRoot
 Add-Result 'tracked gameplay build and loader authorities are exact' (
-    [long]$authority.ModuleSize -eq 239104 -and
+    [long]$authority.ModuleSize -eq 922112 -and
     [string]$authority.ModuleSha256 -ceq
-        '93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be' -and
+        'faf10ce76154895d4229a3db17a4bbae5a48bae9971e8a74c6e6706b580dff64' -and
     [long]$authority.LoaderSize -eq 5413776 -and
     [string]$authority.LoaderSha256 -ceq
         'c7277e832f6f07af64903a99ecebab2936260cbf55eda70787c5d7b2d5b9fe60')

@@ -30,10 +30,14 @@ Current accepted facts:
 - The required post-canary five-minute canonical Stable smoke remains pending.
   The 2026-07-21 Stable attempt ran for five minutes but had no client session,
   so elapsed process time was not accepted as gameplay evidence.
-- `PSOBB.Gameplay` 0.3.0 now has a source-ready, fixed-capacity observation
-  core and exact-59NL passive `send_60` adapter. Runtime publication, a
-  permitted in-process evidence consumer, live event acceptance, and all
-  combat behavior remain pending.
+- `PSOBB.Gameplay` 0.4.0 now has a source-ready, fixed-capacity observation
+  core, exact-59NL passive `send_60` adapter, and permitted in-process bounded
+  evidence consumer. An explicit evidence launch waits for the exact file and
+  process identities, then writes a protected no-clobber run manifest. The
+  stopped-runtime parser validates the fixed file, committed prefix, lifecycle,
+  identities, and counters and returns only a bounded summary. Runtime
+  publication, live Twills acceptance, action-state mapping, and all combat
+  behavior remain pending.
 - CombatCanary client binding schema 2 is source-ready and closes over exactly
   the approved x86 loader, Gameplay observation module, and canonical
   observation configuration. Its stopped-runtime publisher and exact rollback
@@ -138,10 +142,11 @@ action-disabled state, and while an item or technique dispatches.
 
 ### Phase 3: PSO2-like control with native actions
 
-1. Observation-only action probe. The allocation-free ring and exact-59NL
-   passive adapter and stopped-runtime publication transaction passed their
-   source gates; a permitted in-process evidence consumer, isolated runtime
-   publication, and live acceptance remain pending.
+1. Observation-only action probe. The allocation-free ring, exact-59NL passive
+   adapter, permitted in-process bounded consumer, protected run manifest,
+   stopped-runtime parser, and publication transaction are source-ready.
+   Isolated runtime publication, live Twills acceptance, and exact action-state
+   mapping remain pending.
 2. Held Normal three-hit native combo.
 3. Held Heavy combo.
 4. Manual mixed-combo override.

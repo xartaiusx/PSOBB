@@ -52,11 +52,26 @@ add_executable(
   observation_ring_tests.cpp)
 
 add_executable(
+  PSOBB.Gameplay.ObservationEvidenceAccumulatorTests
+  observation_evidence_accumulator_tests.cpp)
+
+add_executable(
+  PSOBB.Gameplay.ObservationEvidenceSessionTests
+  observation_evidence_session_tests.cpp
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src/observation_evidence_session.cpp")
+
+add_executable(
   PSOBB.Gameplay.Send60ProbeTests
   send60_probe_tests.cpp)
 
 target_compile_features(
   PSOBB.Gameplay.ObservationRingTests PRIVATE cxx_std_20)
+
+target_compile_features(
+  PSOBB.Gameplay.ObservationEvidenceAccumulatorTests PRIVATE cxx_std_20)
+
+target_compile_features(
+  PSOBB.Gameplay.ObservationEvidenceSessionTests PRIVATE cxx_std_20)
 
 target_compile_features(
   PSOBB.Gameplay.Send60ProbeTests PRIVATE cxx_std_20)
@@ -66,6 +81,16 @@ target_include_directories(
   "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
 
 target_include_directories(
+  PSOBB.Gameplay.ObservationEvidenceAccumulatorTests PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
+
+target_include_directories(
+  PSOBB.Gameplay.ObservationEvidenceSessionTests PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/include"
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src"
+  "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.ClientSafety/include")
+
+target_include_directories(
   PSOBB.Gameplay.Send60ProbeTests PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/../../src/PSOBB.Gameplay/src")
 
@@ -73,9 +98,27 @@ target_link_libraries(
   PSOBB.Gameplay.ObservationRingTests PRIVATE psobb_gameplay_core)
 
 target_link_libraries(
+  PSOBB.Gameplay.ObservationEvidenceAccumulatorTests PRIVATE
+  psobb_gameplay_core)
+
+target_link_libraries(
+  PSOBB.Gameplay.ObservationEvidenceSessionTests PRIVATE
+  psobb_gameplay_core)
+
+target_link_libraries(
   PSOBB.Gameplay.Send60ProbeTests PRIVATE psobb_gameplay_core)
 
 set_target_properties(PSOBB.Gameplay.ObservationRingTests PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+set_target_properties(
+  PSOBB.Gameplay.ObservationEvidenceAccumulatorTests PROPERTIES
+  CXX_EXTENSIONS OFF
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+set_target_properties(
+  PSOBB.Gameplay.ObservationEvidenceSessionTests PROPERTIES
   CXX_EXTENSIONS OFF
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -85,6 +128,26 @@ set_target_properties(PSOBB.Gameplay.Send60ProbeTests PROPERTIES
 
 if(MSVC)
   target_compile_options(PSOBB.Gameplay.ObservationRingTests PRIVATE
+    /W4
+    /WX
+    /permissive-
+    /sdl
+    /guard:cf
+    /utf-8
+    /Zc:__cplusplus)
+
+  target_compile_options(
+    PSOBB.Gameplay.ObservationEvidenceAccumulatorTests PRIVATE
+    /W4
+    /WX
+    /permissive-
+    /sdl
+    /guard:cf
+    /utf-8
+    /Zc:__cplusplus)
+
+  target_compile_options(
+    PSOBB.Gameplay.ObservationEvidenceSessionTests PRIVATE
     /W4
     /WX
     /permissive-
@@ -106,6 +169,14 @@ endif()
 add_test(
   NAME PSOBB.Gameplay.ObservationRing
   COMMAND PSOBB.Gameplay.ObservationRingTests)
+
+add_test(
+  NAME PSOBB.Gameplay.ObservationEvidenceAccumulator
+  COMMAND PSOBB.Gameplay.ObservationEvidenceAccumulatorTests)
+
+add_test(
+  NAME PSOBB.Gameplay.ObservationEvidenceSession
+  COMMAND PSOBB.Gameplay.ObservationEvidenceSessionTests)
 
 add_test(
   NAME PSOBB.Gameplay.Send60Probe

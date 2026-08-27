@@ -1,4 +1,5 @@
 #include "gameplay_internal.h"
+#include "observation_evidence_session.h"
 #include "observation_ring.h"
 #include "send60_probe.h"
 
@@ -30,6 +31,8 @@ namespace {
 
 constexpr wchar_t kIniSection[] = L"Gameplay";
 constexpr wchar_t kIniFileName[] = L"PSOBB.Gameplay.ini";
+constexpr wchar_t kObservationEvidenceRunIdEnvironment[] =
+    L"PSOBB_GAMEPLAY_OBSERVATION_RUN_ID";
 constexpr std::uint32_t kObservationSiteRva = 0x003D3F9CU;
 constexpr std::uint32_t kObservationSiteSize = 11U;
 constexpr wchar_t kObservationSiteSha256[] =
@@ -62,6 +65,7 @@ std::atomic_bool g_observation_publication_enabled{false};
 std::atomic_uint32_t g_active_observation_callbacks{0U};
 std::atomic_flag g_rollback_active = ATOMIC_FLAG_INIT;
 ObservationRing g_observations{CurrentGameplayThreadId};
+ObservationEvidenceSession g_observation_evidence{};
 SRWLOCK g_status_lock = SRWLOCK_INIT;
 std::array<wchar_t, 256> g_last_reason{};
 
@@ -102,6 +106,14 @@ void SetLastReason(const std::wstring_view message) noexcept {
   OutputDebugStringW(L"[PSOBB.Gameplay] ");
   OutputDebugStringW(local.data());
   OutputDebugStringW(L"\n");
+}
+
+void HandleObservationEvidenceFailure(
+    const ObservationEvidenceFailure) noexcept {
+  g_observation_publication_enabled.store(false, std::memory_order_release);
+  g_accepted_feature_bits.store(feature_none, std::memory_order_release);
+  SetLastReason(L"Bounded observation evidence worker failed closed");
+  g_state.store(RuntimeState::rejected, std::memory_order_release);
 }
 
 [[nodiscard]] std::wstring WindowsError(
@@ -186,6 +198,56 @@ void SetLastReason(const std::wstring_view message) noexcept {
   }
   SetLastReason(L"Observation must be exactly 0 or 1");
   return false;
+}
+
+[[nodiscard]] bool ReadObservationEvidenceRequest(
+    bool& requested,
+    std::wstring& run_id) {
+  requested = false;
+  run_id.clear();
+  std::array<wchar_t, 64U> value{};
+  SetLastError(ERROR_SUCCESS);
+  const DWORD length = GetEnvironmentVariableW(
+      kObservationEvidenceRunIdEnvironment,
+      value.data(),
+      static_cast<DWORD>(value.size()));
+  if (length == 0U) {
+    const DWORD error = GetLastError();
+    if (error == ERROR_SUCCESS || error == ERROR_ENVVAR_NOT_FOUND) {
+      return true;
+    }
+    SetLastReason(WindowsError(L"GetEnvironmentVariableW", error));
+    return false;
+  }
+  if (length >= value.size()) {
+    SetLastReason(L"Observation evidence run ID exceeds its fixed bound");
+    return false;
+  }
+  run_id.assign(value.data(), length);
+  if (!ObservationEvidenceSession::IsValidRunId(run_id)) {
+    SetLastReason(L"Observation evidence run ID is not canonical");
+    return false;
+  }
+  requested = true;
+  return true;
+}
+
+[[nodiscard]] bool GetGameplayModulePath(std::wstring& module_path) {
+  if (g_module == nullptr) {
+    SetLastReason(L"Gameplay module handle is unavailable");
+    return false;
+  }
+  std::vector<wchar_t> value(32'768U);
+  const DWORD length = GetModuleFileNameW(
+      g_module,
+      value.data(),
+      static_cast<DWORD>(value.size()));
+  if (length == 0U || length >= value.size()) {
+    SetLastReason(WindowsError(L"GetModuleFileNameW", GetLastError()));
+    return false;
+  }
+  module_path.assign(value.data(), length);
+  return true;
 }
 
 [[nodiscard]] bool VerifyExactClient() {
@@ -303,6 +365,75 @@ void SetRelativeCallFailure(
   SetLastReason(message.data());
 }
 
+void FailClosedEvidenceInitialization(
+    const std::wstring_view evidence_failure) {
+  g_observation_publication_enabled.store(false, std::memory_order_release);
+  g_accepted_feature_bits.store(feature_none, std::memory_order_release);
+
+  const psobb::client_safety::RelativeCallHookResult restored =
+      psobb::client_safety::RollbackRelativeCallHook(
+          kObservationHookOwner);
+  if (restored.passed()) {
+    g_verification_flags.fetch_and(
+        ~static_cast<std::uint32_t>(
+            verification_observation_hook_installed),
+        std::memory_order_release);
+  } else {
+    SetRelativeCallFailure(
+        L"send_60 observation hook rollback after evidence failure",
+        restored);
+  }
+
+  std::wstring stop_failure;
+  const bool stopped =
+      g_observation_evidence.StopAndJoin(stop_failure);
+  if (!stopped && restored.passed()) {
+    if (!stop_failure.empty()) {
+      SetLastReason(stop_failure);
+    }
+  } else if (restored.passed() && !stop_failure.empty()) {
+    SetLastReason(stop_failure);
+  } else if (restored.passed() && !evidence_failure.empty()) {
+    SetLastReason(evidence_failure);
+  }
+  g_verification_flags.fetch_and(
+      ~static_cast<std::uint32_t>(
+          verification_observation_evidence_ready),
+      std::memory_order_release);
+  g_state.store(RuntimeState::rejected, std::memory_order_release);
+}
+
+void FailClosedAfterInitializationException() noexcept {
+  g_observation_publication_enabled.store(false, std::memory_order_release);
+  g_accepted_feature_bits.store(feature_none, std::memory_order_release);
+
+  const std::uint32_t flags =
+      g_verification_flags.load(std::memory_order_acquire);
+  if ((flags & verification_observation_hook_installed) != 0U) {
+    const psobb::client_safety::RelativeCallHookResult restored =
+        psobb::client_safety::RollbackRelativeCallHook(
+            kObservationHookOwner);
+    if (restored.passed()) {
+      g_verification_flags.fetch_and(
+          ~static_cast<std::uint32_t>(
+              verification_observation_hook_installed),
+          std::memory_order_release);
+    }
+  }
+
+  std::wstring ignored;
+  const bool stopped = g_observation_evidence.StopAndJoin(ignored);
+  g_verification_flags.fetch_and(
+      ~static_cast<std::uint32_t>(
+          verification_observation_evidence_ready),
+      std::memory_order_release);
+  SetLastReason(
+      stopped
+          ? L"Unhandled exception during gameplay initialization"
+          : L"Gameplay initialization exception cleanup is incomplete");
+  g_state.store(RuntimeState::rejected, std::memory_order_release);
+}
+
 using OriginalCopyFunction =
     void*(__cdecl*)(void*, const void*, std::size_t);
 
@@ -348,6 +479,27 @@ void* CallExactOriginalCopy(
     return false;
   }
 
+  bool evidence_requested = false;
+  std::wstring evidence_run_id;
+  if (!ReadObservationEvidenceRequest(
+          evidence_requested, evidence_run_id)) {
+    g_state.store(RuntimeState::rejected, std::memory_order_release);
+    return false;
+  }
+  if (evidence_requested) {
+    std::wstring module_path;
+    std::wstring evidence_failure;
+    if (!GetGameplayModulePath(module_path) ||
+        !g_observation_evidence.Prepare(
+            module_path, evidence_run_id, evidence_failure)) {
+      if (!evidence_failure.empty()) {
+        SetLastReason(evidence_failure);
+      }
+      g_state.store(RuntimeState::rejected, std::memory_order_release);
+      return false;
+    }
+  }
+
   const psobb::client_safety::RelativeCallHookResult installed =
       psobb::client_safety::InstallRelativeCallHook(
           kObservationHookOwner,
@@ -358,6 +510,7 @@ void* CallExactOriginalCopy(
            reinterpret_cast<std::uintptr_t>(
                &PSOBBGameplay_ObserveSend60Copy)});
   if (!installed.passed()) {
+    g_observation_evidence.CancelPrepared();
     SetRelativeCallFailure(L"send_60 observation hook installation", installed);
     g_state.store(RuntimeState::rejected, std::memory_order_release);
     return false;
@@ -366,12 +519,47 @@ void* CallExactOriginalCopy(
   g_verification_flags.fetch_or(
       verification_observation_hook_installed,
       std::memory_order_release);
+  if (evidence_requested) {
+    std::wstring evidence_failure;
+    if (!g_observation_evidence.Start(
+            g_observations,
+            HandleObservationEvidenceFailure,
+            evidence_failure)) {
+      FailClosedEvidenceInitialization(evidence_failure);
+      return false;
+    }
+    g_verification_flags.fetch_or(
+        verification_observation_evidence_ready,
+        std::memory_order_release);
+  }
   g_accepted_feature_bits.store(
-      feature_observation, std::memory_order_release);
+      feature_observation |
+          (evidence_requested ? feature_diagnostics : feature_none),
+      std::memory_order_release);
   g_observation_publication_enabled.store(true, std::memory_order_release);
-  SetLastReason(
-      L"Exact-client send_60 observation is active");
-  g_state.store(RuntimeState::observation_ready, std::memory_order_release);
+  SetLastReason(evidence_requested
+                    ? L"Exact-client send_60 observation and bounded evidence are active"
+                    : L"Exact-client send_60 observation is active");
+  if (evidence_requested) {
+    std::wstring evidence_failure;
+    if (!g_observation_evidence.Activate(evidence_failure)) {
+      FailClosedEvidenceInitialization(evidence_failure);
+      return false;
+    }
+    RuntimeState expected = RuntimeState::initializing;
+    if (!g_state.compare_exchange_strong(
+            expected,
+            RuntimeState::observation_ready,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      FailClosedEvidenceInitialization(
+          L"Observation evidence failed while activation was committing");
+      return false;
+    }
+  } else {
+    g_state.store(
+        RuntimeState::observation_ready, std::memory_order_release);
+  }
   return true;
 }
 
@@ -383,8 +571,7 @@ BOOL CALLBACK InitializeOnceCallback(
   try {
     initialized = InitializeImplementation();
   } catch (...) {
-    SetLastReason(L"Unhandled exception during gameplay initialization");
-    g_state.store(RuntimeState::rejected, std::memory_order_release);
+    FailClosedAfterInitializationException();
   }
   g_initialize_result.store(initialized, std::memory_order_release);
   return TRUE;
@@ -522,10 +709,33 @@ BOOL WINAPI PSOBBGameplay_Rollback() noexcept {
         RuntimeState::exact_client_ready, std::memory_order_release);
     return FALSE;
   }
+  std::wstring evidence_failure;
+  if (!g_observation_evidence.StopAndJoin(evidence_failure)) {
+    if (!evidence_failure.empty()) {
+      SetLastReason(evidence_failure);
+    }
+    g_state.store(RuntimeState::rejected, std::memory_order_release);
+    return FALSE;
+  }
+  const ObservationEvidenceFailure terminal_evidence_failure =
+      g_observation_evidence.worker_failure();
+  g_verification_flags.fetch_and(
+      ~static_cast<std::uint32_t>(
+          verification_observation_evidence_ready),
+      std::memory_order_release);
   if (!g_observations.TryResetQuiescent()) {
     SetLastReason(L"Observation drain is active; rollback must be retried");
     g_state.store(
         RuntimeState::exact_client_ready, std::memory_order_release);
+    return FALSE;
+  }
+  if (terminal_evidence_failure != ObservationEvidenceFailure::none) {
+    if (!evidence_failure.empty()) {
+      SetLastReason(evidence_failure);
+    } else {
+      SetLastReason(L"Observation evidence worker failed before rollback");
+    }
+    g_state.store(RuntimeState::rejected, std::memory_order_release);
     return FALSE;
   }
   SetLastReason(L"send_60 observation rollback is complete");

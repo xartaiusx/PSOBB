@@ -1048,7 +1048,7 @@ function Get-PSOBBGameplayObservationAuthority {
     if ($manifest.schemaVersion -isnot [long] -or
         [long]$manifest.schemaVersion -ne 1 -or
         [string]$manifest.componentId -cne 'project-owned-psobb-gameplay' -or
-        [string]$manifest.version -cne '0.3.0' -or
+        [string]$manifest.version -cne '0.4.0' -or
         [string]$manifest.baseClient.sha256 -cne
             'dd3d475916038e8e8e3f230cfad6d8d93a2976b1b42af0014413ff3b737c5535' -or
         [long]$manifest.baseClient.size -ne 6971904 -or

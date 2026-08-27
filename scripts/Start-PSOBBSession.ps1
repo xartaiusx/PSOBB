@@ -9,7 +9,8 @@ param(
     [switch]$PreserveForeground,
     [string]$RuntimeRoot,
     [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 45,
-    [ValidateRange(5, 300)][int]$VerificationTimeoutSeconds = 120
+    [ValidateRange(5, 300)][int]$VerificationTimeoutSeconds = 120,
+    [Parameter(DontShow)][switch]$GameplayObservationEvidence
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +41,10 @@ $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
     -Environment $ServerEnvironment
+if ($GameplayObservationEvidence -and
+    $serverEnvironmentName -cne 'CombatCanary') {
+    throw 'Gameplay observation evidence is available only for CombatCanary'
+}
 $serverLayout = Get-PSOBBServerEnvironmentLayout `
     -Layout $layout -Environment $serverEnvironmentName
 $resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
@@ -86,6 +91,7 @@ try {
         -ServerEnvironment $serverEnvironmentName `
         -WindowMode $resolvedWindowMode `
         -PreserveForeground:$PreserveForeground `
+        -GameplayObservationEvidence:$GameplayObservationEvidence `
         -RuntimeRoot $layout.Root `
         -ClientOperationLockHeld
 
@@ -105,6 +111,10 @@ try {
         ClientStartupElapsedMilliseconds = $clientResult.StartupElapsedMilliseconds
         ClientStartupReceiptPath = $clientResult.StartupReceiptPath
         ClientStartupReceiptSha256 = $clientResult.StartupReceiptSha256
+        GameplayObservationRunId = $clientResult.GameplayObservationRunId
+        GameplayObservationEvidencePath = $clientResult.GameplayObservationEvidencePath
+        GameplayObservationManifestPath = $clientResult.GameplayObservationManifestPath
+        GameplayObservationManifestSha256 = $clientResult.GameplayObservationManifestSha256
         WindowMode = $clientResult.WindowMode
         Borderless = $clientResult.Borderless
         WindowWidth = $clientResult.WindowWidth

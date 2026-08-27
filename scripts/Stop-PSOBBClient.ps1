@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'PSOBB.Common.ps1')
+. (Join-Path $PSScriptRoot 'Set-PSOBBAdminCredential.ps1')
 
 function Get-RevalidatedPSOBBClientProcess {
     [CmdletBinding()]
@@ -81,6 +81,8 @@ try {
             Channel = $resolvedChannel
             GracefulCount = 0
             ForcedCount = 0
+            GameplayObservationFinalizedCount = 0
+            GameplayObservationFinalizationFailures = @()
         }
     }
     if ($allNamedRecords.Count -ne $records.Count -or
@@ -92,13 +94,28 @@ try {
         throw 'The global named-client census does not exactly match the selected approved client inventory'
     }
 
+    Initialize-PSOBBClientProcessLauncherType
     $closeFailures = [System.Collections.Generic.List[string]]::new()
+    $observationFinalizationFailures =
+        [System.Collections.Generic.List[string]]::new()
+    $observationFinalizedCount = 0
     foreach ($record in $records) {
         $process = Get-RevalidatedPSOBBClientProcess -Record $record
         if (-not $process) {
             continue
         }
         try {
+            try {
+                if ([PSOBBClientProcessLauncher]::FinalizeObservationEvidence(
+                        [uint32]$record.ProcessId,
+                        [uint64]$record.StartTimeFileTimeUtc,
+                        5000U)) {
+                    $observationFinalizedCount++
+                }
+            } catch {
+                $observationFinalizationFailures.Add(
+                    "PID $($record.ProcessId): $($_.Exception.Message)")
+            }
             if (-not $process.CloseMainWindow()) {
                 $process.Refresh()
                 if (-not $process.HasExited) {
@@ -160,6 +177,10 @@ try {
     }
     $allPids = @($records.ProcessId)
     $gracefulPids = @($allPids | Where-Object { -not $forcedPids.Contains([int]$_) })
+    if ($observationFinalizationFailures.Count -gt 0) {
+        Write-Warning ('The client stopped, but Gameplay observation evidence ' +
+            "did not finalize cleanly: $($observationFinalizationFailures -join '; ')")
+    }
     [pscustomobject]@{
         Stopped = $true
         ServerEnvironment = $serverEnvironmentName
@@ -169,6 +190,9 @@ try {
         GracefulCount = $gracefulPids.Count
         ForcedCount = $forcedPids.Count
         ForcedPids = @($forcedPids)
+        GameplayObservationFinalizedCount = $observationFinalizedCount
+        GameplayObservationFinalizationFailures =
+            @($observationFinalizationFailures)
     }
 } finally {
     if ($clientOperationMutex) {

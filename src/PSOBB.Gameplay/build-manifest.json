@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "componentId": "project-owned-psobb-gameplay",
-  "version": "0.3.0",
-  "builtAtUtc": "2026-07-21T23:19:09Z",
+  "version": "0.4.0",
+  "builtAtUtc": "2026-07-26T12:07:42Z",
   "baseClient": {
     "relativePath": "Psobb.exe",
     "size": 6971904,
@@ -40,8 +40,8 @@
   "sourceInputs": [
     {
       "path": "src/PSOBB.Gameplay/CMakeLists.txt",
-      "size": 2186,
-      "sha256": "0d7949825b0727bbc4bd72b3abaf8d46b6b9a0e8cb600a06b045bf083a54450a"
+      "size": 2268,
+      "sha256": "3862253fed182aa61860eb7f36f387f9a282caabace0d789189983a11b17123c"
     },
     {
       "path": "src/PSOBB.Gameplay/CMakePresets.json",
@@ -50,13 +50,18 @@
     },
     {
       "path": "src/PSOBB.Gameplay/include/psobb_gameplay/api.h",
-      "size": 3889,
-      "sha256": "931dab80100eac9d765b84508e821a4f7e504c5b12e9ee7935724622e057f313"
+      "size": 3945,
+      "sha256": "f8ebe44b600756678e45aac8daf060e538294ea906701952e9f970dba112bb5a"
     },
     {
       "path": "src/PSOBB.Gameplay/include/psobb_gameplay/observation.h",
       "size": 2889,
       "sha256": "f726256b07281b32f66165d50fe7d6f776babd60eca312a52b28e6fb0f36f957"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/include/psobb_gameplay/observation_evidence.h",
+      "size": 5990,
+      "sha256": "f644e482f2359b89792e4f51209532d460c8f969e6974756a102c02b0a8d8b88"
     },
     {
       "path": "src/PSOBB.Gameplay/PSOBB.Gameplay.ini.example",
@@ -65,8 +70,8 @@
     },
     {
       "path": "src/PSOBB.Gameplay/README.md",
-      "size": 3950,
-      "sha256": "09dba56bbc6e8745ed1316c814c173d284c89bad07a95786009a182ab1d862f8"
+      "size": 6854,
+      "sha256": "9aaa6732ed8d6a295c348bc34123a08b6da1cb141910c640f1a4bf912ba7e042"
     },
     {
       "path": "src/PSOBB.Gameplay/src/dllmain.cpp",
@@ -85,18 +90,38 @@
     },
     {
       "path": "src/PSOBB.Gameplay/src/gameplay.cpp",
-      "size": 17132,
-      "sha256": "959ba8c830cc0678ba6189c1480163f911daa3a58a4d55c7ae8025ee7d39ad17"
+      "size": 24529,
+      "sha256": "69cf6365bc17f3fc5d149a2c7dba78150d2f21c2d922fc6b6cbbbe3f2aeefcdb"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_evidence_accumulator.cpp",
+      "size": 6945,
+      "sha256": "472853371f521ed0120e62ac08578186db03ecca134f2446f8789e889b14c11e"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_evidence_accumulator.h",
+      "size": 2757,
+      "sha256": "bbfcc269ca58b9c40abc0844fb0ea0056ab9c61240504d643ff004cd85f44ede"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_evidence_session.cpp",
+      "size": 30857,
+      "sha256": "6fd7e967e170bc667c0047a1f72585249f8fcd15f1ff61764bad8a645d367b37"
+    },
+    {
+      "path": "src/PSOBB.Gameplay/src/observation_evidence_session.h",
+      "size": 5868,
+      "sha256": "64f8ecfef62236b862c5a7cb1fd16e03abc984542bc799a0f2d69b40eaad5818"
     },
     {
       "path": "src/PSOBB.Gameplay/src/observation_ring.cpp",
-      "size": 5999,
-      "sha256": "28d379dcebc3a83de3a7405b33171fc1b91f1fc9833bf9e619cd0e7c4fa69df6"
+      "size": 6338,
+      "sha256": "3a8dcfb7b681dd521b6c1fe0eab2dc77259661161902fcd26e56f93cd5a71f2b"
     },
     {
       "path": "src/PSOBB.Gameplay/src/observation_ring.h",
-      "size": 2423,
-      "sha256": "b9d03439a1b9ddcd28f4583534731ebfe6be14f02a107ab92da7a3662a507eb3"
+      "size": 2685,
+      "sha256": "8564484df2d076e33a181ab0ff0b7b0b4a4b1a5afa467842d1c3fb559b2fb9fe"
     },
     {
       "path": "src/PSOBB.Gameplay/src/send60_probe.cpp",
@@ -115,8 +140,18 @@
     },
     {
       "path": "tests/PSOBB.Gameplay/CMakeLists.txt",
-      "size": 2817,
-      "sha256": "32b9381cd3ec82ae983c0f4c2b1d6d6d2e17dfb57bf4740cce9b47eff207fe03"
+      "size": 4903,
+      "sha256": "b2ba08a2e70237c418573e7136569f5c2db25bbc96a031078d85924b0e835303"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/observation_evidence_accumulator_tests.cpp",
+      "size": 20254,
+      "sha256": "061d92b2768cfb5205037465c7302f62df0a318cce02811cebc9f67834e8b0b4"
+    },
+    {
+      "path": "tests/PSOBB.Gameplay/observation_evidence_session_tests.cpp",
+      "size": 18577,
+      "sha256": "3498e4296253fce3ee8f5c0d5dc10696862f8ad57909decd7784923276f6e55f"
     },
     {
       "path": "tests/PSOBB.Gameplay/observation_ring_tests.cpp",
@@ -214,17 +249,17 @@
       "relativeBuildPath": "src/PSOBB.Gameplay/bin/build-x86/Release/PSOBB.Gameplay.asi",
       "runtimeName": "PSOBB.Gameplay.asi",
       "machine": "x86",
-      "size": 239104,
-      "sha256": "93288dcf8d2a70f72f27be9010f193808eaaa27f6b837517074dbee23859f9be",
+      "size": 922112,
+      "sha256": "faf10ce76154895d4229a3db17a4bbae5a48bae9971e8a74c6e6706b580dff64",
       "authenticode": "NotSigned"
     }
   ],
   "verification": {
     "cleanRebuildHashesMatched": true,
-    "gameplayCtest": "5/5 passed",
+    "gameplayCtest": "7/7 passed",
     "clientSafetyCtest": "3/3 passed",
     "staticAnalysis": "MSVC native static analysis passed with zero diagnostics",
-    "exactClientContract": "Exact 59NL executable SHA-256 and send_60 callsite bytes are pinned; live host proof remains pending",
+    "exactClientContract": "Exact 59NL executable SHA-256 and send_60 callsite bytes are pinned; the bounded worker remains opt-in, launch files are handle-locked through readiness, and live host proof is pending",
     "exports": [
       "InitializeASI",
       "PSOBBGameplay_DrainObservations",
@@ -241,10 +276,11 @@
   },
   "license": "No standalone PSOBB.Gameplay license is present; this manifest asserts no redistribution license.",
   "redistribution": "Local project build only; no redistribution rights are asserted for the component or artifact. The proprietary base client is excluded.",
-  "acceptance": "Source/build/test authority only. CombatCanary publication, runtime-load proof, live observation, rollback, and Stable promotion remain pending.",
+  "acceptance": "Source/build/test authority only. The bounded in-process consumer, handle-locked launcher readiness gate, process-bound native finalization, protected run manifest, and stopped-runtime verifier are source-ready; CombatCanary publication, runtime-load proof, live observation, and Stable promotion remain pending.",
   "knownLimitations": [
     "Observation records prove selected native send_60 serialization attempts, not server receipt, attack type, damage, or legal combo timing.",
     "No action dispatch, held combo, input buffer, or hotbar behavior is implemented.",
-    "CombatCanary publication and live Twills observation acceptance remain pending."
+    "The durable evidence format accepts only an explicitly completed lifecycle with exact client and module identities, a lossless committed prefix, zero terminal failure, at least 300000 monotonic milliseconds, and at least 300 heartbeats.",
+    "CombatCanary publication, runtime-load proof, and live Twills observation acceptance remain pending."
   ]
 }

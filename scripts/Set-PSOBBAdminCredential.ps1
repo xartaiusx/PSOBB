@@ -666,9 +666,71 @@ function Initialize-PSOBBClientProcessLauncherType {
     }
     Add-Type -TypeDefinition @'
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+
+public sealed class PSOBBPathLease : IDisposable
+{
+    internal IntPtr Handle { get; private set; }
+    public string FullPath { get; private set; }
+    public bool IsDirectory { get; private set; }
+    public uint VolumeSerialNumber { get; private set; }
+    public ulong FileId { get; private set; }
+    public long Length { get; private set; }
+
+    internal PSOBBPathLease(
+        IntPtr handle,
+        string fullPath,
+        bool isDirectory,
+        uint volumeSerialNumber,
+        ulong fileId,
+        long length)
+    {
+        Handle = handle;
+        FullPath = fullPath;
+        IsDirectory = isDirectory;
+        VolumeSerialNumber = volumeSerialNumber;
+        FileId = fileId;
+        Length = length;
+    }
+
+    public byte[] ReadPrefix(int byteCount)
+    {
+        return PSOBBClientProcessLauncher.ReadPrefix(this, byteCount);
+    }
+
+    public string ComputeSha256()
+    {
+        return PSOBBClientProcessLauncher.ComputeSha256(this);
+    }
+
+    public void Dispose()
+    {
+        IntPtr handle = Handle;
+        Handle = IntPtr.Zero;
+        if (handle != IntPtr.Zero && handle != new IntPtr(-1))
+        {
+            PSOBBClientProcessLauncher.CloseNativeHandle(handle);
+        }
+    }
+
+    internal IntPtr DangerousHandle
+    {
+        get
+        {
+            if (Handle == IntPtr.Zero || Handle == new IntPtr(-1))
+            {
+                throw new ObjectDisposedException("PSOBBPathLease");
+            }
+            return Handle;
+        }
+    }
+}
 
 public static class PSOBBClientProcessLauncher
 {
@@ -704,6 +766,28 @@ public static class PSOBBClientProcessLauncher
         public uint ThreadId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileDispositionInformation
+    {
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool DeleteFile;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
         string applicationName,
@@ -720,12 +804,480 @@ public static class PSOBBClientProcessLauncher
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandle(
+        IntPtr file,
+        out ByHandleFileInformation information);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        IntPtr file,
+        StringBuilder path,
+        uint pathLength,
+        uint flags);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateDirectoryW(
+        string path,
+        IntPtr securityAttributes);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFileInformationByHandle(
+        IntPtr file,
+        int informationClass,
+        ref FileDispositionInformation information,
+        uint bufferSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFilePointerEx(
+        IntPtr file,
+        long distance,
+        out long newPosition,
+        uint moveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadFile(
+        IntPtr file,
+        byte[] buffer,
+        uint bytesToRead,
+        out uint bytesRead,
+        IntPtr overlapped);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenEventW(
+        uint desiredAccess,
+        bool inheritHandle,
+        string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetEvent(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(
+        IntPtr handle,
+        uint milliseconds);
+
     private const uint CreateNoWindow = 0x08000000;
+    private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint StartfUseShowWindow = 0x00000001;
     private const ushort SwShowNormal = 1;
     private const ushort SwShowNoActivate = 4;
+    private const uint GenericRead = 0x80000000;
+    private const uint DeleteAccess = 0x00010000;
+    private const uint FileReadAttributes = 0x00000080;
+    private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
+    private const uint EventModifyState = 0x00000002;
+    private const uint Synchronize = 0x00100000;
+    private const uint OpenExisting = 3;
+    private const uint FileAttributeDirectory = 0x00000010;
+    private const uint FileAttributeReparsePoint = 0x00000400;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileFlagSequentialScan = 0x08000000;
+    private const uint FileNameNormalized = 0x0;
+    private const uint VolumeNameDos = 0x0;
+    private const int FileDispositionInfo = 4;
+    private const uint FileBegin = 0;
+    private const uint WaitObject0 = 0x00000000;
+    private const uint WaitTimeout = 0x00000102;
+    private const string ObservationRunIdName =
+        "PSOBB_GAMEPLAY_OBSERVATION_RUN_ID";
 
-    public static int Start(string executable, string workingDirectory, bool preserveForeground)
+    private static string NormalizeLocalPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("A native path is missing or invalid.");
+        }
+        string fullPath = Path.GetFullPath(path);
+        if (fullPath.StartsWith("\\\\", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("PSOBB native paths must be on a local Windows volume.");
+        }
+        return fullPath.Length > 3 ? fullPath.TrimEnd('\\') : fullPath;
+    }
+
+    private static string ExtendedPath(string path)
+    {
+        return path.StartsWith("\\\\?\\", StringComparison.Ordinal)
+            ? path
+            : "\\\\?\\" + path;
+    }
+
+    private static PSOBBPathLease OpenExactPath(
+        string path,
+        bool directory,
+        long expectedLength,
+        bool allowSharedWrite)
+    {
+        string fullPath = NormalizeLocalPath(path);
+        uint access = directory ? FileReadAttributes | DeleteAccess : GenericRead;
+        uint flags = FileFlagOpenReparsePoint |
+            (directory ? FileFlagBackupSemantics : FileFlagSequentialScan);
+        IntPtr handle = CreateFileW(
+            fullPath,
+            access,
+            FileShareRead | (allowSharedWrite ? FileShareWrite : 0),
+            IntPtr.Zero,
+            OpenExisting,
+            flags,
+            IntPtr.Zero);
+        if (handle == new IntPtr(-1))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            ByHandleFileInformation information;
+            if (!GetFileInformationByHandle(handle, out information))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            bool actualDirectory =
+                (information.FileAttributes & FileAttributeDirectory) != 0;
+            if (actualDirectory != directory ||
+                (information.FileAttributes & FileAttributeReparsePoint) != 0 ||
+                (!directory && information.NumberOfLinks != 1))
+            {
+                throw new IOException("The native path identity is not exact.");
+            }
+
+            StringBuilder finalPath = new StringBuilder(32768);
+            uint finalLength = GetFinalPathNameByHandleW(
+                handle,
+                finalPath,
+                unchecked((uint)finalPath.Capacity),
+                FileNameNormalized | VolumeNameDos);
+            if (finalLength == 0 || finalLength >= finalPath.Capacity)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            if (!string.Equals(
+                finalPath.ToString(),
+                ExtendedPath(fullPath),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("The native path escaped its exact canonical location.");
+            }
+
+            long length = unchecked((long)(
+                ((ulong)information.FileSizeHigh << 32) |
+                information.FileSizeLow));
+            if (!directory && expectedLength >= 0 && length != expectedLength)
+            {
+                throw new IOException("The native file length is not exact.");
+            }
+            ulong fileId = ((ulong)information.FileIndexHigh << 32) |
+                information.FileIndexLow;
+            PSOBBPathLease lease = new PSOBBPathLease(
+                handle,
+                fullPath,
+                directory,
+                information.VolumeSerialNumber,
+                fileId,
+                length);
+            handle = IntPtr.Zero;
+            return lease;
+        }
+        finally
+        {
+            if (handle != IntPtr.Zero && handle != new IntPtr(-1))
+            {
+                CloseHandle(handle);
+            }
+        }
+    }
+
+    public static PSOBBPathLease OpenDirectory(string path)
+    {
+        return OpenExactPath(path, true, -1, true);
+    }
+
+    public static PSOBBPathLease CreateDirectoryChild(
+        PSOBBPathLease parent,
+        string childName)
+    {
+        if (parent == null || !parent.IsDirectory ||
+            string.IsNullOrWhiteSpace(childName) ||
+            childName == "." || childName == ".." ||
+            childName.IndexOf('\0') >= 0 ||
+            childName.IndexOf('\\') >= 0 || childName.IndexOf('/') >= 0)
+        {
+            throw new ArgumentException("The native child directory name is invalid.");
+        }
+        parent.DangerousHandle.ToInt64();
+        string path = NormalizeLocalPath(Path.Combine(parent.FullPath, childName));
+        if (!CreateDirectoryW(path, IntPtr.Zero))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        return OpenDirectory(path);
+    }
+
+    public static PSOBBPathLease OpenFile(
+        PSOBBPathLease parent,
+        string childName,
+        long expectedLength)
+    {
+        if (parent == null || !parent.IsDirectory || expectedLength < 0 ||
+            string.IsNullOrWhiteSpace(childName) || childName == "." ||
+            childName == ".." || childName.IndexOf('\0') >= 0 ||
+            childName.IndexOf('\\') >= 0 || childName.IndexOf('/') >= 0)
+        {
+            throw new ArgumentException("The native child file request is invalid.");
+        }
+        parent.DangerousHandle.ToInt64();
+        return OpenExactPath(
+            Path.Combine(parent.FullPath, childName),
+            false,
+            expectedLength,
+            true);
+    }
+
+    public static PSOBBPathLease OpenReadLockedFile(
+        PSOBBPathLease parent,
+        string childName,
+        long expectedLength)
+    {
+        if (parent == null || !parent.IsDirectory || expectedLength < 0 ||
+            string.IsNullOrWhiteSpace(childName) || childName == "." ||
+            childName == ".." || childName.IndexOf('\0') >= 0 ||
+            childName.IndexOf('\\') >= 0 || childName.IndexOf('/') >= 0)
+        {
+            throw new ArgumentException("The locked native child file request is invalid.");
+        }
+        parent.DangerousHandle.ToInt64();
+        return OpenExactPath(
+            Path.Combine(parent.FullPath, childName),
+            false,
+            expectedLength,
+            false);
+    }
+
+    public static byte[] ReadPrefix(PSOBBPathLease file, int byteCount)
+    {
+        if (file == null || file.IsDirectory || byteCount < 1 ||
+            byteCount > file.Length)
+        {
+            throw new ArgumentException("The native prefix request is invalid.");
+        }
+        IntPtr handle = file.DangerousHandle;
+        long position;
+        if (!SetFilePointerEx(handle, 0, out position, FileBegin))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        byte[] bytes = new byte[byteCount];
+        uint total = 0;
+        while (total < byteCount)
+        {
+            byte[] remaining = total == 0
+                ? bytes
+                : new byte[byteCount - total];
+            uint read;
+            if (!ReadFile(
+                handle,
+                remaining,
+                unchecked((uint)remaining.Length),
+                out read,
+                IntPtr.Zero) || read == 0)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            if (total != 0)
+            {
+                Buffer.BlockCopy(remaining, 0, bytes, unchecked((int)total), unchecked((int)read));
+            }
+            total += read;
+        }
+        return bytes;
+    }
+
+    public static string ComputeSha256(PSOBBPathLease file)
+    {
+        const int maximumBytes = 16 * 1024 * 1024;
+        if (file == null || file.IsDirectory || file.Length < 0 ||
+            file.Length > maximumBytes)
+        {
+            throw new ArgumentException("The native file digest request is invalid.");
+        }
+        IntPtr handle = file.DangerousHandle;
+        long position;
+        if (!SetFilePointerEx(handle, 0, out position, FileBegin))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        using (IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            byte[] buffer = new byte[64 * 1024];
+            long total = 0;
+            while (total < file.Length)
+            {
+                uint request = unchecked((uint)Math.Min(
+                    buffer.Length,
+                    file.Length - total));
+                uint read;
+                if (!ReadFile(handle, buffer, request, out read, IntPtr.Zero) ||
+                    read == 0 || read > request)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                hash.AppendData(buffer, 0, checked((int)read));
+                total += read;
+            }
+            Array.Clear(buffer, 0, buffer.Length);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+    }
+
+    private static string ObservationEventSuffix(
+        uint processId,
+        ulong processStartFileTime)
+    {
+        if (processId == 0 || processStartFileTime == 0)
+        {
+            throw new ArgumentException("The observation process identity is invalid.");
+        }
+        return processId.ToString("x8") + "." +
+            processStartFileTime.ToString("x16");
+    }
+
+    public static bool FinalizeObservationEvidence(
+        uint processId,
+        ulong processStartFileTime,
+        uint timeoutMilliseconds)
+    {
+        if (timeoutMilliseconds < 1 || timeoutMilliseconds > 10000)
+        {
+            throw new ArgumentOutOfRangeException("timeoutMilliseconds");
+        }
+        string suffix = ObservationEventSuffix(processId, processStartFileTime);
+        string finalizeName =
+            "Local\\PSOBB.Gameplay.Observation.Finalize." + suffix;
+        string completionName =
+            "Local\\PSOBB.Gameplay.Observation.Completed." + suffix;
+        IntPtr finalize = OpenEventW(EventModifyState, false, finalizeName);
+        if (finalize == IntPtr.Zero)
+        {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 2)
+            {
+                return false;
+            }
+            throw new Win32Exception(error);
+        }
+        IntPtr completion = IntPtr.Zero;
+        try
+        {
+            completion = OpenEventW(Synchronize, false, completionName);
+            if (completion == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            if (!SetEvent(finalize))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            uint wait = WaitForSingleObject(completion, timeoutMilliseconds);
+            if (wait == WaitObject0)
+            {
+                return true;
+            }
+            if (wait == WaitTimeout)
+            {
+                throw new TimeoutException(
+                    "Gameplay observation evidence did not finalize before shutdown.");
+            }
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        finally
+        {
+            if (completion != IntPtr.Zero)
+            {
+                CloseHandle(completion);
+            }
+            CloseHandle(finalize);
+        }
+    }
+
+    public static void DeleteEmptyDirectory(
+        PSOBBPathLease directory,
+        uint expectedVolumeSerialNumber,
+        ulong expectedFileId)
+    {
+        if (directory == null || !directory.IsDirectory ||
+            directory.VolumeSerialNumber != expectedVolumeSerialNumber ||
+            directory.FileId != expectedFileId)
+        {
+            throw new IOException("The empty directory identity changed before cleanup.");
+        }
+        FileDispositionInformation disposition = new FileDispositionInformation
+        {
+            DeleteFile = true,
+        };
+        if (!SetFileInformationByHandle(
+            directory.DangerousHandle,
+            FileDispositionInfo,
+            ref disposition,
+            unchecked((uint)Marshal.SizeOf(typeof(FileDispositionInformation)))))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    private static IntPtr BuildEnvironmentBlock(string observationRunId)
+    {
+        SortedDictionary<string, string> variables =
+            new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DictionaryEntry entry in
+            Environment.GetEnvironmentVariables(EnvironmentVariableTarget.Process))
+        {
+            string key = Convert.ToString(entry.Key);
+            string value = Convert.ToString(entry.Value) ?? string.Empty;
+            if (string.IsNullOrEmpty(key) || key.IndexOf('\0') >= 0 ||
+                value.IndexOf('\0') >= 0)
+            {
+                throw new InvalidOperationException("The parent environment contains an invalid entry.");
+            }
+            variables[key] = value;
+        }
+        variables["__COMPAT_LAYER"] = "RunAsInvoker";
+        variables.Remove(ObservationRunIdName);
+        if (!string.IsNullOrEmpty(observationRunId))
+        {
+            variables[ObservationRunIdName] = observationRunId;
+        }
+
+        StringBuilder block = new StringBuilder();
+        foreach (KeyValuePair<string, string> variable in variables)
+        {
+            block.Append(variable.Key);
+            block.Append('=');
+            block.Append(variable.Value);
+            block.Append('\0');
+        }
+        block.Append('\0');
+        return Marshal.StringToHGlobalUni(block.ToString());
+    }
+
+    public static int Start(
+        string executable,
+        string workingDirectory,
+        bool preserveForeground,
+        string observationRunId)
     {
         if (string.IsNullOrWhiteSpace(executable) || executable.IndexOf('\0') >= 0 ||
             string.IsNullOrWhiteSpace(workingDirectory) || workingDirectory.IndexOf('\0') >= 0)
@@ -740,19 +1292,28 @@ public static class PSOBBClientProcessLauncher
             ShowWindow = preserveForeground ? SwShowNoActivate : SwShowNormal,
         };
         var commandLine = new StringBuilder("\"" + executable + "\"");
-        if (!CreateProcessW(
-            executable,
-            commandLine,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            false,
-            CreateNoWindow,
-            IntPtr.Zero,
-            workingDirectory,
-            ref startupInfo,
-            out var processInformation))
+        IntPtr environment = BuildEnvironmentBlock(observationRunId);
+        ProcessInformation processInformation;
+        try
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (!CreateProcessW(
+                executable,
+                commandLine,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                false,
+                CreateNoWindow | CreateUnicodeEnvironment,
+                environment,
+                workingDirectory,
+                ref startupInfo,
+                out processInformation))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(environment);
         }
 
         try
@@ -771,8 +1332,824 @@ public static class PSOBBClientProcessLauncher
             }
         }
     }
+
+    internal static void CloseNativeHandle(IntPtr handle)
+    {
+        if (!CloseHandle(handle))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
 }
 '@
+}
+
+function Open-PSOBBGameplayObservationDirectoryLeaseChain {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    Initialize-PSOBBClientProcessLauncherType
+    $safeRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $safePath = Assert-PathWithinRoot -Path $Path -Root $safeRoot
+    $relativePath = [System.IO.Path]::GetRelativePath($safeRoot, $safePath)
+    if ([System.IO.Path]::IsPathRooted($relativePath) -or
+        $relativePath -eq '..' -or $relativePath.StartsWith(
+            '..\', [System.StringComparison]::Ordinal)) {
+        throw 'The Gameplay observation lease path is outside its runtime root'
+    }
+
+    $leases = [System.Collections.Generic.List[object]]::new()
+    try {
+        $cursor = $safeRoot
+        $leases.Add(
+            [PSOBBClientProcessLauncher]::OpenDirectory($cursor))
+        if ($relativePath -ne '.') {
+            foreach ($segment in $relativePath.Split(
+                    [char[]]@('\'),
+                    [System.StringSplitOptions]::RemoveEmptyEntries)) {
+                if ($segment -eq '.' -or $segment -eq '..') {
+                    throw 'The Gameplay observation lease path has an invalid segment'
+                }
+                $cursor = Join-Path $cursor $segment
+                $leases.Add(
+                    [PSOBBClientProcessLauncher]::OpenDirectory($cursor))
+            }
+        }
+        $leases.ToArray()
+    } catch {
+        for ($index = $leases.Count - 1; $index -ge 0; $index--) {
+            try {
+                $leases[$index].Dispose()
+            } catch { }
+        }
+        throw
+    }
+}
+
+function Close-PSOBBGameplayObservationDirectoryLeaseChain {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Leases)
+
+    $closeFailure = $null
+    for ($index = $Leases.Count - 1; $index -ge 0; $index--) {
+        try {
+            $Leases[$index].Dispose()
+        } catch {
+            if (-not $closeFailure) {
+                $closeFailure = $_
+            }
+        }
+    }
+    if ($closeFailure) {
+        throw $closeFailure
+    }
+}
+
+function Assert-PSOBBGameplayObservationClientContract {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Contract)
+
+    $validSchema = $false
+    if ($Contract.PSObject.Properties.Name -contains 'Binding' -and
+        $Contract.Binding -and
+        $Contract.Binding.PSObject.Properties.Name -contains 'schemaVersion') {
+        try {
+            $validSchema = [long]$Contract.Binding.schemaVersion -eq 2L
+        } catch {
+            $validSchema = $false
+        }
+    }
+
+    $expectedPaths = @(
+        'dinput8.dll',
+        'plugins/PSOBB.Gameplay.asi',
+        'plugins/PSOBB.Gameplay.ini')
+    $actualPaths = @()
+    if ($Contract.PSObject.Properties.Name -contains
+            'GameplayOverlayEntries') {
+        $actualPaths = @($Contract.GameplayOverlayEntries | ForEach-Object {
+                if ($_ -and $_.PSObject.Properties.Name -contains 'path') {
+                    [string]$_.path
+                } else {
+                    [System.Management.Automation.Language.NullString]::Value
+                }
+            })
+    }
+    $pathsExact = $actualPaths.Count -eq $expectedPaths.Count
+    foreach ($expectedPath in $expectedPaths) {
+        if (@($actualPaths | Where-Object {
+                    $_ -ceq $expectedPath
+                }).Count -ne 1) {
+            $pathsExact = $false
+        }
+    }
+    if (-not $validSchema -or -not $pathsExact) {
+        throw 'Gameplay observation evidence requires the exact active schema-2 Gameplay overlay'
+    }
+    $true
+}
+
+function Open-PSOBBGameplayOverlayLaunchLeaseSet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)][string]$ClientRoot,
+        [Parameter(Mandatory)]$Contract
+    )
+
+    Assert-PSOBBGameplayObservationClientContract -Contract $Contract |
+        Out-Null
+    Initialize-PSOBBClientProcessLauncherType
+    $safeClientRoot = Assert-PathWithinRoot `
+        -Path $ClientRoot -Root $Layout.Root
+    $directoryLeases = @()
+    $fileLeases = [System.Collections.Generic.List[object]]::new()
+    try {
+        $directoryLeases = @(
+            Open-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Path $safeClientRoot -Root $Layout.Root)
+        $clientLease = $directoryLeases[-1]
+        $pluginsRoot = Assert-PathWithinRoot `
+            -Path (Join-Path $safeClientRoot 'plugins') -Root $Layout.Root
+        $pluginsLease = [PSOBBClientProcessLauncher]::OpenDirectory(
+            $pluginsRoot)
+        $directoryLeases += $pluginsLease
+
+        $specifications = @(
+            [pscustomobject]@{
+                Path = 'dinput8.dll'
+                Parent = $clientLease
+                Name = 'dinput8.dll'
+            },
+            [pscustomobject]@{
+                Path = 'plugins/PSOBB.Gameplay.asi'
+                Parent = $pluginsLease
+                Name = 'PSOBB.Gameplay.asi'
+            },
+            [pscustomobject]@{
+                Path = 'plugins/PSOBB.Gameplay.ini'
+                Parent = $pluginsLease
+                Name = 'PSOBB.Gameplay.ini'
+            })
+        foreach ($specification in $specifications) {
+            $entries = @($Contract.GameplayOverlayEntries | Where-Object {
+                    [string]$_.path -ceq [string]$specification.Path
+                })
+            if ($entries.Count -ne 1 -or
+                [long]$entries[0].size -lt 1 -or
+                [long]$entries[0].size -gt 16MB -or
+                [string]$entries[0].sha256 -cnotmatch '\A[a-f0-9]{64}\z') {
+                throw "The Gameplay overlay launch identity for $($specification.Path) is invalid"
+            }
+            $lease = [PSOBBClientProcessLauncher]::OpenReadLockedFile(
+                $specification.Parent,
+                [string]$specification.Name,
+                [long]$entries[0].size)
+            $expectedPath = [System.IO.Path]::GetFullPath(
+                (Join-Path $safeClientRoot (
+                    [string]$specification.Path).Replace('/', '\')))
+            if (-not ([string]$lease.FullPath).Equals(
+                    $expectedPath,
+                    [System.StringComparison]::OrdinalIgnoreCase) -or
+                [string]$lease.ComputeSha256() -cne
+                    [string]$entries[0].sha256) {
+                $lease.Dispose()
+                throw "The locked Gameplay overlay file $($specification.Path) is not exact"
+            }
+            $fileLeases.Add([pscustomobject]@{
+                    Path = [string]$specification.Path
+                    FullPath = $expectedPath
+                    Size = [long]$entries[0].size
+                    Sha256 = [string]$entries[0].sha256
+                    Lease = $lease
+                })
+        }
+
+        [pscustomobject]@{
+            ClientRoot = $safeClientRoot
+            DirectoryLeases = $directoryLeases
+            Files = $fileLeases.ToArray()
+        }
+    } catch {
+        for ($index = $fileLeases.Count - 1; $index -ge 0; $index--) {
+            try { $fileLeases[$index].Lease.Dispose() } catch { }
+        }
+        if ($directoryLeases.Count -gt 0) {
+            try {
+                Close-PSOBBGameplayObservationDirectoryLeaseChain `
+                    -Leases $directoryLeases
+            } catch { }
+        }
+        throw
+    }
+}
+
+function Assert-PSOBBGameplayOverlayLaunchLeaseSet {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$LeaseSet)
+
+    $files = @($LeaseSet.Files)
+    if ($files.Count -ne 3) {
+        throw 'The Gameplay overlay launch lease set is incomplete'
+    }
+    foreach ($file in $files) {
+        if (-not $file.Lease -or $file.Lease.IsDirectory -or
+            [long]$file.Lease.Length -ne [long]$file.Size -or
+            -not ([string]$file.Lease.FullPath).Equals(
+                [string]$file.FullPath,
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]$file.Lease.ComputeSha256() -cne
+                [string]$file.Sha256) {
+            throw "The locked Gameplay overlay file $($file.Path) changed during client startup"
+        }
+    }
+    $true
+}
+
+function Close-PSOBBGameplayOverlayLaunchLeaseSet {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$LeaseSet)
+
+    $closeFailure = $null
+    $files = @($LeaseSet.Files)
+    for ($index = $files.Count - 1; $index -ge 0; $index--) {
+        try {
+            $files[$index].Lease.Dispose()
+        } catch {
+            if (-not $closeFailure) { $closeFailure = $_ }
+        }
+    }
+    try {
+        Close-PSOBBGameplayObservationDirectoryLeaseChain `
+            -Leases @($LeaseSet.DirectoryLeases)
+    } catch {
+        if (-not $closeFailure) { $closeFailure = $_ }
+    }
+    if ($closeFailure) { throw $closeFailure }
+}
+
+function New-PSOBBGameplayObservationRunDirectory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$ServerLayout
+    )
+
+    if ([string]$ServerLayout.Environment -cne 'CombatCanary' -or
+        [string]$ServerLayout.EnvironmentId -cne 'combat-canary') {
+        throw 'Gameplay observation evidence requires the exact CombatCanary environment'
+    }
+
+    Initialize-PSOBBClientProcessLauncherType
+    $evidenceRoot = Assert-PathWithinRoot `
+        -Path (Join-Path $ServerLayout.EnvironmentRoot 'evidence') `
+        -Root $Layout.Root
+    if (-not (Test-Path -LiteralPath $evidenceRoot -PathType Container)) {
+        throw 'The protected CombatCanary evidence root is missing'
+    }
+    $leases = @()
+    $runLease = $null
+    $runCreated = $false
+    try {
+        $leases = @(Open-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Path $evidenceRoot -Root $Layout.Root)
+        if ($leases.Count -lt 1 -or
+            -not (Test-PSOBBProtectedAcl -Path $evidenceRoot)) {
+            throw 'The CombatCanary evidence root is not an exact protected non-reparse directory'
+        }
+
+        $observationRoot = Assert-PathWithinRoot `
+            -Path (Join-Path $evidenceRoot 'gameplay-observation') `
+            -Root $Layout.Root
+        $observationExisted = Test-Path -LiteralPath $observationRoot
+        $observationLease = if ($observationExisted) {
+            [PSOBBClientProcessLauncher]::OpenDirectory($observationRoot)
+        } else {
+            [PSOBBClientProcessLauncher]::CreateDirectoryChild(
+                $leases[-1], 'gameplay-observation')
+        }
+        $leases += $observationLease
+        if (-not $observationExisted) {
+            Set-PSOBBProtectedAcl -Path $observationRoot
+        }
+        if (-not (Test-PSOBBProtectedAcl -Path $observationRoot)) {
+            throw 'The Gameplay observation evidence root is not an exact protected non-reparse directory'
+        }
+
+        $runId = '{0}-gameplay-{1}' -f `
+            [DateTime]::UtcNow.ToString(
+                'yyyyMMddTHHmmssfffZ',
+                [System.Globalization.CultureInfo]::InvariantCulture), `
+            ([Guid]::NewGuid().ToString('N').Substring(0, 12))
+        if ($runId -cnotmatch
+            '\A[0-9]{8}T[0-9]{9}Z-gameplay-[a-f0-9]{12}\z') {
+            throw 'The generated Gameplay observation run ID is not canonical'
+        }
+
+        $runRoot = Assert-PathWithinRoot `
+            -Path (Join-Path $observationRoot $runId) `
+            -Root $Layout.Root
+        $runLease = [PSOBBClientProcessLauncher]::CreateDirectoryChild(
+            $observationLease, $runId)
+        $runCreated = $true
+        $leases += $runLease
+        Set-PSOBBProtectedAcl -Path $runRoot
+        if (-not (Test-PSOBBProtectedAcl -Path $runRoot)) {
+            throw 'The Gameplay observation run directory did not receive the protected DACL'
+        }
+
+        [pscustomobject]@{
+            RunId = $runId
+            Path = $runRoot
+            EvidenceFilePath = Join-Path $runRoot 'events-v1.partial'
+            VolumeSerialNumber = [uint32]$runLease.VolumeSerialNumber
+            FileId = [uint64]$runLease.FileId
+        }
+    } catch {
+        $creationFailure = $_
+        if ($runCreated -and $runLease) {
+            try {
+                $firstEntry = Get-ChildItem -Force -LiteralPath $runLease.FullPath |
+                    Select-Object -First 1
+                if (-not $firstEntry) {
+                    [PSOBBClientProcessLauncher]::DeleteEmptyDirectory(
+                        $runLease,
+                        [uint32]$runLease.VolumeSerialNumber,
+                        [uint64]$runLease.FileId)
+                }
+            } catch {
+                throw ('Gameplay observation run creation failed and its exact ' +
+                    "empty-directory cleanup also failed. Creation: $($creationFailure.Exception.Message) " +
+                    "Cleanup: $($_.Exception.Message)")
+            }
+        }
+        throw $creationFailure
+    } finally {
+        if ($leases.Count -gt 0) {
+            Close-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Leases $leases
+        }
+    }
+}
+
+function Remove-PSOBBGameplayObservationEmptyRunDirectory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$Run
+    )
+
+    if (-not $Run.PSObject.Properties['RunId'] -or
+        [string]$Run.RunId -cnotmatch
+            '\A[0-9]{8}T[0-9]{9}Z-gameplay-[a-f0-9]{12}\z' -or
+        -not $Run.PSObject.Properties['Path'] -or
+        -not $Run.PSObject.Properties['VolumeSerialNumber'] -or
+        -not $Run.PSObject.Properties['FileId']) {
+        throw 'The Gameplay observation cleanup identity is incomplete'
+    }
+    $expectedPath = Assert-PathWithinRoot `
+        -Path (Join-Path (
+                Join-Path $Layout.CombatCanary 'evidence\gameplay-observation') `
+                ([string]$Run.RunId)) `
+        -Root $Layout.Root
+    $runPath = Assert-PathWithinRoot -Path ([string]$Run.Path) -Root $Layout.Root
+    if (-not $runPath.Equals(
+            $expectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The Gameplay observation cleanup path does not match its run ID'
+    }
+
+    $leases = @()
+    try {
+        $leases = @(Open-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Path $runPath -Root $Layout.Root)
+        $runLease = $leases[-1]
+        if ([uint32]$runLease.VolumeSerialNumber -ne
+                [uint32]$Run.VolumeSerialNumber -or
+            [uint64]$runLease.FileId -ne [uint64]$Run.FileId -or
+            -not (Test-PSOBBProtectedAcl -Path $runPath)) {
+            throw 'The Gameplay observation cleanup directory identity changed'
+        }
+        $firstEntry = Get-ChildItem -Force -LiteralPath $runPath |
+            Select-Object -First 1
+        if ($firstEntry) {
+            return $false
+        }
+        [PSOBBClientProcessLauncher]::DeleteEmptyDirectory(
+            $runLease,
+            [uint32]$Run.VolumeSerialNumber,
+            [uint64]$Run.FileId)
+    } finally {
+        if ($leases.Count -gt 0) {
+            Close-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Leases $leases
+        }
+    }
+    if (Test-Path -LiteralPath $runPath) {
+        throw 'The exact empty Gameplay observation run directory was not removed'
+    }
+    $true
+}
+
+function Test-PSOBBGameplayObservationEvidenceFileAcl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$RunRoot
+    )
+
+    $item = Get-Item -Force -LiteralPath $Path -ErrorAction Stop
+    $exactLeaf = @(Get-ChildItem -Force -LiteralPath $RunRoot |
+        Where-Object { $_.Name -ceq 'events-v1.partial' })
+    if ($exactLeaf.Count -ne 1 -or $exactLeaf[0].PSIsContainer -or
+        $item.PSIsContainer -or
+        ($item.Attributes -band
+            [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return $false
+    }
+    $allowed = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    [void]$allowed.Add(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    [void]$allowed.Add('S-1-5-32-544')
+    [void]$allowed.Add('S-1-5-18')
+    $acl = Get-Acl -LiteralPath $Path
+    $rules = @($acl.GetAccessRules(
+            $true, $true,
+            [System.Security.Principal.SecurityIdentifier]))
+    if ($acl.AreAccessRulesProtected -or $rules.Count -ne $allowed.Count) {
+        return $false
+    }
+    $found = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($rule in $rules) {
+        if ($rule.AccessControlType -ne
+                [System.Security.AccessControl.AccessControlType]::Allow -or
+            -not $rule.IsInherited -or
+            -not $allowed.Contains($rule.IdentityReference.Value) -or
+            $rule.FileSystemRights -ne
+                [System.Security.AccessControl.FileSystemRights]::FullControl -or
+            $rule.PropagationFlags -ne
+                [System.Security.AccessControl.PropagationFlags]::None) {
+            return $false
+        }
+        [void]$found.Add($rule.IdentityReference.Value)
+    }
+    $found.SetEquals($allowed)
+}
+
+function Wait-PSOBBGameplayObservationEvidenceReady {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$Run,
+        [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory)]
+        [ValidatePattern('\A[a-f0-9]{64}\z')]
+        [string]$ExpectedClientSha256,
+        [ValidateRange(50, 10000)][int]$TimeoutMilliseconds = 5000
+    )
+
+    $expectedEvidenceLength = 524544L
+    $expectedHeaderLength = 256
+    $expectedCapacity = 16384L
+    $leases = @()
+    $lastValidationFailure = $null
+    try {
+        $leases = @(Open-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Path ([string]$Run.Path) -Root $Layout.Root)
+        $runLease = $leases[-1]
+        if ([uint32]$runLease.VolumeSerialNumber -ne
+                [uint32]$Run.VolumeSerialNumber -or
+            [uint64]$runLease.FileId -ne [uint64]$Run.FileId -or
+            -not (Test-PSOBBProtectedAcl -Path ([string]$Run.Path))) {
+            throw 'The Gameplay observation run directory identity changed before readiness'
+        }
+        $expectedFilePath = Assert-PathWithinRoot `
+            -Path (Join-Path $runLease.FullPath 'events-v1.partial') `
+            -Root $Layout.Root
+        if (-not $expectedFilePath.Equals(
+                [string]$Run.EvidenceFilePath,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The Gameplay observation evidence path changed before readiness'
+        }
+        $expectedStartFileTime = [uint64](
+            $Process.StartTime.ToUniversalTime().ToFileTimeUtc())
+        $expectedSha256 = $ExpectedClientSha256.ToUpperInvariant()
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($stopwatch.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
+            $Process.Refresh()
+            if ($Process.HasExited) {
+                throw "The Gameplay observation producer exited before evidence readiness with code $($Process.ExitCode)"
+            }
+
+            $fileLease = $null
+            $header = $null
+            try {
+                if ([System.IO.File]::Exists($expectedFilePath)) {
+                    $fileLease = [PSOBBClientProcessLauncher]::OpenFile(
+                        $runLease, 'events-v1.partial', $expectedEvidenceLength)
+                    if (-not (Test-PSOBBGameplayObservationEvidenceFileAcl `
+                            -Path $expectedFilePath `
+                            -RunRoot $runLease.FullPath)) {
+                        throw 'The Gameplay observation evidence file DACL is invalid'
+                    }
+                    $header = $fileLease.ReadPrefix($expectedHeaderLength)
+                    $magic = [System.Text.Encoding]::ASCII.GetString(
+                        $header, 0, 8)
+                    $structSize = [BitConverter]::ToUInt32($header, 8)
+                    $formatVersion = [BitConverter]::ToUInt32($header, 12)
+                    $byteOrder = [BitConverter]::ToUInt32($header, 16)
+                    $maximumSize = [BitConverter]::ToUInt32($header, 20)
+                    $eventAbiVersion = [BitConverter]::ToUInt32($header, 24)
+                    $eventRecordSize = [BitConverter]::ToUInt32($header, 28)
+                    $eventCapacity = [BitConverter]::ToUInt32($header, 32)
+                    $committedCount = [BitConverter]::ToUInt32($header, 36)
+                    $identityVersion = [BitConverter]::ToUInt32($header, 40)
+                    $shaByteCount = [BitConverter]::ToUInt32($header, 44)
+                    $consumerThreadId = [BitConverter]::ToUInt32($header, 84)
+                    $producerProcessId = [BitConverter]::ToUInt32($header, 88)
+                    $reserved0 = [BitConverter]::ToUInt32($header, 92)
+                    $producerStartFileTime = [BitConverter]::ToUInt64($header, 96)
+                    $clientSha256 = [Convert]::ToHexString($header[120..151])
+                    $expectedModuleField = [byte[]]::new(32)
+                    [System.Text.Encoding]::ASCII.GetBytes(
+                        '0.4.0-observation-evidence').CopyTo(
+                            $expectedModuleField, 0)
+                    $moduleFieldExact = [Convert]::ToHexString(
+                        $header[152..183]) -ceq
+                        [Convert]::ToHexString($expectedModuleField)
+                    $lifecycleState = [BitConverter]::ToUInt32($header, 184)
+                    $terminalFailureCode = [BitConverter]::ToUInt32(
+                        $header, 188)
+                    $captureStartFileTime = [BitConverter]::ToUInt64(
+                        $header, 192)
+                    $lastCommitFileTime = [BitConverter]::ToUInt64(
+                        $header, 200)
+                    $completionFileTime = [BitConverter]::ToUInt64(
+                        $header, 208)
+                    $heartbeatCount = [BitConverter]::ToUInt64($header, 216)
+                    $activeStartTickMilliseconds =
+                        [BitConverter]::ToUInt64($header, 224)
+                    $lastCommitTickMilliseconds =
+                        [BitConverter]::ToUInt64($header, 232)
+                    $reservedTailZero = [Convert]::ToHexString(
+                        $header[240..255]) -ceq ('00' * 16)
+                    if ($magic -cne 'PSOBBOBS' -or $structSize -ne 256 -or
+                        $formatVersion -ne 1 -or
+                        $byteOrder -ne 0x01020304 -or
+                        $maximumSize -ne $expectedEvidenceLength -or
+                        $eventAbiVersion -ne 1 -or $eventRecordSize -ne 32 -or
+                        $eventCapacity -ne $expectedCapacity -or
+                        $committedCount -gt $expectedCapacity -or
+                        $identityVersion -ne 1 -or $shaByteCount -ne 32 -or
+                        $reserved0 -ne 0 -or -not $moduleFieldExact -or
+                        $lifecycleState -ne 2 -or
+                        $terminalFailureCode -ne 0 -or
+                        $captureStartFileTime -eq 0 -or
+                        $lastCommitFileTime -lt $captureStartFileTime -or
+                        $completionFileTime -ne 0 -or
+                        $heartbeatCount -lt 1 -or -not $reservedTailZero -or
+                        $activeStartTickMilliseconds -eq 0 -or
+                        $lastCommitTickMilliseconds -lt
+                            $activeStartTickMilliseconds -or
+                        $consumerThreadId -eq 0 -or
+                        $producerProcessId -ne [uint32]$Process.Id -or
+                        $producerStartFileTime -ne $expectedStartFileTime -or
+                        $clientSha256 -cne $expectedSha256) {
+                        throw 'The Gameplay observation evidence header is not ready or does not match the launched client'
+                    }
+                    return [pscustomobject]@{
+                        Path = $expectedFilePath
+                        VolumeSerialNumber = [uint32]$fileLease.VolumeSerialNumber
+                        FileId = [uint64]$fileLease.FileId
+                        Length = [long]$fileLease.Length
+                        ProcessId = [int]$producerProcessId
+                        ProcessStartTimeFileTimeUtc = [uint64]$producerStartFileTime
+                        ConsumerThreadId = [uint32]$consumerThreadId
+                        CommittedEventCount = [uint32]$committedCount
+                        LifecycleState = [uint32]$lifecycleState
+                        CaptureStartFileTime = [uint64]$captureStartFileTime
+                        LastCommitFileTime = [uint64]$lastCommitFileTime
+                        HeartbeatCount = [uint64]$heartbeatCount
+                        ActiveStartTickMilliseconds =
+                            [uint64]$activeStartTickMilliseconds
+                        LastCommitTickMilliseconds =
+                            [uint64]$lastCommitTickMilliseconds
+                    }
+                }
+            } catch {
+                $lastValidationFailure = $_
+            } finally {
+                if ($header) {
+                    [Array]::Clear($header, 0, $header.Length)
+                }
+                if ($fileLease) {
+                    $fileLease.Dispose()
+                }
+            }
+            Start-Sleep -Milliseconds 50
+        }
+        $detail = if ($lastValidationFailure) {
+            ": $($lastValidationFailure.Exception.Message)"
+        } else {
+            ''
+        }
+        throw "The Gameplay observation evidence did not become ready within $TimeoutMilliseconds ms$detail"
+    } finally {
+        if ($leases.Count -gt 0) {
+            Close-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Leases $leases
+        }
+    }
+}
+
+function New-PSOBBGameplayObservationRunManifest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Layout,
+        [Parameter(Mandatory)]$ServerLayout,
+        [Parameter(Mandatory)]$Run,
+        [Parameter(Mandatory)]$Readiness,
+        [Parameter(Mandatory)]$ClientContract,
+        [Parameter(Mandatory)]$ClientIdentity
+    )
+
+    if ([string]$ServerLayout.Environment -cne 'CombatCanary' -or
+        [string]$ServerLayout.EnvironmentId -cne 'combat-canary') {
+        throw 'The Gameplay observation run manifest requires CombatCanary'
+    }
+    Assert-PSOBBGameplayObservationClientContract `
+        -Contract $ClientContract | Out-Null
+    if (-not $ClientContract.PSObject.Properties['Verification'] -or
+        [string]$ClientContract.Verification.ClientBindingSha256 -cnotmatch
+            '\A[a-f0-9]{64}\z' -or
+        [string]$ClientIdentity.Sha256 -cnotmatch '\A[a-f0-9]{64}\z' -or
+        [long]$ClientIdentity.Size -lt 1) {
+        throw 'The Gameplay observation run manifest client identity is invalid'
+    }
+
+    $moduleEntry = @($ClientContract.GameplayOverlayEntries |
+        Where-Object { [string]$_.path -ceq 'plugins/PSOBB.Gameplay.asi' })
+    $configurationEntry = @($ClientContract.GameplayOverlayEntries |
+        Where-Object { [string]$_.path -ceq 'plugins/PSOBB.Gameplay.ini' })
+    if ($moduleEntry.Count -ne 1 -or $configurationEntry.Count -ne 1 -or
+        [long]$moduleEntry[0].size -lt 1 -or
+        [string]$moduleEntry[0].sha256 -cnotmatch '\A[a-f0-9]{64}\z' -or
+        [long]$configurationEntry[0].size -lt 1 -or
+        [string]$configurationEntry[0].sha256 -cnotmatch
+            '\A[a-f0-9]{64}\z') {
+        throw 'The Gameplay observation run manifest overlay identity is invalid'
+    }
+
+    $leases = @()
+    $evidenceLease = $null
+    $temporaryPath = $null
+    try {
+        $leases = @(Open-PSOBBGameplayObservationDirectoryLeaseChain `
+                -Path ([string]$Run.Path) -Root $Layout.Root)
+        $runLease = $leases[-1]
+        if ([uint32]$runLease.VolumeSerialNumber -ne
+                [uint32]$Run.VolumeSerialNumber -or
+            [uint64]$runLease.FileId -ne [uint64]$Run.FileId -or
+            -not (Test-PSOBBProtectedAcl -Path ([string]$Run.Path))) {
+            throw 'The Gameplay observation run identity changed before manifest creation'
+        }
+        $evidenceLease = [PSOBBClientProcessLauncher]::OpenFile(
+            $runLease, 'events-v1.partial', 524544L)
+        if ([string]$Readiness.Path -cne [string]$Run.EvidenceFilePath -or
+            [uint32]$evidenceLease.VolumeSerialNumber -ne
+                [uint32]$Readiness.VolumeSerialNumber -or
+            [uint64]$evidenceLease.FileId -ne [uint64]$Readiness.FileId -or
+            [long]$evidenceLease.Length -ne [long]$Readiness.Length -or
+            -not (Test-PSOBBGameplayObservationEvidenceFileAcl `
+                -Path ([string]$Readiness.Path) `
+                -RunRoot $runLease.FullPath)) {
+            throw 'The Gameplay observation evidence identity changed before manifest creation'
+        }
+
+        $manifestPath = Assert-PathWithinRoot `
+            -Path (Join-Path $runLease.FullPath 'run-manifest-v1.json') `
+            -Root $Layout.Root
+        if (Test-Path -LiteralPath $manifestPath) {
+            throw 'The Gameplay observation run manifest already exists'
+        }
+        $manifest = [ordered]@{
+            schemaVersion = 1
+            createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            environmentId = [string]$ServerLayout.EnvironmentId
+            runId = [string]$Run.RunId
+            evidenceFileName = 'events-v1.partial'
+            evidenceLength = [long]$Readiness.Length
+            evidenceVolumeSerialNumber = ('{0:x8}' -f
+                [uint32]$Readiness.VolumeSerialNumber)
+            evidenceFileId = ('{0:x16}' -f [uint64]$Readiness.FileId)
+            clientBindingSha256 =
+                [string]$ClientContract.Verification.ClientBindingSha256
+            clientExecutableSize = [long]$ClientIdentity.Size
+            clientExecutableSha256 = [string]$ClientIdentity.Sha256
+            gameplayModulePath = [string]$moduleEntry[0].path
+            gameplayModuleSize = [long]$moduleEntry[0].size
+            gameplayModuleSha256 = [string]$moduleEntry[0].sha256
+            gameplayConfigurationPath = [string]$configurationEntry[0].path
+            gameplayConfigurationSize = [long]$configurationEntry[0].size
+            gameplayConfigurationSha256 =
+                [string]$configurationEntry[0].sha256
+            processId = [long]$Readiness.ProcessId
+            processStartTimeFileTimeUtc =
+                [long]$Readiness.ProcessStartTimeFileTimeUtc
+            consumerThreadId = [long]$Readiness.ConsumerThreadId
+        }
+        $manifestText = $manifest | ConvertTo-Json -Depth 4
+        $temporaryPath = Assert-PathWithinRoot `
+            -Path (Join-Path $runLease.FullPath (
+                    '.run-manifest-v1.json.new-' +
+                    [Guid]::NewGuid().ToString('N'))) `
+            -Root $Layout.Root
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+            $manifestText)
+        $stream = $null
+        try {
+            $stream = [System.IO.FileStream]::new(
+                $temporaryPath,
+                [System.IO.FileMode]::CreateNew,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally {
+            if ($stream) {
+                $stream.Dispose()
+            }
+            [Array]::Clear($bytes, 0, $bytes.Length)
+        }
+        Set-PSOBBProtectedAcl -Path $temporaryPath
+        if (-not (Test-PSOBBProtectedAcl -Path $temporaryPath) -or
+            (Test-Path -LiteralPath $manifestPath)) {
+            throw 'The Gameplay observation run manifest staging identity is invalid'
+        }
+        [System.IO.File]::Move($temporaryPath, $manifestPath, $false)
+        $temporaryPath = $null
+        if (-not (Test-PSOBBProtectedAcl -Path $manifestPath)) {
+            throw 'The Gameplay observation run manifest is not protected'
+        }
+
+        $snapshot = Read-PSOBBStrictJsonSnapshot `
+            -Path $manifestPath -Root $runLease.FullPath `
+            -MaximumBytes 32KB -MaximumDepth 4 `
+            -Label 'Gameplay observation run manifest'
+        $value = $snapshot.Value
+        [void](Assert-PSOBBStrictDataObjectProperties `
+                -Value $value `
+                -Expected @($manifest.Keys) `
+                -Label 'Gameplay observation run manifest')
+        foreach ($propertyName in $manifest.Keys) {
+            if ([string]$value.$propertyName -cne
+                [string]$manifest[$propertyName]) {
+                throw "The Gameplay observation run manifest $propertyName value changed during readback"
+            }
+        }
+        if (-not (Test-PSOBBProtectedAcl -Path $manifestPath)) {
+            throw 'The Gameplay observation run manifest protection changed during readback'
+        }
+        [pscustomobject]@{
+            Path = $manifestPath
+            Sha256 = [string]$snapshot.Sha256
+        }
+    } finally {
+        $cleanupFailure = $null
+        if ($temporaryPath -and (Test-Path -LiteralPath $temporaryPath)) {
+            try {
+                Remove-Item -LiteralPath $temporaryPath -Force
+            } catch {
+                $cleanupFailure = $_
+            }
+        }
+        if ($evidenceLease) {
+            try {
+                $evidenceLease.Dispose()
+            } catch {
+                if (-not $cleanupFailure) {
+                    $cleanupFailure = $_
+                }
+            }
+        }
+        if ($leases.Count -gt 0) {
+            try {
+                Close-PSOBBGameplayObservationDirectoryLeaseChain `
+                    -Leases $leases
+            } catch {
+                if (-not $cleanupFailure) {
+                    $cleanupFailure = $_
+                }
+            }
+        }
+        if ($cleanupFailure) {
+            throw $cleanupFailure
+        }
+    }
 }
 
 function Start-PSOBBClientProcess {
@@ -780,27 +2157,37 @@ function Start-PSOBBClientProcess {
     param(
         [Parameter(Mandatory)][string]$ClientExecutable,
         [Parameter(Mandatory)][string]$WorkingDirectory,
-        [switch]$PreserveForeground
+        [switch]$PreserveForeground,
+        [AllowEmptyString()][string]$GameplayObservationRunId
     )
 
+    if (-not [string]::IsNullOrEmpty($GameplayObservationRunId) -and
+        $GameplayObservationRunId -cnotmatch
+            '\A[0-9]{8}T[0-9]{9}Z-gameplay-[a-f0-9]{12}\z') {
+        throw 'The Gameplay observation run ID is invalid'
+    }
+
     Initialize-PSOBBClientProcessLauncherType
-    $previousCompatibilityLayer =
-        [Environment]::GetEnvironmentVariable('__COMPAT_LAYER', 'Process')
+    $processId = $null
+    Assert-PSOBBClientLoginRegistry | Out-Null
+    $processId = [PSOBBClientProcessLauncher]::Start(
+        $ClientExecutable,
+        $WorkingDirectory,
+        [bool]$PreserveForeground,
+        $(if ([string]::IsNullOrEmpty($GameplayObservationRunId)) {
+                $null
+            } else {
+                $GameplayObservationRunId
+            }))
     try {
-        # The historic 59NL executable embeds requireAdministrator even though
-        # the verified disposable runtime is user-writable. Apply Microsoft's
-        # RunAsInvoker compatibility layer only during this child creation.
-        [Environment]::SetEnvironmentVariable(
-            '__COMPAT_LAYER', 'RunAsInvoker', 'Process')
-        Assert-PSOBBClientLoginRegistry | Out-Null
-        $processId = [PSOBBClientProcessLauncher]::Start(
-            $ClientExecutable,
-            $WorkingDirectory,
-            [bool]$PreserveForeground)
         $process = [System.Diagnostics.Process]::GetProcessById($processId)
-    } finally {
-        [Environment]::SetEnvironmentVariable(
-            '__COMPAT_LAYER', $previousCompatibilityLayer, 'Process')
+        # Force Process to retain a native handle while the child is alive so
+        # HasExited and ExitCode remain reliable after a bounded WaitForExit.
+        [void]$process.Handle
+    } catch {
+        $_.Exception.Data['PSOBBClientCreated'] = $true
+        $_.Exception.Data['PSOBBClientProcessId'] = [int]$processId
+        throw
     }
     if (-not $process) {
         throw 'Windows did not start the PSOBB client process'

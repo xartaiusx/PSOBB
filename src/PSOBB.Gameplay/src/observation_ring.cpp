@@ -126,11 +126,8 @@ bool ObservationRing::TryRecord(
   return true;
 }
 
-bool ObservationRing::Drain(ObservationSnapshotV1& snapshot) noexcept {
-  if (drain_active_.test_and_set(std::memory_order_acquire)) {
-    return false;
-  }
-
+bool ObservationRing::DrainClaimed(
+    ObservationSnapshotV1& snapshot) noexcept {
   std::memset(&snapshot, 0, sizeof(snapshot));
   snapshot.struct_size = static_cast<std::uint32_t>(sizeof(snapshot));
   snapshot.abi_version = kObservationAbiVersion;
@@ -142,7 +139,6 @@ bool ObservationRing::Drain(ObservationSnapshotV1& snapshot) noexcept {
       write_cursor_.load(std::memory_order_acquire);
   const std::uint32_t event_count = write_cursor - read_cursor;
   if (event_count > kObservationRingCapacity) {
-    drain_active_.clear(std::memory_order_release);
     return false;
   }
 
@@ -159,8 +155,24 @@ bool ObservationRing::Drain(ObservationSnapshotV1& snapshot) noexcept {
       producer_thread_id_.load(std::memory_order_acquire);
 
   read_cursor_.store(read_cursor + event_count, std::memory_order_release);
-  drain_active_.clear(std::memory_order_release);
   return true;
+}
+
+bool ObservationRing::Drain(ObservationSnapshotV1& snapshot) noexcept {
+  if (drain_active_.test_and_set(std::memory_order_acquire)) {
+    return false;
+  }
+  const bool drained = DrainClaimed(snapshot);
+  drain_active_.clear(std::memory_order_release);
+  return drained;
+}
+
+bool ObservationRing::TryClaimEvidenceConsumer() noexcept {
+  return !drain_active_.test_and_set(std::memory_order_acquire);
+}
+
+void ObservationRing::ReleaseEvidenceConsumer() noexcept {
+  drain_active_.clear(std::memory_order_release);
 }
 
 bool ObservationRing::TryResetQuiescent() noexcept {

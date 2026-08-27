@@ -8,6 +8,7 @@ param(
     [string]$WindowMode = 'ProfileDefault',
     [switch]$PreserveForeground,
     [string]$RuntimeRoot,
+    [Parameter(DontShow)][switch]$GameplayObservationEvidence,
     [Parameter(DontShow)][switch]$ClientOperationLockHeld
 )
 
@@ -47,6 +48,10 @@ $layout = Get-PSOBBLayout -RuntimeRoot $RuntimeRoot
 Assert-PSOBBRuntimeMarker -Layout $layout | Out-Null
 $serverEnvironmentName = Resolve-PSOBBServerEnvironmentName `
     -Environment $ServerEnvironment
+if ($GameplayObservationEvidence -and
+    $serverEnvironmentName -cne 'CombatCanary') {
+    throw 'Gameplay observation evidence is available only for CombatCanary'
+}
 $serverLayout = Get-PSOBBServerEnvironmentLayout `
     -Layout $layout -Environment $serverEnvironmentName
 $resolvedChannel = Resolve-PSOBBClientChannelForServerEnvironment `
@@ -81,6 +86,10 @@ $combatClientContract = if ($serverEnvironmentName -ceq 'CombatCanary') {
     Get-PSOBBCombatCanaryClientLaunchContract -Layout $layout
 } else {
     $null
+}
+if ($GameplayObservationEvidence) {
+    Assert-PSOBBGameplayObservationClientContract `
+        -Contract $combatClientContract | Out-Null
 }
 $clientExecutable = Get-PSOBBClientExecutablePath `
     -Layout $layout `
@@ -139,6 +148,11 @@ if ((-not $useManagedPresentation) -and ($WindowMode -ne 'ProfileDefault')) {
 
 $process = $null
 $graphicsRegistryTransaction = $null
+$gameplayObservationRun = $null
+$gameplayObservationReadiness = $null
+$gameplayObservationManifest = $null
+$gameplayOverlayLaunchLeaseSet = $null
+$clientCreationMayHaveOccurred = $false
 $startupStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $previousForegroundWindow = if ($PreserveForeground) {
     Get-PSOBBForegroundWindowHandle
@@ -174,10 +188,36 @@ try {
             -ProcessId $serverProcess.Id)) {
         throw 'The selected server identity, control record, environment, or listeners changed during client preflight'
     }
-    $process = Start-PSOBBClientProcess `
-        -ClientExecutable $clientExecutable `
-        -WorkingDirectory $clientRoot `
-        -PreserveForeground:$PreserveForeground
+    $gameplayObservationRun = if ($GameplayObservationEvidence) {
+        New-PSOBBGameplayObservationRunDirectory `
+            -Layout $layout `
+            -ServerLayout $serverLayout
+    } else {
+        $null
+    }
+    if ($gameplayObservationRun) {
+        $gameplayOverlayLaunchLeaseSet =
+            Open-PSOBBGameplayOverlayLaunchLeaseSet `
+                -Layout $layout `
+                -ClientRoot $clientRoot `
+                -Contract $combatClientContract
+    }
+    try {
+    try {
+        $process = Start-PSOBBClientProcess `
+            -ClientExecutable $clientExecutable `
+            -WorkingDirectory $clientRoot `
+            -PreserveForeground:$PreserveForeground `
+            -GameplayObservationRunId $(if ($gameplayObservationRun) {
+                    [string]$gameplayObservationRun.RunId
+                } else { $null })
+        $clientCreationMayHaveOccurred = $true
+    } catch {
+        if ($_.Exception.Data['PSOBBClientCreated'] -eq $true) {
+            $clientCreationMayHaveOccurred = $true
+        }
+        throw
+    }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -200,6 +240,32 @@ try {
             -Name 'Psobb' `
             -ExpectedPath $clientExecutable)) {
         throw 'The PSOBB client did not create a verified game window during startup'
+    }
+
+    if ($gameplayObservationRun) {
+        $gameplayObservationReadiness =
+            Wait-PSOBBGameplayObservationEvidenceReady `
+                -Layout $layout `
+                -Run $gameplayObservationRun `
+                -Process $process `
+                -ExpectedClientSha256 ([string]$clientIdentity.Sha256)
+        Assert-PSOBBGameplayOverlayLaunchLeaseSet `
+            -LeaseSet $gameplayOverlayLaunchLeaseSet | Out-Null
+        $gameplayObservationManifest =
+            New-PSOBBGameplayObservationRunManifest `
+                -Layout $layout `
+                -ServerLayout $serverLayout `
+                -Run $gameplayObservationRun `
+                -Readiness $gameplayObservationReadiness `
+                -ClientContract $combatClientContract `
+                -ClientIdentity $clientIdentity
+    }
+    } finally {
+        if ($gameplayOverlayLaunchLeaseSet) {
+            Close-PSOBBGameplayOverlayLaunchLeaseSet `
+                -LeaseSet $gameplayOverlayLaunchLeaseSet
+            $gameplayOverlayLaunchLeaseSet = $null
+        }
     }
 
     if ($PreserveForeground) {
@@ -332,6 +398,18 @@ try {
         ClientBindingSha256 = if ($combatClientContract) {
             [string]$combatClientContract.Verification.ClientBindingSha256
         } else { $null }
+        GameplayObservationRunId = if ($gameplayObservationRun) {
+            [string]$gameplayObservationRun.RunId
+        } else { $null }
+        GameplayObservationEvidencePath = if ($gameplayObservationReadiness) {
+            [string]$gameplayObservationReadiness.Path
+        } else { $null }
+        GameplayObservationManifestPath = if ($gameplayObservationManifest) {
+            [string]$gameplayObservationManifest.Path
+        } else { $null }
+        GameplayObservationManifestSha256 = if ($gameplayObservationManifest) {
+            [string]$gameplayObservationManifest.Sha256
+        } else { $null }
         GraphicCtrlBackupPath = $graphicsRegistryTransaction.BackupPath
         Borderless = ($null -ne $presentation) -and ($selectedWindowMode -eq 'Borderless')
         WindowX = if ($presentation) { $presentation.X } else { $null }
@@ -421,16 +499,39 @@ try {
             }
         } catch { }
     }
+    $graphicsRollbackError = $null
     if ($graphicsRegistryTransaction -and $graphicsRegistryTransaction.Applied) {
         try {
             Restore-PSOBBClientGraphicCtrlBackup `
                 -Layout $layout `
                 -BackupPath $graphicsRegistryTransaction.BackupPath | Out-Null
         } catch {
-            throw ('PSOBB client startup failed and the native graphics registry ' +
-                "transaction also failed to roll back. Startup: $($startupError.Exception.Message) " +
-                "Rollback: $($_.Exception.Message)")
+            $graphicsRollbackError = $_
         }
+    }
+    $observationCleanupError = $null
+    if ($gameplayObservationRun -and
+        -not $clientCreationMayHaveOccurred -and
+        -not (Test-Path -LiteralPath `
+            ([string]$gameplayObservationRun.EvidenceFilePath))) {
+        try {
+            [void](Remove-PSOBBGameplayObservationEmptyRunDirectory `
+                    -Layout $layout -Run $gameplayObservationRun)
+        } catch {
+            $observationCleanupError = $_
+        }
+    }
+    if ($graphicsRollbackError -or $observationCleanupError) {
+        $rollbackDetail = @(
+            if ($graphicsRollbackError) {
+                "graphics rollback: $($graphicsRollbackError.Exception.Message)"
+            }
+            if ($observationCleanupError) {
+                "observation cleanup: $($observationCleanupError.Exception.Message)"
+            }) -join '; '
+        throw ('PSOBB client startup failed and one or more deterministic ' +
+            "cleanup operations also failed. Startup: $($startupError.Exception.Message) " +
+            "Cleanup: $rollbackDetail")
     }
     throw $startupError
 }

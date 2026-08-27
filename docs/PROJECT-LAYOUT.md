@@ -41,6 +41,12 @@ The runtime owns these major areas:
   `server-base\release`, archived build outputs, and protected evidence. It did
   not populate the selected `server\release`, base/playable clients, bindings,
   snapshots, or mutable canary state.
+- The source-ready Gameplay observation workflow reserves each explicit run
+  beneath `combat-canary\evidence\gameplay-observation\<run-id>`. Its protected
+  non-reparse run directory contains the fixed bounded `events-v1.partial` and
+  protected no-clobber `run-manifest-v1.json`. The stopped-runtime parser reads
+  that private evidence in place and returns a bounded summary; neither file is
+  tracked or copied into source.
 - Stable live account state is beneath
   `stable\server\release\system\licenses`, `players`, and `teams`.
   CombatCanary uses the corresponding paths beneath
