@@ -1,151 +1,241 @@
-# Modern PSOBB Server
+# PSOBB Modernization Project
 
-This repository is the tracked control plane for a provenance-first,
-Tethealla-client-compatible PSO Blue Burst server. The playable runtime uses
-`newserv`; downloaded server releases, the SEGA client, player data, secrets,
-and backups live outside Git tracking under the repository-rooted,
-Git-ignored `C:\Github Repo's\PSOBB\PSOBB-Runtime` directory.
+PSOBBMP is a modernization, compatibility, and validation project for the supported PSOBB runtime.
 
-## Safety boundary
+The project develops a controlled modern runtime around a verified native baseline, with project-owned client modules, services, tooling, configuration, lifecycle management, recovery, testing, and acceptance infrastructure.
 
-- The retired public Tethealla server is not used.
-- Local acceptance binds only to `127.0.0.1` and opens no firewall/router port.
-- `newserv`'s HTTP API remains disabled.
-- Existing MariaDB data on this PC is not used or changed.
-- Client files and other copyrighted assets are never committed or
-  redistributed by this repository.
-- AshenbubsHD, the local widescreen reference, Luthee UI, item-box, and Echelon
-  imports are private evaluation material and never enter a public client,
-  launcher payload, release manifest, or download.
-- No broad Microsoft Defender exclusions are created.
+Development follows an evidence-driven model: every behavioral change is isolated, validated, measured, and required to preserve defined state and rollback guarantees before it can advance.
 
-## Operator workflow
+> **Status:** active development. Stable Native remains the accepted recovery baseline while graphics, gameplay, quality-of-life, and supporting systems progress through independent acceptance gates.
 
-```powershell
-pwsh -File .\scripts\Initialize-PSOBB.ps1
-pwsh -File .\scripts\Initialize-PSOBBClientRegistry.ps1
-pwsh -File .\scripts\Set-PSOBBRuntimeAcl.ps1
-pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Admin
-pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Admin -Provision
-pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Player
-pwsh -File .\scripts\New-PSOBBAccount.ps1 -Role Player -Provision
-pwsh -File .\scripts\Set-PSOBBAdminCredential.ps1 -Relaunch
-pwsh -File .\scripts\Set-PSOBBPlayerCredential.ps1 -Relaunch -RelaunchChannel LocalLab
-pwsh -File .\scripts\Set-PSOBBRememberedLogin.ps1 -Mode Enable -Confirm:$false
-pwsh -File .\scripts\Reset-PSOBBClientRuntime.ps1 -Renderer Native
-pwsh -File .\scripts\Start-PSOBB.ps1
-pwsh -File .\scripts\Start-PSOBBClient.ps1
-pwsh -File .\scripts\Test-PSOBB.ps1 -Suite Baseline
-pwsh -File .\scripts\Stop-PSOBB.ps1
-pwsh -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -Profile baseline -Confirm:$false
-pwsh -File .\scripts\Backup-PSOBB.ps1
-pwsh -File .\scripts\Test-PSOBBRestoreDrill.ps1
+## Project goals
+
+PSOBB is designed around four principles:
+
+**Preserve compatibility.**
+Existing game behavior, actions, state formats, and core mechanics remain the foundation unless a change is explicitly developed and accepted.
+
+**Modernize incrementally.**
+Graphics, interface, gameplay, input, services, and quality-of-life improvements advance as small independently verifiable features.
+
+**Fail safely.**
+Client-sensitive changes require exact identity, expected state, bounded ownership, deterministic rollback, and an inert failure path.
+
+**Prove behavior.**
+Build success alone does not constitute acceptance. Runtime behavior, persistence, lifecycle integrity, recovery, and applicable performance characteristics must also pass their defined gates.
+
+## Current state
+
+The implementation ledger is the authoritative record of accepted, rejected, pending, and rolled-back development checkpoints.
+
+| Area                     | State                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stable Native**        | Accepted recovery baseline with verified gameplay, save, restart, relog, bank, and character-state behavior                                        |
+| **CombatCanary**         | Materialized isolated development environment with Native gameplay, restart/relog, state verification, and sealed-state restoration accepted       |
+| **Baseline closure**     | Final post-canary Stable gameplay acceptance remains pending                                                                                       |
+| **Gameplay observation** | Bounded observation core, exact-client passive instrumentation, protected evidence capture, and stopped-runtime verification are source-ready      |
+| **Gameplay publication** | Transactional publication and exact rollback have passed source and fixture validation; live publication and observation acceptance remain pending |
+| **Modern gameplay**      | Observation infrastructure is established; action-state mapping and behavioral candidates remain gated                                             |
+| **Graphics**             | Multiple presentation and enhancement candidates have reached runtime validation; final acceptance remains pending                                 |
+| **Quality of life**      | Baseline capabilities are retained while additional candidates advance independently through acceptance                                            |
+| **Release readiness**    | Development acceptance is active; distributable release and deployment remain separately gated                                                     |
+
+## Architecture
+
+PSOBB separates stable recovery, experimental development, presentation, gameplay, services, and runtime orchestration into explicit ownership boundaries.
+
+### Stable Native
+
+The known-good recovery environment.
+
+Stable defines the compatibility baseline for client behavior, persistent state, lifecycle behavior, and rollback verification. Experimental work must preserve a valid path back to this state.
+
+### CombatCanary
+
+The isolated environment for gameplay-sensitive, protocol-sensitive, and persistent-state-sensitive development.
+
+Canary candidates operate against separately controlled state and must pass the applicable lifecycle, integrity, evidence, recovery, and gameplay gates before promotion.
+
+### Project components
+
+`PSOBB.ClientSafety`
+Owns exact-client validation and shared safety primitives for controlled native modification.
+
+`PSOBB.Gameplay`
+Owns gameplay observation and the developing modern gameplay layer, including action state, hotbar behavior, focused input, buffering, and native-action integration.
+
+`PSOBB.Enhancement`
+Owns presentation-side enhancement and display integration.
+
+`PSOBB.LargeAssets`
+Owns project-defined support for validated large-asset handling where required by accepted presentation work.
+
+`PSOBB.Launcher`
+Owns environment selection, runtime controls, validation entry points, and supported user-facing launch behavior.
+
+`PSOBB.AccountBroker`
+Provides the constrained account-management boundary for service integration.
+
+`PSOBB.Portal`
+Provides the application layer for future account and service-facing functionality without direct ownership of protected runtime state.
+
+These ownership boundaries are intentional. Runtime-sensitive responsibilities remain narrow so that validation, rollback, and failure behavior can be reasoned about independently.
+
+## Repository structure
+
+| Path          | Purpose                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| `src/`        | Project-owned application, client, gameplay, enhancement, and service source                   |
+| `tests/`      | Unit, integration, lifecycle, recovery, safety, and acceptance validation                      |
+| `scripts/`    | Bounded runtime orchestration, publication, recovery, evidence, and verification workflows     |
+| `config/`     | Versioned project configuration, capabilities, manifests, provenance records, and schemas      |
+| `patches/`    | Ordered source-level changes required by project-controlled runtime behavior                   |
+| `docs/`       | Architecture, development contracts, acceptance protocols, roadmap, and implementation records |
+| `PSOBB.slnx`  | Managed project solution                                                                       |
+| `global.json` | Repository toolchain contract                                                                  |
+
+Mutable runtime state, credentials, player data, private evidence, restricted assets, backups, and generated runtime artifacts remain outside version control.
+
+The repository contains the complete project-owned source and engineering contracts required to develop, validate, and reproduce PSOBB changes.
+
+## Development model
+
+A candidate normally progresses through:
+
+```text
+design
+  ↓
+source implementation
+  ↓
+deterministic build
+  ↓
+static and unit verification
+  ↓
+isolated publication
+  ↓
+runtime acceptance
+  ↓
+state and lifecycle verification
+  ↓
+rollback proof
+  ↓
+promotion
 ```
 
-The Phase 0 CombatCanary implementation through `96bcddc` has passed its
-source-only gate. That gate published and verified only the immutable canary
-server artifact; it did not select a playable server, create the canary clients
-or bindings, or materialize mutable canary state. The canonical runtime-marker
-migration, a current real restore drill, CombatCanary materialization, and both
-five-minute Twills smokes have not run. Follow the
-gated sequence in [Operations](docs/OPERATIONS.md), the
-[combat acceptance protocol](docs/COMBAT-ACCEPTANCE.md), and the
-[canary build contract](docs/COMBAT-CANARY-BUILD.md). The build workflow can
-restore a prior release when replacement publication fails, but it has no
-post-success server release-selection or rollback command.
+A later stage cannot compensate for failure at an earlier one.
 
-Prepare and validate the separately staged D3D11 graphics canary without
-replacing a running stable client:
+Runtime-sensitive client changes additionally require:
 
-```powershell
-pwsh -File .\scripts\Reset-PSOBBClientRuntime.ps1 -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
-pwsh -File .\scripts\Test-PSOBBClientGraphics.ps1 -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
-pwsh -File .\scripts\Start-PSOBBClient.ps1 -Channel Canary -WindowMode Borderless
-pwsh -File .\scripts\Start-PSOBBClient.ps1 -Channel Canary -WindowMode Resizable
-pwsh -File .\scripts\Start-PSOBBSession.ps1 -Channel LocalLab -WindowMode Borderless -PreserveForeground
-```
+* exact supported executable identity;
+* expected original state;
+* exclusive mutation ownership;
+* bounded memory and execution behavior;
+* deterministic removal or rollback;
+* fail-closed behavior on identity or state mismatch; and
+* evidence sufficient to distinguish observed behavior from assumption.
 
-The approved Ultra canary uses the exact x86 dgVoodoo D3D8 wrapper with D3D11
-feature level 11. It renders the unmodified client's 4:3 scene at 3840x2880,
-then uses Lanczos-3 to present it inside the 2560x1600 desktop canvas without
-stretching. Pillarboxing is expected. The profile preserves point-sampled UI
-textures, applies 16x anisotropic filtering only where appropriate, keeps
-mipmaps application-driven, disables forced bilinear 2D scaling and redundant
-MSAA, and disables the dgVoodoo watermark. `Borderless` fills the desktop;
-`Resizable` starts with a movable, captioned 1600x1200 client area.
-Add `-PreserveForeground` to a client or session start to make a best-effort
-launch that keeps the most recently selected non-game application focused. The
-launcher exposes the same opt-in behavior as **Try to keep current app focused**.
-Activating PSOBB is still required for normal keyboard and mouse gameplay.
+Real-time gameplay paths are designed to remain bounded and predictable. Persistent state changes require explicit validation before promotion.
 
-Supersampling improves geometry and edge clarity but cannot manufacture detail
-missing from the original low-resolution HUD, font, or texture assets. The
-private LocalLab may import the separately acquired widescreen reference for
-black-box evaluation, but that unlicensed binary is never part of a public or
-distributable runtime. Public 16:10 camera and HUD expansion remains gated on a
-licensed, project-owned patch.
+## Acceptance model
 
-The scripts default to the exact Git-ignored `PSOBB-Runtime` directory at the
-repository root. Override it with the `PSOBB_RUNTIME_ROOT` environment variable
-only when testing an isolated copy on a local volume. Other runtime roots
-inside the repository and all UNC/network roots are rejected. See
-[Project layout](docs/PROJECT-LAYOUT.md) for the canonical local organization.
-Passwords are not printed. Bootstrap credentials begin in user-DPAPI-protected
-files outside Git, and newserv's required BB license copy is protected by a
-narrow filesystem ACL. After `Set-PSOBBPlayerCredential.ps1` successfully
-verifies an unprivileged rotation, it retires the live player DPAPI copy: the
-operator must remember or independently store the new password and enter it
-manually. Protected transaction/state backups remain sensitive rollback data.
+PSOBB distinguishes implementation from acceptance.
 
-`Set-PSOBBAdminCredential.ps1 -Relaunch` securely prompts for a custom admin
-username and a 1-16-character password (12-16 recommended), closes
-script-managed processes normally, backs up and rotates the existing root
-license, clears stale cached login fields, verifies the baseline, and opens the
-client for one manual credential entry. Normal start, stop, and graphics-capture
-workflows preserve the selected native login policy without reading the cached
-username or password.
+A feature may be:
 
-Remembered login is local and opt-in. `Set-PSOBBRememberedLogin.ps1 -Mode
-Enable` sets the native `ACCOUNT_CHECK=1` option; enter the credentials once in
-PSOBB and later launches can reuse them. `-Mode Disable` clears the cached
-fields. Treat the current Windows account as trusted: the legacy client stores a
-locally recoverable password value in the user registry, so never export or
-share that registry key. Registry initialization and profile launch back up
-only the `GRAPHICCTRL` value as protected JSON; they never export the whole key
-or read the remembered account and password values.
+**Planned**
+The behavior and boundaries are defined.
 
-`Set-PSOBBPlayerCredential.ps1` provides the corresponding authorization-test
-workflow for exactly one metadata-bound `Player` account with `Flags=0`. It
-refuses root flags, duplicate account IDs/usernames, unsafe ACLs, and username
-changes after username-bound save data exists. Secrets cannot be passed as
-arguments, displayed, copied to the clipboard, or written to a replacement
-DPAPI file. A later rotation securely prompts for the current password because
-the prior new password was intentionally retained only by newserv.
+**Source-ready**
+The implementation has passed its source-level requirements.
 
-`Start-PSOBB.ps1` uses a hidden local supervisor that owns newserv's redirected
-shell input. `Stop-PSOBB.ps1` sends the actual newserv `exit` command and does
-not describe console-window closure as a graceful shutdown.
+**Runtime-validated**
+The candidate has executed successfully under its defined isolated conditions.
 
-Fresh initialization selects the empty `baseline` client-patch profile, the
-accepted Stable Native recovery target. The grouped `stable-qol` profile is a
-compatibility reference, not an accepted operational profile; its patches are
-evaluated one at a time through CombatCanary. Change profiles only while both
-server environments and all clients are stopped.
+**Accepted**
+All required behavior, state, lifecycle, recovery, evidence, and regression gates have passed.
 
-See [Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md),
-[QoL matrix](docs/QOL-MATRIX.md), and [Production gates](docs/PRODUCTION-GATES.md).
-The user-owned AshenbubsHD v1.02 texture experiment has a separate
-[local-lab-only compatibility and rights gate](docs/ASHENBUBS-HD-LOCAL-LAB.md);
-the asset materializer only stages it. A separate transactional activation can
-create the exact no-CAS `lab-widescreen-hd-16x10` LocalLab candidate with the
-project-owned large-asset patch, full per-file verification, and exact rollback.
-Private assets and composed manifests remain outside Git and public releases.
-The separately acquired Luthee UI, item-box, and Echelon candidates use the
-[private local visual-asset workflow](docs/LOCAL-VISUAL-ASSETS.md), which
-enforces immutable source hashes, destination collision ownership, ordered
-activation, and exact rollback.
-The launcher can select this private HD identity only after activation and its
-**Verify / repair** action runs activation verification without rebuilding or
-reinstalling assets. Clean LocalLab materialization refuses an active private
-overlay until explicit rollback. CAS profiles remain evidence-only and are not
-eligible in the GUI, command line, or desktop shortcuts.
+**Rejected**
+The candidate failed a required gate and cannot advance in its tested form.
+
+Accepted status applies only to the exact capability and evidence defined by that checkpoint.
+
+## Roadmap
+
+### Phase 0 — Trusted foundation
+
+Complete the Stable and CombatCanary acceptance foundation, recovery guarantees, state isolation, and final baseline closure.
+
+### Phase 1 — Quality of life
+
+Evaluate existing quality-of-life capabilities individually and promote only those that preserve the accepted baseline.
+
+### Phase 2 — Modern hotbar
+
+Develop the project-owned multi-page hotbar and its native-backed action, persistence, capability, and display contracts.
+
+### Phase 3 — Modern controls
+
+Introduce modernized combat interaction while continuing to use validated native actions and game state.
+
+Candidates include held physical actions, controlled buffering, quick-use behavior, recovery tuning, movement continuity, target handling, and camera refinement.
+
+### Later phases
+
+Expand validated presentation, diagnostics, item visibility, controller support, state inspection, and other independently gated improvements.
+
+Large changes remain decomposed into individually measurable and reversible capabilities.
+
+## Engineering principles
+
+The repository favors small complete vertical slices over speculative frameworks.
+
+Project contracts are explicit, versioned, bounded, and fail closed where ambiguity could affect runtime integrity.
+
+Native client work uses narrow ownership boundaries and fixed interfaces. Runtime-critical paths avoid unbounded allocation, blocking operations, filesystem access, inter-process communication, and uncontrolled diagnostics.
+
+Persistent mutations use transactional workflows where applicable. Recovery procedures are treated as first-class project behavior.
+
+Optimization follows measurement. A more complex implementation must demonstrate a meaningful benefit before replacing a simpler accepted design.
+
+## Reproducibility and provenance
+
+Inputs that affect reproducibility are bound through source-controlled provenance records.
+
+These contracts can include:
+
+* exact source identity;
+* immutable content hashes;
+* component and artifact inventories;
+* compatibility boundaries;
+* build identity;
+* validation state;
+* distribution classification; and
+* rollback target.
+
+Generated binaries, runtime state, credentials, private evidence, and restricted material are excluded from source control.
+
+This keeps the repository reproducible without conflating source history with mutable runtime state.
+
+## Documentation
+
+| Document                                                             | Purpose                                                  |
+| -------------------------------------------------------------------- | -------------------------------------------------------- |
+| [Architecture](docs/ARCHITECTURE.md)                                 | Structural environments, ownership, and trust boundaries |
+| [Operations](docs/OPERATIONS.md)                                     | Supported runtime and maintenance workflows              |
+| [Combat modernization](docs/COMBAT-MODERNIZATION.md)                 | Gameplay direction and ordered development phases        |
+| [Combat acceptance](docs/COMBAT-ACCEPTANCE.md)                       | Runtime acceptance requirements                          |
+| [Combat implementation ledger](docs/COMBAT-IMPLEMENTATION-LEDGER.md) | Authoritative checkpoint history                         |
+| [CombatCanary build](docs/COMBAT-CANARY-BUILD.md)                    | Reproducible isolated-build contract                     |
+| [Graphics acceptance](docs/GRAPHICS-ACCEPTANCE.md)                   | Presentation and visual acceptance model                 |
+| [QoL matrix](docs/QOL-MATRIX.md)                                     | Quality-of-life candidate tracking                       |
+| [Production gates](docs/PRODUCTION-GATES.md)                         | Requirements preceding deployment or distribution        |
+
+Where status differs between descriptive documentation and the implementation ledger, the latest accepted ledger checkpoint governs.
+
+## Repository boundary
+
+This repository tracks project-owned source, configuration, schemas, tests, documentation, orchestration, patches, and reproducibility contracts.
+
+It intentionally excludes mutable runtime state, credentials, private user data, backups, captures, restricted assets, and other material that does not belong in source control.
+
+Availability of source in this repository does not by itself grant redistribution rights. Project licensing and distribution terms should be treated according to the repository's explicit licensing files and release policy.
