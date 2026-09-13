@@ -1,457 +1,985 @@
-# Local Operations
+# Operations
 
-1. Run `Initialize-PSOBB.ps1` to verify archives, preserve the clean base,
-   generate the loopback configuration, synchronize BB data, and bind the
-   tracked empty `baseline` client-patch profile to the installation record.
-2. Run `Initialize-PSOBBClientRegistry.ps1`; it installs only the required
-   per-user game values and disables the archive's obsolete web links.
-3. Harden the sensitive game-state, secrets, backup, log, private-asset, and
-   graphics-evidence directories with `Set-PSOBBRuntimeAcl.ps1`. The log and
-   evidence roots are included because server output and captures can contain
-   operational or player-related details even when credential-dumping commands
-   are never used. Then run the read-only
-   `Test-PSOBBRuntimeAcl.ps1`; it recursively checks the setter's shared target
-   inventory, rejects reparse points, and requires a protected, canonical DACL
-   containing exactly current-user, SYSTEM, and Administrators FullControl
-   rules on every item. It reads ACL metadata and paths only, never file
-   contents. Re-run the setter and verifier after creating or restoring runtime
-   state because newly created children can inherit their parent DACL.
+PSOBB operations are performed through project-owned lifecycle, validation, publication, recovery, and evidence workflows.
 
-   The 2026-07-20 source-only gate did not run the canonical runtime-marker
-   migration. If the normal setter reports the one recognized inherited legacy
-   marker DACL, preview and then apply only this explicit migration:
+This document defines the supported operational procedures for the development runtime. It is intentionally repository-relative and avoids workstation-specific paths, historical migration detail, and implementation-specific external tooling.
 
-   ```powershell
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
-     -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
-     -MigrateLegacyRuntimeMarkerAcl `
-     -WhatIf
+For structural boundaries, see [Architecture](ARCHITECTURE.md).
+For logical filesystem ownership, see [Project layout](PROJECT-LAYOUT.md).
+For authoritative development checkpoints, see [Combat implementation ledger](COMBAT-IMPLEMENTATION-LEDGER.md).
 
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
-     -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
-     -MigrateLegacyRuntimeMarkerAcl `
-     -Confirm:$false
-   ```
+## Operational principles
 
-   Migration accepts no other ACL shape. It holds the exact native file
-   identity and bytes, revalidates owner, group, DACL, process/listener state,
-   and writes only the DACL. Failure rollback is attempted only while the
-   captured post-write identity and protected DACL still match exactly. Unknown
-   or concurrently changed state remains untouched for investigation.
+All supported operations follow the same rules.
 
-   After migration, apply the complete target inventory and verify it:
+**Verify before mutation.**
+Validate the target runtime, environment, component identities, and applicable contracts before changing state.
 
-   ```powershell
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Confirm:$false
-   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBRuntimeAcl.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime"
-   ```
+**Stop before structural mutation.**
+Publication, restore, state reset, profile changes, and other structural operations require the affected runtime to be stopped unless the workflow explicitly defines a live-safe operation.
 
-   The current target inventory includes Stable licenses, players, teams,
-   secrets, backups, and logs; graphics evidence; local asset archives; staged
-   asset overlays; Ashenbubs and supplemental visual-asset activation state;
-   and any existing CombatCanary licenses, players, teams, secrets, backups,
-   logs, snapshots, control records, and builds. Server configuration and future
-   portal state are not silently treated as covered; add them to the shared
-   policy only when those stores deliberately enter this ACL boundary.
-4. Generate and provision `Admin` and `Player` credentials with the two-step
-   `New-PSOBBAccount.ps1` commands in the root README. Passwords are not
-   printed or placed in process arguments. Never run or capture newserv's
-   `list-accounts` command: the pinned stable release and current source both
-   include plaintext BB passwords in that command's output. Project helpers
-   verify account/license files without invoking it.
-   Before first character creation, an operator may run
-   `Set-PSOBBAdminCredential.ps1 -Relaunch` to choose a custom root username and
-   1–16-character ASCII alphanumeric password (12–16 recommended). The helper
-   blocks username changes after username-bound player data exists;
-   password-only rotation remains available.
-   Use `Set-PSOBBPlayerCredential.ps1` for the separate authorization-negative
-   account. It targets only the metadata-bound `Player` license with `Flags=0`,
-   rejects root/admin or ambiguous targets, and prompts for all secrets without
-   accepting credential arguments. After a verified rotation it removes the
-   stale live `player.credential.clixml` rather than persisting the new password
-   in DPAPI. Remember or independently store that password and type it manually;
-   future rotations securely prompt for the current password. The protected
-   transaction and full-state backups contain sensitive rollback material and
-   remain subject to the runtime ACL and retention policy.
-   The WPF launcher delegates every server/client action to the same lifecycle
-   scripts and never owns newserv or `Psobb.exe` directly. Before credential
-   rotation, use **Stop all** or let the approved `-Relaunch` helper perform its
-   guarded stop, mutation, and restart sequence; do not terminate either
-   process from Task Manager as a normal workflow.
-   Select **Try to keep current app focused**, or pass `-PreserveForeground` to
-   `Start-PSOBBClient.ps1` or `Start-PSOBBSession.ps1`, when another application
-   should remain foreground during startup. This is a best-effort Windows focus
-   request: the lifecycle tracks the latest non-game foreground window and never
-   stops a healthy client merely because focus restoration is unavailable. The
-   client remains visible, responsive, and connected; click it normally when
-   login or gameplay input is needed. Screenshot and RenderDoc evidence flows
-   intentionally continue to require foreground access.
-   The historic client embeds `requireAdministrator`; credential relaunch uses
-   a process-local Windows `RunAsInvoker` compatibility fix. This preserves the
-   immutable client, leaves UAC enabled, and creates no persistent AppCompat
-   registry setting.
-   Remembered login is a local opt-in. Run
-   `Set-PSOBBRememberedLogin.ps1 -Mode Enable` to set the native
-   `ACCOUNT_CHECK=1` option, then enter the credentials once in PSOBB. Normal
-   start, stop, graphics-profile, and RenderDoc paths validate the registry
-   types but never read, export, log, or clear `ACCOUNT` and `PASSWORD`.
-   Credential rotation clears a
-   stale cache while preserving the selected policy; `-Mode Disable` explicitly
-   disables and clears it. Pioneer 2 community guidance confirms the flag and
-   warns that the saved password becomes a sensitive `REG_BINARY` value:
-   [save-login flag](https://www.pioneer2.net/community/threads/another-way-to-save-id-and-pass-or-fix-that-cannot-change-resolution.1997/#post-20151),
-   [registry security](https://www.pioneer2.net/community/threads/script-for-switching-accounts.511/).
-   Client-registry initialization and graphics-profile launch back up only the
-   36-byte `GRAPHICCTRL` value as ACL-protected JSON beneath the runtime backup
-   directory. Whole-key exports are forbidden: an existing `ACCOUNT`,
-   `PASSWORD`, and `ACCOUNT_CHECK` remain byte-for-byte untouched. Each launch
-   verifies the profile's nine DWORD values and SHA-256 before writing, reads
-   back the exact binary value, and restores its value-only backup if startup
-   fails. Launching the native rollback profile applies that profile's own
-   `GRAPHICCTRL` contract instead of relying on stale machine-global state.
-   Credential backup ACL changes construct a DACL-only security descriptor;
-   they never request SACL access or `SeSecurityPrivilege` from the operator.
-5. Rebuild a disposable native client with
-   `Reset-PSOBBClientRuntime.ps1 -Renderer Native`. Reset verifies the complete
-   immutable client inventory, not only `Psobb.exe`.
-6. Run `Start-PSOBB.ps1` and `Test-PSOBB.ps1 -Suite Baseline`; confirm the only
-   listeners are loopback TCP 11000, 12000, and 12001.
-7. Stable Native is the accepted recovery baseline. Its 2026-07-19
-   loopback-only acceptance used only slot-0 Twills, a FOnewearl, and completed
-   a five-minute Forest/manual-combat scenario, read-only bank inspection,
-   graceful restart, slot-0 relog, semantic verification, and graceful
-   shutdown.
-8. Run `Stop-PSOBB.ps1` so the supervisor sends newserv's shell `exit`; then run
-   `Backup-PSOBB.ps1` and `Test-PSOBBRestoreDrill.ps1`.
-9. Back up state before any server, client, map, quest, or save-format change.
+**Use project lifecycle commands.**
+Start and stop environments through project tooling so process identity, ownership, receipts, and graceful shutdown behavior remain verifiable.
 
-## Restore-drill quarantine
+**Keep environments explicit.**
+Stable and CombatCanary are separate runtime authorities. An operation must never infer permission to cross their state boundaries.
 
-The 2026-07-20 canonical Stable restore drill passed against the protected
-baseline backup. Its schema-v3 receipt is
-`backups/restore-drill-20260720T105025429Z/drill-result.json`. Its bounded
-identity and termination fields include `approvedServerExecutableSha256`,
-`serverExecutableSha256`, `processId`, `processStartTimeFileTimeUtc`,
-`processImageVerified`, `quarantineReason`, `quarantinePublicationState`, and
-`quarantineNextAction`.
+**Preview consequential operations.**
+When a command supports preview semantics, inspect the proposed mutation before applying it.
 
-If process exit or either bounded output reader cannot be confirmed, preserve
-the complete protected drill root. The primary record is
-`.restore-drill-quarantine.json`; if primary publication fails, the fallback is
-`.restore-drill-quarantine-incomplete.json`. If neither record can be confirmed,
-the protected `.work` tree and result remain the cleanup hold. The only accepted
-reasons are `exit-unconfirmed` and `output-reader-unconfirmed`.
+**Back up before persistent change.**
+Persistent-state, runtime, profile, or compatibility changes require a current recoverable state where the applicable contract calls for one.
 
-Do not remove a quarantine merely because a timeout elapsed. First confirm that
-the recorded PID with its exact start-time identity and executable digest is
-absent and that ports 11000, 12000, and 12001 have no listeners. There is not yet
-an authenticated project command that releases a quarantine after those checks;
-stop for an operator review instead of deleting the tree manually or changing
-its ACL.
+**Treat unknown state as a stop condition.**
+Unexpected processes, files, identities, listeners, bindings, or transaction remnants are investigated rather than overwritten.
 
-## Combat canary materialization runbook
+**Keep secrets private.**
+Credentials, signing material, private evidence, and protected recovery data remain outside source history and command-line arguments.
 
-The implementation range from `6f5e78b` through `96bcddc`, inclusive, passed a
-source-only gate. The current real Stable restore drill passed on 2026-07-20.
-The canonical runtime-marker migration, CombatCanary materialization, and both
-five-minute Twills smokes have not run. Do not start this sequence until the
-marker and restore-drill prerequisites pass, the Git tree is clean, every
-PSOBB/newserv process is
-stopped, ports 11000, 12000, and 12001 are free, and no `P:` build mapping
-exists. Stable and CombatCanary must never run concurrently.
+## Command context
 
-Establish explicit tracked identities and verify the already built server
-artifact. A new publication, if deliberately required, follows
-[the separate build contract](COMBAT-CANARY-BUILD.md).
+Run project scripts from the repository root unless a workflow explicitly states otherwise.
 
-```powershell
-$runtimeRoot = "C:\Github Repo's\PSOBB\PSOBB-Runtime"
-$buildContractSha256 = (Get-FileHash `
-  -LiteralPath .\config\combat-canary-build.json `
-  -Algorithm SHA256).Hash.ToLowerInvariant()
-$twillsContractSha256 = (Get-FileHash `
-  -LiteralPath .\config\twills-fonewearl-build.json `
-  -Algorithm SHA256).Hash.ToLowerInvariant()
-$trust = Get-Content -Raw -LiteralPath .\config\release-trust.json |
-  ConvertFrom-Json
-$activeTrustKey = @($trust.keys | Where-Object {
-    $_.id -ceq $trust.activeKeyId
-  })
-if ($activeTrustKey.Count -ne 1) {
-  throw 'The tracked active acceptance key is not unique'
-}
-$signingPublicKeySpkiSha256 = [string]$activeTrustKey[0].spkiSha256
+The canonical runtime is the repository-relative:
 
-$buildVerification = & .\scripts\Build-PSOBBCombatCanaryServer.ps1 `
-  -Action Verify `
-  -RuntimeRoot $runtimeRoot
-if (-not $buildVerification.Verified) {
-  throw 'CombatCanary server verification did not pass'
-}
+```text
+PSOBB-Runtime/
 ```
 
-Create one fresh Stable backup, then create and verify a signed Twills-only
-snapshot. Keep the returned object in the same trusted PowerShell session; do
-not substitute an account-derived path or copy individual state files.
+Most project commands resolve that runtime automatically.
 
-```powershell
-$stableBackup = & .\scripts\Backup-PSOBB.ps1 `
-  -RuntimeRoot $runtimeRoot
-$snapshot = & .\scripts\New-PSOBBCombatCanarySnapshot.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -StableBackupPath $stableBackup.BackupPath `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
-  -Confirm:$false
+`-RuntimeRoot` exists for explicitly supported isolated or test contexts. Routine canonical operation should not depend on hard-coded absolute paths.
 
-& .\scripts\Test-PSOBBCombatCanary.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -Target Snapshot `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
+The effective runtime must always pass the project's runtime-marker, containment, and identity checks before mutation.
+
+## Operational authority
+
+The primary operational surfaces are:
+
+| Area                         | Primary commands                                                    |
+| ---------------------------- | ------------------------------------------------------------------- |
+| Initialization               | `Initialize-PSOBB.ps1`                                              |
+| Client integration           | `Initialize-PSOBBClientRegistry.ps1`                                |
+| Runtime protection           | `Set-PSOBBRuntimeAcl.ps1`, `Test-PSOBBRuntimeAcl.ps1`               |
+| Provenance validation        | `Test-PSOBBSupplyChain.ps1`                                         |
+| Accounts                     | `New-PSOBBAccount.ps1`, credential rotation helpers                 |
+| Stable lifecycle             | `Start-PSOBBSession.ps1`, `Stop-PSOBBSession.ps1`, `Test-PSOBB.ps1` |
+| Client reconstruction        | `Reset-PSOBBClientRuntime.ps1`                                      |
+| Backup                       | `Backup-PSOBB.ps1`                                                  |
+| Restore                      | `Restore-PSOBB.ps1`                                                 |
+| Restore testing              | `Test-PSOBBRestoreDrill.ps1`                                        |
+| CombatCanary verification    | `Test-PSOBBCombatCanary.ps1`                                        |
+| CombatCanary build           | `Build-PSOBBCombatCanaryServer.ps1`                                 |
+| CombatCanary materialization | `Initialize-PSOBBCombatCanary.ps1`                                  |
+| CombatCanary snapshot        | `New-PSOBBCombatCanarySnapshot.ps1`                                 |
+| CombatCanary reset           | `Reset-PSOBBCombatCanaryState.ps1`                                  |
+| Gameplay publication         | `Set-PSOBBCombatCanaryGameplay.ps1`                                 |
+| Gameplay evidence            | `Get-PSOBBGameplayObservationEvidence.ps1`                          |
+| Graphics validation          | `Test-PSOBBGraphicsProfiles.ps1`, `Test-PSOBBGraphicsArtifacts.ps1` |
+| Graphics evidence            | `Get-PSOBBGraphicsEvidenceStatus.ps1`                               |
+| LocalLab                     | `New-PSOBBGraphicsLabRuntime.ps1`                                   |
+| Profile selection            | `Set-PSOBBClientPatchProfile.ps1`                                   |
+| Cleanup                      | Project-owned bounded cleanup commands                              |
+
+The scripts themselves remain authoritative for exact parameter validation.
+
+## Current operational state
+
+The operational model has advanced beyond initial canary construction.
+
+| Area                                    | Current state                                                   |
+| --------------------------------------- | --------------------------------------------------------------- |
+| **Stable Native**                       | Accepted recovery baseline                                      |
+| **Stable backup/restore**               | Backup and restore-drill workflows established and accepted     |
+| **CombatCanary**                        | Materialized and isolated                                       |
+| **CombatCanary Native gameplay**        | Accepted under its defined isolated scenario                    |
+| **CombatCanary restart/relog**          | Accepted                                                        |
+| **CombatCanary state reset**            | Exact sealed-state restoration accepted                         |
+| **Gameplay observation implementation** | Source-ready                                                    |
+| **Gameplay overlay publication**        | Transactional source and fixture validation passed              |
+| **Canonical live gameplay overlay**     | Pending                                                         |
+| **Canonical observation evidence**      | Pending                                                         |
+| **Graphics**                            | Multiple candidates runtime-validated; final acceptance pending |
+| **Release**                             | Separately gated and not authorized by development acceptance   |
+
+The latest applicable entry in the implementation ledger governs if this summary ever becomes stale.
+
+## Initial runtime materialization
+
+Initial setup begins only after the required immutable project inputs are present under the runtime boundary.
+
+First validate the tracked provenance and compatibility contracts:
+
+```text
+.\scripts\Test-PSOBBSupplyChain.ps1
 ```
 
-Preview first initialization, apply it only after reviewing the exact target,
-then perform complete installed readback:
+Initialize the canonical runtime:
 
-```powershell
-& .\scripts\Initialize-PSOBBCombatCanary.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedBuildContractSha256 $buildContractSha256 `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
+```text
+.\scripts\Initialize-PSOBB.ps1
+```
+
+Initialization is responsible for validating approved immutable inputs, creating the runtime structure, establishing installation identity, preparing the Stable runtime, and binding the baseline profile.
+
+Do not manually populate generated runtime directories as a substitute for initialization.
+
+### Client integration
+
+Initialize the supported client-side integration when required:
+
+```text
+.\scripts\Initialize-PSOBBClientRegistry.ps1
+```
+
+This is a project-owned initialization step.
+
+Its implementation details are not part of the project layout contract and must not become a source of manually maintained runtime authority.
+
+## Runtime protection
+
+Protected runtime state includes credentials, mutable gameplay state, backups, logs, evidence, snapshots, private evaluation material, and other sensitive runtime data identified by the current policy.
+
+Apply the project runtime-protection policy:
+
+```text
+.\scripts\Set-PSOBBRuntimeAcl.ps1 -Confirm:$false
+```
+
+Verify it independently:
+
+```text
+.\scripts\Test-PSOBBRuntimeAcl.ps1
+```
+
+Protection should be reverified after workflows that create new protected runtime state, including:
+
+* initialization;
+* backup;
+* restore;
+* snapshot creation;
+* canary materialization;
+* evidence generation; and
+* private runtime activation.
+
+A protection failure blocks further acceptance-sensitive operation.
+
+Do not broaden permissions simply to make a failing workflow succeed.
+
+## Account provisioning
+
+Account creation uses the project-owned provisioning workflow.
+
+Create the account metadata first:
+
+```text
+.\scripts\New-PSOBBAccount.ps1 -Role Admin
+.\scripts\New-PSOBBAccount.ps1 -Role Player
+```
+
+Provision each intended runtime account explicitly:
+
+```text
+.\scripts\New-PSOBBAccount.ps1 -Role Admin -Provision
+.\scripts\New-PSOBBAccount.ps1 -Role Player -Provision
+```
+
+Administrative and ordinary-player roles remain distinct.
+
+Credentials must not be:
+
+* passed as ordinary command arguments;
+* written into source-controlled configuration;
+* emitted into logs;
+* included in evidence summaries; or
+* copied into documentation.
+
+Use the project credential-rotation commands for later changes:
+
+```text
+.\scripts\Set-PSOBBAdminCredential.ps1
+.\scripts\Set-PSOBBPlayerCredential.ps1
+```
+
+Credential rotation must use the command's protected interactive workflow.
+
+A credential operation that cannot prove its intended account identity must fail without mutation.
+
+## Stable Native preparation
+
+Stable Native is the accepted recovery authority.
+
+Reconstruct the playable Stable client from its immutable base when required:
+
+```text
+.\scripts\Reset-PSOBBClientRuntime.ps1 -Renderer Native
+```
+
+Stable reconstruction must verify the complete expected client inventory rather than trusting only a primary executable.
+
+The accepted baseline profile remains the recovery profile.
+
+Select it explicitly when recovery requires profile normalization:
+
+```text
+.\scripts\Set-PSOBBClientPatchProfile.ps1 -Profile baseline -Confirm:$false
+```
+
+Profile changes require the affected runtime to be stopped.
+
+## Stable lifecycle
+
+Use the combined session command for ordinary Stable operation:
+
+```text
+.\scripts\Start-PSOBBSession.ps1 `
+  -ServerEnvironment Stable `
+  -Channel Native `
+  -WindowMode ProfileDefault
+```
+
+The session workflow:
+
+1. resolves and validates the canonical runtime;
+2. rejects ambiguous existing runtime processes;
+3. starts the Stable service environment if needed;
+4. verifies readiness;
+5. runs the Stable baseline verification;
+6. launches the exact selected client; and
+7. records bounded lifecycle information.
+
+Validate Stable independently when required:
+
+```text
+.\scripts\Test-PSOBB.ps1 -Suite Baseline
+```
+
+Stop the complete Stable session through the lifecycle controller:
+
+```text
+.\scripts\Stop-PSOBBSession.ps1 `
+  -ServerEnvironment Stable `
+  -Target All
+```
+
+Graceful shutdown is the normal path.
+
+Force options exist as recovery mechanisms and should be used only after the corresponding graceful path cannot complete and the remaining process identity is known.
+
+## Environment switching
+
+Stable and CombatCanary must not operate concurrently.
+
+Before switching environments:
+
+1. stop the active session through the project lifecycle command;
+2. confirm the stop completed successfully;
+3. validate the target environment; and
+4. start the new environment explicitly.
+
+The lifecycle controller performs a global process census and rejects ambiguous or cross-environment ownership.
+
+Do not manually terminate a process and assume the environment is now clean.
+
+If the lifecycle controller reports unknown or uninspectable state, investigate that state before continuing.
+
+## Stable backup
+
+Create a Stable backup before any operation capable of changing persistent state or recovery authority when the applicable acceptance contract requires one.
+
+```text
+$backup = .\scripts\Backup-PSOBB.ps1
+```
+
+A backup is valid only when its project manifest and protected contents pass verification.
+
+Do not edit a backup in place.
+
+Do not use individual files extracted from a backup as an informal replacement for the restore workflow.
+
+## Restore drill
+
+A backup should periodically prove that it can be restored through the isolated restore-drill workflow.
+
+```text
+.\scripts\Test-PSOBBRestoreDrill.ps1 `
+  -BackupPath $backup.BackupPath
+```
+
+The restore drill operates outside live Stable state.
+
+A passing drill demonstrates recoverability under the drill's defined contract. It does not authorize unrelated runtime changes.
+
+### Restore-drill quarantine
+
+If a restore drill cannot prove process termination or cannot confirm all bounded output readers reached a terminal state, the drill preserves its working root as quarantine.
+
+A quarantined drill must not be manually deleted merely because a timeout has elapsed.
+
+Preserve it until the recorded process identity can be proven absent and the reserved runtime listener set is confirmed clear.
+
+Unknown or conflicting process identity remains a stop condition.
+
+The quarantine exists specifically to avoid destroying evidence while process ownership is uncertain.
+
+## Stable restore
+
+A real restore is consequential and requires the Stable runtime to be stopped.
+
+Validate the candidate backup first:
+
+```text
+.\scripts\Restore-PSOBB.ps1 `
+  -BackupPath <backup-path> `
+  -ValidateOnly
+```
+
+Preview the restore:
+
+```text
+.\scripts\Restore-PSOBB.ps1 `
+  -BackupPath <backup-path> `
   -WhatIf
-
-& .\scripts\Initialize-PSOBBCombatCanary.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedBuildContractSha256 $buildContractSha256 `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
-  -Confirm:$false
-
-& .\scripts\Test-PSOBBCombatCanary.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -Target Both `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedBuildContractSha256 $buildContractSha256 `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
 ```
 
-CombatCanary permits only its sealed Native client and profile-default window
-mode. Lifecycle startup may preserve another application's foreground focus;
-normal gameplay input still requires PSOBB to be focused.
+Apply only after the validation and preview match the intended target:
 
-```powershell
-& .\scripts\Start-PSOBBSession.ps1 `
-  -RuntimeRoot $runtimeRoot `
+```text
+.\scripts\Restore-PSOBB.ps1 `
+  -BackupPath <backup-path> `
+  -Confirm:$false
+```
+
+The restore workflow is transactional.
+
+It prepares recovery state before replacing live state and preserves enough information to compensate for an interrupted mutation where the current identity still permits safe compensation.
+
+After restore:
+
+```text
+.\scripts\Test-PSOBB.ps1 -Suite Baseline
+```
+
+A restore is complete only when its resulting Stable state passes the required verification.
+
+## CombatCanary
+
+CombatCanary is already materialized and is the isolated authority for gameplay-sensitive, protocol-sensitive, and persistent-state-sensitive development.
+
+Routine operation should validate the installed canary rather than recreating it.
+
+Verify its installed state:
+
+```text
+.\scripts\Test-PSOBBCombatCanary.ps1 -Target Installed
+```
+
+This verification checks the environment against the tracked build and installation contracts.
+
+A failed installed-state check blocks canary execution.
+
+## CombatCanary lifecycle
+
+Start the isolated Native canary:
+
+```text
+.\scripts\Start-PSOBBSession.ps1 `
   -ServerEnvironment CombatCanary `
   -Channel Native `
-  -WindowMode ProfileDefault `
-  -PreserveForeground
+  -WindowMode ProfileDefault
+```
 
-& .\scripts\Stop-PSOBBSession.ps1 `
-  -RuntimeRoot $runtimeRoot `
+Stop it through the same project lifecycle:
+
+```text
+.\scripts\Stop-PSOBBSession.ps1 `
   -ServerEnvironment CombatCanary `
   -Target All
 ```
 
-After a stateful isolated scenario, restore only from the same verified signed
-snapshot and repeat complete readback:
+CombatCanary owns its own:
 
-```powershell
-& .\scripts\Reset-PSOBBCombatCanaryState.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedBuildContractSha256 $buildContractSha256 `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256 `
-  -Confirm:$false
+* runtime;
+* account state;
+* character state;
+* shared gameplay state;
+* bindings;
+* backups;
+* snapshots;
+* logs;
+* secrets;
+* evidence; and
+* lifecycle records.
 
-& .\scripts\Test-PSOBBCombatCanary.ps1 `
-  -RuntimeRoot $runtimeRoot `
-  -Target Both `
-  -SnapshotPath $snapshot.SnapshotPath `
-  -ExpectedBuildContractSha256 $buildContractSha256 `
-  -ExpectedTwillsContractSha256 $twillsContractSha256 `
-  -ExpectedSigningPublicKeySpkiSha256 $signingPublicKeySpkiSha256
+Stable state must never be used as writable canary state.
+
+## CombatCanary build verification
+
+Rebuilding the isolated server artifact is a development operation, not a routine startup step.
+
+Verify the currently built artifact when required:
+
+```text
+.\scripts\Build-PSOBBCombatCanaryServer.ps1 -Action Verify
 ```
 
-Snapshot reset is not server-artifact rollback. Failed replacement publication
-automatically restores the immediately prior release, but there is no supported
-post-success CombatCanary server release-selection or rollback command.
+A build is not accepted merely because compilation succeeds.
 
-## Graphics canary
+Its deterministic build identity, source contract, artifact inventory, publication result, and rollback behavior must satisfy the separate build contract.
 
-The stable client remains Native as the accepted recovery baseline after the
-2026-07-19 loopback-only combat, bank, restart, relog, and shutdown acceptance.
-This does not accept a graphics canary or any Phase 1 QoL patch. A renderer can
-be prepared without touching the running stable client:
+See [CombatCanary build](COMBAT-CANARY-BUILD.md).
 
-```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Reset-PSOBBClientRuntime.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -Renderer DgVoodooD3D11 -GraphicsPreset Ultra3840x2880 -DefaultWindowMode Borderless -Confirm:$false
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-PSOBBClientGraphics.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -ExpectedRenderer DgVoodooD3D11 -ExpectedGraphicsPreset Ultra3840x2880 -ExpectedWindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -WindowMode Borderless
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-PSOBBClient.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Channel Canary -WindowMode Resizable
+## CombatCanary materialization
+
+`Initialize-PSOBBCombatCanary.ps1` is reserved for deliberate construction or reconstruction of the isolated canary environment.
+
+Routine operation should not repeatedly rematerialize a valid canary.
+
+Materialization requires:
+
+* a verified build artifact;
+* an accepted Stable-derived source state;
+* a current protected backup where required;
+* a valid sealed canary snapshot;
+* tracked contract identities;
+* no conflicting runtime processes;
+* no conflicting environment ownership; and
+* successful post-materialization readback.
+
+Preview the materialization before applying it.
+
+Do not substitute manually copied client, account, character, or server files for the transactional materialization workflow.
+
+## CombatCanary snapshots
+
+Create canary snapshots only through:
+
+```text
+.\scripts\New-PSOBBCombatCanarySnapshot.ps1
 ```
 
-The canary is rebuilt from the immutable 59NL base. It accepts only the locked
-x86 `D3D8.dll` and locked source `dgVoodoo.conf`, transforms exactly one
-approved configuration from that source, records the resulting config hash,
-rejects competing proxy DLLs, and snapshots any prior canary. The transform
-selects D3D11 feature level 11, 3840x2880 4:3 internal rendering, Lanczos-3
-presentation, 16x anisotropic filtering for non-point-sampled textures,
-application-driven mipmaps, no redundant MSAA, no forced bilinear 2D scaling,
-and no watermark.
+A snapshot is an exact sealed state authority.
 
-Borderless mode owns a 2560x1600 desktop canvas. The original client projection
-remains 4:3, so the 3840x2880 image is downsampled into an aspect-correct active
-area with side pillars. Resizable mode starts with a movable, captioned
-1600x1200 client area. This is supersampling, not true 3840x2400 widescreen;
-the latter requires a licensed or project-owned camera/HUD patch.
+It binds the complete state set required by the canary acceptance contract.
 
-Validate login, character selection, lobby, one-person combat, HUD/minimap,
-effects, fog, Alt-Tab, Windows scaling, and save/relog in both window modes.
-Supersampling cannot add detail to low-resolution source art. Restore Native at
-any time with `Reset-PSOBBClientRuntime.ps1 -Channel Stable -Renderer Native`.
-Do not add a second `d3d8.dll`, `d3d9.dll`, `dxgi.dll`, shader injector, or
-widescreen engine without a separate manifest profile and acceptance pass.
+Do not:
 
-## Staged Tier-1 server defaults
+* edit a snapshot;
+* copy individual state files from it;
+* combine files from multiple snapshots; or
+* treat a Stable backup as an interchangeable canary snapshot.
 
-The next graceful server restart loads switch assistance by default and BB rare
-text notifications by default. Players can still toggle them with `$swa` and
-`$itemnotifs`. Stable shared EXP is explicitly zero until a same-floor-only
-implementation passes two-client tests; upstream's multiplier also rewards a
-tagged player on another floor and therefore cannot satisfy that contract by
-configuration alone.
+Snapshot verification must succeed before materialization or reset uses it.
 
-## Client auto-patch reference profile
+## CombatCanary state reset
 
-The accepted Stable recovery profile is `baseline`, with both patch arrays
-empty. The hash-bound `stable-qol` profile is retained only as a compatibility
-reference for its exact 59NL sources; do not promote it as a group. Each patch
-must pass its own CombatCanary acceptance checkpoint.
+A stateful canary scenario must be reset through the transactional canary-state workflow.
 
-To inspect or deliberately exercise that reference in an isolated stopped
-runtime, the underlying reversible command is:
+The reset target must be completely stopped.
 
-```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBClientPatchProfile.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Profile stable-qol -Confirm:$false
-```
+Use:
 
-The command refuses to edit configuration while either approved newserv
-environment or any client is running. It changes only `AutoPatches`, keeps
-`BBRequiredPatches` empty, verifies
-that every exact 59NL patch source matches its size and SHA-256 in
-`sources.lock.json`, and records
-the selected profile plus policy hash in `installation.json`. Start newserv only
-after the command succeeds. Roll back with the same stopped-server procedure and
-`-Profile baseline`; this restores both patch arrays to empty without touching
-licenses, players, teams, quests, or patch data.
-
-`stable-qol` contains only `AccurateKillCount`, `FastTekker`,
-`HungryMagSound`, `NoRareSelling`, and `Palette`. `Palette` is reference-only
-because the planned Modern Gameplay module exclusively owns the number
-hotbar. Source-canary, protocol, and save-migration patches are classified
-separately in `config/client-patch-profiles.json` and cannot enter either stable
-profile.
-
-### One-time Stable installation-record repair
-
-An installation created before the baseline policy update can have the exact
-schema-v2 property set that predates renderer provenance while its client and
-server files are already current. Its `stable\installation.json` can also retain
-the one recognized inherited legacy DACL. Do not use the normal recursive ACL
-inventory or the broad initializer to repair either state. With both server
-environments and all clients stopped, preview and then apply only the explicit
-one-file ACL migration:
-
-```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
-  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
-  -MigrateLegacyStableInstallationRecordAcl `
+```text
+.\scripts\Reset-PSOBBCombatCanaryState.ps1 `
+  -SnapshotPath <verified-snapshot-path> `
   -WhatIf
+```
 
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Set-PSOBBRuntimeAcl.ps1 `
-  -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" `
-  -MigrateLegacyStableInstallationRecordAcl `
+After reviewing the preview:
+
+```text
+.\scripts\Reset-PSOBBCombatCanaryState.ps1 `
+  -SnapshotPath <verified-snapshot-path> `
   -Confirm:$false
 ```
 
-This mode returns before the recursive ACL target inventory. It accepts only
-the exact known legacy record and source/runtime/policy binding, an ordinary
-single-link file, the canonical inherited three-principal FullControl DACL, and
-approved unchanged owner and group. It retains the target and ancestor
-identities, rechecks the globally stopped lifecycle at each mutation boundary,
-and writes only the access DACL. Unknown state is left untouched. Conditional
-rollback restores the captured legacy access SDDL only while the exact target,
-bytes, ownership, stopped state, and captured protected DACL still match. An
-already protected exact legacy record is returned unchanged.
+Supply the additional tracked contract identities required by the selected snapshot when the current contract requires them.
 
-After that prerequisite is exact, preview the narrow metadata transaction:
+After reset, perform complete installed verification again.
 
-```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -WhatIf
+```text
+.\scripts\Test-PSOBBCombatCanary.ps1 -Target Installed
 ```
 
-If the preview recognizes the exact legacy baseline record, apply it with:
+State reset and runtime-artifact rollback are separate operations.
 
-```powershell
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\Repair-PSOBBStableInstallationRecord.ps1 -RuntimeRoot "C:\Github Repo's\PSOBB\PSOBB-Runtime" -Confirm:$false
+A successful state reset does not imply that a changed executable or gameplay module has been rolled back.
+
+## Gameplay publication
+
+Gameplay publication is a stopped-runtime transaction against CombatCanary.
+
+The current publication mechanism supports activation and exact rollback:
+
+```text
+.\scripts\Set-PSOBBCombatCanaryGameplay.ps1 `
+  -Action Activate `
+  -WhatIf
 ```
 
-The metadata repair adds only `rendererVersion`, `rendererArchiveSha256`,
-`rendererWrapperSha256`, and `rendererConfigurationSha256` from the current
-source lock, and changes only `clientPatchPolicySha256` to the current empty
-`baseline` policy. It requires the exact known legacy policy hash, current
-runtime marker and source bindings, matching renderer/server/client files,
-an exact strict patch-data manifest and synchronized-file count, empty patch
-arrays, protected single-link metadata, and a globally stopped runtime. The
-transaction journal binds its ownership marker and every rollback identity. On
-success, the protected original, candidate, displaced original, completion
-record, and immutable journal move together beneath the protected Stable
-backups boundary. An ambiguous identity, publication, or interrupted rollback
-retains or revalidates the exact transaction evidence. Keep the runtime stopped
-and rerun the same command to resume exact conditional recovery. An already
-repaired record and its sole completed evidence bundle are revalidated without
-another write.
+Apply only after the preview is correct and the applicable acceptance prerequisites are satisfied:
 
-Backups are schema-v3 exact-file snapshots. They bind `system/config.json` and
-`stable/installation.json` to one verified client-patch profile and policy hash.
-Restore rejects older incomplete snapshots and any config/metadata mismatch,
-stages state on the same volume, and rolls both files back if any swap fails.
-The automated drill rechecks that binding before it proves startup, listeners,
-and account indexing. The 2026-07-19 loopback-only Stable Native
-game-protocol relog and character/bank semantic verifier completed the
-remaining recovery-baseline acceptance.
+```text
+.\scripts\Set-PSOBBCombatCanaryGameplay.ps1 `
+  -Action Activate `
+  -Confirm:$false
+```
 
-The pinned upstream newserv sorts bank records before sending BB bank contents,
-and a later character save can persist that normalized order. It also assigns
-transient runtime item IDs. A bank inspection is therefore read-only by
-ownership even when only those serialization details change. Verification keeps
-the inventory layout, descriptors, and equipment exact, while the embedded and
-authoritative slot-0 bank representations must match exact order-insensitive
-multisets of full canonical item descriptors. Bank counts and structural
-validity remain fail-closed; physical bank order and transient runtime item IDs
-are not ownership identities.
+Publication success proves that the transaction completed and its exact readback passed.
 
-The pinned unmodified `v2026-02-27` release at commit
-`a649a4a146d04dba320bb579ac291527db0febb5` has no
-`AllowSameAccountConcurrentLogins` or `CensorCredentials` configuration keys.
-The separately locked canary source at commit
-`d754a34e271a4fb387be63db34ef0c303e49dcf2` adds both controls, but it remains
-canary-only until the exact build passes two-client acceptance or ships in an
-accepted release. Packet-data logging is disabled in stable, and unsupported
-keys are never added to an older release as false security.
+It does not establish gameplay acceptance.
 
-The HTTP API, automatic registration, DNS listener, proxy modes, and public
-firewall rules remain disabled in local operation.
+### Gameplay rollback
 
-The checked-in trust configuration currently pins a local-acceptance ECDSA
-public key. It is not a production signing identity. Production publication
-requires replacing the compiled and repository trust anchor together, signing
-the launcher executable, and retaining the private release key offline.
+Rollback uses the same project-owned transaction boundary:
+
+```text
+.\scripts\Set-PSOBBCombatCanaryGameplay.ps1 `
+  -Action Rollback `
+  -WhatIf
+```
+
+Then:
+
+```text
+.\scripts\Set-PSOBBCombatCanaryGameplay.ps1 `
+  -Action Rollback `
+  -Confirm:$false
+```
+
+Rollback must refuse to overwrite unknown or foreign current state.
+
+Unexpected mutation is preserved for investigation.
+
+## Gameplay observation evidence
+
+Gameplay observation is the current foundation for later behavior-changing work.
+
+Observation evidence is available only in CombatCanary.
+
+After an accepted gameplay-overlay publication and all prerequisite verification, begin an explicit evidence session:
+
+```text
+$session = .\scripts\Start-PSOBBSession.ps1 `
+  -ServerEnvironment CombatCanary `
+  -Channel Native `
+  -WindowMode ProfileDefault `
+  -GameplayObservationEvidence
+```
+
+The session returns the exact observation run identity.
+
+Perform the active gameplay scenario required by the current acceptance contract.
+
+Stop the complete session:
+
+```text
+.\scripts\Stop-PSOBBSession.ps1 `
+  -ServerEnvironment CombatCanary `
+  -Target All
+```
+
+Parse and verify the stopped-runtime evidence:
+
+```text
+.\scripts\Get-PSOBBGameplayObservationEvidence.ps1 `
+  -RunId $session.GameplayObservationRunId
+```
+
+The verifier binds the result to the recorded:
+
+* environment;
+* run;
+* process;
+* client;
+* gameplay module;
+* configuration;
+* evidence file; and
+* lifecycle identities.
+
+Raw evidence remains private runtime state.
+
+Only the bounded semantic acceptance result belongs in tracked project documentation.
+
+Observation success does not authorize behavior-changing combat logic.
+
+## Current gameplay acceptance gate
+
+At the current project stage:
+
+* the bounded observation core exists;
+* passive exact-client instrumentation exists;
+* protected evidence generation exists;
+* stopped-runtime evidence verification exists;
+* gameplay publication and rollback have passed source and fixture validation;
+* canonical gameplay publication remains pending;
+* canonical live observation acceptance remains pending;
+* action-state mapping remains pending; and
+* behavior-changing modern combat work remains gated.
+
+Do not advance later combat phases by bypassing these pending gates.
+
+## Graphics operations
+
+Graphics work remains isolated from Stable recovery behavior.
+
+Before evaluating a candidate, validate the tracked graphics contracts:
+
+```text
+.\scripts\Test-PSOBBGraphicsProfiles.ps1
+.\scripts\Test-PSOBBGraphicsArtifacts.ps1
+```
+
+Inspect the current evidence state:
+
+```text
+.\scripts\Get-PSOBBGraphicsEvidenceStatus.ps1
+```
+
+The graphics acceptance registry remains fail closed.
+
+A profile with incomplete evidence is still pending even when it launches successfully.
+
+### GraphicsCanary
+
+Use the disposable canary client for presentation candidates that remain within the graphics-only architectural boundary.
+
+Client reconstruction occurs through:
+
+```text
+.\scripts\Reset-PSOBBClientRuntime.ps1
+```
+
+The exact renderer, profile, window mode, and related parameters must come from the tracked graphics contracts.
+
+Do not manually compose a canary by copying arbitrary runtime files.
+
+### Graphics evidence
+
+Project-owned evidence tooling includes:
+
+```text
+.\scripts\Capture-PSOBBGraphicsTelemetry.ps1
+.\scripts\Capture-PSOBBLosslessScreenshot.ps1
+.\scripts\Get-PSOBBScreenshotEvidence.ps1
+```
+
+Raw captures remain under the runtime evidence boundary.
+
+A tracked graphics decision should record bounded identity and acceptance results rather than embedding private evidence into source history.
+
+## LocalLab
+
+LocalLab is the private evaluation boundary.
+
+Materialize a LocalLab runtime through:
+
+```text
+.\scripts\New-PSOBBGraphicsLabRuntime.ps1
+```
+
+LocalLab may contain evaluation-only material that cannot enter a distributable runtime.
+
+A working LocalLab configuration proves only local evaluation behavior.
+
+Promotion requires a separate project-owned candidate whose provenance, distribution classification, behavior, rollback, and evidence satisfy the normal acceptance path.
+
+LocalLab content must not be copied directly into Stable, CombatCanary, or a future release.
+
+## Quality-of-life profile operations
+
+Stable Native remains the recovery profile.
+
+Additional quality-of-life candidates are evaluated individually.
+
+Profile selection uses:
+
+```text
+.\scripts\Set-PSOBBClientPatchProfile.ps1
+```
+
+Apply profile changes only while the affected runtime is stopped.
+
+A grouped or reference profile does not imply that all capabilities within it are accepted.
+
+Promotion remains capability-specific.
+
+## Client runtime reconstruction
+
+Use `Reset-PSOBBClientRuntime.ps1` when a disposable playable client needs to be reconstructed from its verified base.
+
+The reset workflow should:
+
+* verify the immutable base;
+* recreate the selected runtime tree;
+* apply only the declared profile;
+* establish the expected runtime identity; and
+* leave canonical persistent state untouched.
+
+Do not repair an unknown playable client by manually replacing individual binaries.
+
+Reconstruct it from the verified base instead.
+
+## Installation-record repair
+
+`Repair-PSOBBStableInstallationRecord.ps1` exists for narrowly defined installation-record recovery.
+
+It is not a general-purpose way to bless an altered runtime.
+
+Use it only when:
+
+1. the supported repair preconditions are satisfied;
+2. underlying runtime identities independently verify;
+3. the operation can prove the intended installation; and
+4. normal initialization would be inappropriate.
+
+A failed repair precondition means stop and investigate.
+
+## Evidence handling
+
+Evidence has two classes.
+
+**Raw evidence** remains under the protected runtime.
+
+**Semantic records** may be tracked when they contain only the bounded result needed to support an acceptance decision.
+
+Raw evidence may contain:
+
+* detailed runtime identities;
+* process information;
+* captures;
+* performance data;
+* private state;
+* diagnostic output; and
+* transaction material.
+
+Do not commit raw evidence by default.
+
+Do not redact evidence manually and then treat the modified file as the original acceptance artifact.
+
+Use project verification tooling to derive the tracked result.
+
+## Cleanup
+
+Cleanup must be narrow and identity-aware.
+
+Never use broad deletion against the ignored runtime.
+
+The runtime contains material that source control does not track but the project still depends on, including:
+
+* live state;
+* credentials;
+* backups;
+* snapshots;
+* private evidence;
+* immutable input archives; and
+* recovery data.
+
+### Build staging cleanup
+
+Use the dedicated canary build-staging cleanup workflow when applicable:
+
+```text
+.\scripts\Remove-PSOBBCombatCanaryBuildStaging.ps1
+```
+
+It must not be replaced with recursive deletion of the canary build tree.
+
+### Legacy-remnant cleanup
+
+Historical project remnants may be audited through:
+
+```text
+.\scripts\Remove-PSOBBLegacyRemnants.ps1 -WhatIf
+```
+
+Apply cleanup only after the preview identifies exactly the intended project-owned remnants.
+
+Do not widen cleanup rules to arbitrary directories, shared caches, unrelated application state, or unknown files.
+
+Legacy cleanup is maintenance. It is not part of ordinary project startup.
+
+## Relocation
+
+The project layout is repository-relative.
+
+A relocation must preserve the same logical source/runtime boundary defined by [Project layout](PROJECT-LAYOUT.md).
+
+After relocation:
+
+1. validate the canonical runtime marker;
+2. regenerate or repair only path-bound generated state through supported project workflows;
+3. verify Stable installation identity;
+4. verify protected runtime state;
+5. verify the Stable baseline;
+6. validate CombatCanary independently; and
+7. remove obsolete copies only through bounded cleanup after the new location is proven authoritative.
+
+Do not retain multiple apparently canonical writable runtimes.
+
+Path-dependent generated records from an obsolete location must not silently become authority at a new location.
+
+## Failure handling
+
+When a project command fails:
+
+1. preserve the reported state;
+2. do not repeat the command with weaker validation;
+3. do not manually replace the target file;
+4. inspect the exact failed identity or contract;
+5. use the workflow's defined compensation or rollback path where available; and
+6. return to Stable recovery when the experimental environment cannot be proven valid.
+
+A failed command may intentionally leave protected transaction evidence.
+
+Do not delete that evidence before determining whether it is required for safe recovery.
+
+## Unknown process state
+
+Lifecycle-sensitive commands fail closed when process ownership cannot be established.
+
+If an unknown or uninspectable process appears related to the runtime:
+
+* do not act on its process identifier merely because its name looks correct;
+* do not force-stop it through unrelated tools as the first response;
+* preserve lifecycle evidence;
+* identify the executable and environment authority; and
+* continue only after ambiguity is resolved.
+
+Force-stop functionality is a controlled recovery mechanism for a known project-owned process.
+
+## Transaction remnants
+
+Publication and restore workflows may intentionally retain journals, staging state, rollback material, or quarantine records after interrupted operations.
+
+Their presence is significant.
+
+Do not delete a transaction remnant because the primary runtime appears functional.
+
+Resume, compensate, verify, or quarantine according to the owning workflow.
+
+Unknown transaction state blocks further mutation of the same target.
+
+## Source-control safety
+
+The runtime is excluded from source history, but exclusion does not make it disposable.
+
+Avoid source-maintenance operations that recursively remove ignored files from the project root.
+
+Before committing changes:
+
+* inspect staged files;
+* confirm runtime content is absent;
+* confirm credentials and private evidence are absent;
+* confirm generated binaries are absent; and
+* confirm only intended project source and contracts are included.
+
+If a secret is ever committed, treat it as exposed and rotate it. Removing the visible file alone is insufficient.
+
+## Operational acceptance
+
+An operational step is successful only when its required verification also succeeds.
+
+Examples:
+
+| Operation              | Required completion evidence                           |
+| ---------------------- | ------------------------------------------------------ |
+| Initialization         | Installation identity and baseline validation          |
+| Runtime protection     | Independent protection verification                    |
+| Stable start           | Exact lifecycle and baseline readiness                 |
+| Stable stop            | Confirmed lifecycle shutdown                           |
+| Backup                 | Valid protected backup manifest                        |
+| Restore drill          | Passing isolated drill result                          |
+| Restore                | Transaction completion plus Stable verification        |
+| Canary materialization | Complete installed readback                            |
+| Canary reset           | Snapshot verification plus complete installed readback |
+| Gameplay publication   | Exact publication readback                             |
+| Gameplay rollback      | Exact restored identity                                |
+| Observation run        | Stopped-runtime bounded evidence verification          |
+| Graphics candidate     | Applicable graphics evidence gates                     |
+| LocalLab evaluation    | Local evidence only, with no promotion implied         |
+
+Success output from a command is not a substitute for a separate verification step when the contract requires one.
+
+## Release boundary
+
+Development operations stop at accepted development artifacts and capabilities.
+
+They do not authorize deployment or distribution.
+
+A future release must independently satisfy the requirements in [Production gates](PRODUCTION-GATES.md), including the applicable:
+
+* accepted capability set;
+* provenance;
+* signing;
+* security;
+* backup and recovery;
+* monitoring;
+* deployment;
+* distribution; and
+* operational-readiness gates.
+
+Development credentials, development signing material, private evidence, LocalLab inputs, and canary mutable state must never enter a release merely because they exist in the development runtime.
+
+## Routine workflow
+
+The normal Stable workflow is:
+
+```text
+verify
+  ↓
+start Stable
+  ↓
+baseline validation
+  ↓
+use
+  ↓
+graceful stop
+  ↓
+backup when required
+```
+
+The normal canary workflow is:
+
+```text
+verify Stable recovery authority
+  ↓
+verify CombatCanary installation
+  ↓
+apply one isolated candidate
+  ↓
+verify publication
+  ↓
+run the defined scenario
+  ↓
+stop
+  ↓
+verify evidence and state
+  ↓
+reset isolated state where required
+  ↓
+prove rollback
+  ↓
+record the checkpoint
+```
+
+Only after a candidate completes its full required path is it eligible for promotion.
+
+## Documentation authority
+
+Operational decisions use the following authority order:
+
+| Document                                                        | Responsibility                             |
+| --------------------------------------------------------------- | ------------------------------------------ |
+| [Architecture](ARCHITECTURE.md)                                 | Structural invariants and trust boundaries |
+| [Project layout](PROJECT-LAYOUT.md)                             | Runtime and repository ownership           |
+| `OPERATIONS.md`                                                 | Supported operator procedures              |
+| [Combat acceptance](COMBAT-ACCEPTANCE.md)                       | Required gameplay acceptance evidence      |
+| [CombatCanary build](COMBAT-CANARY-BUILD.md)                    | Isolated build and publication contract    |
+| [Graphics acceptance](GRAPHICS-ACCEPTANCE.md)                   | Graphics evidence requirements             |
+| [Combat implementation ledger](COMBAT-IMPLEMENTATION-LEDGER.md) | Authoritative checkpoint history           |
+| [Production gates](PRODUCTION-GATES.md)                         | Deployment and release requirements        |
+
+If an operational procedure would violate an architectural invariant, stop and resolve the conflict before proceeding.
+
+If this document's status description differs from the implementation ledger, the latest applicable accepted ledger entry governs.
