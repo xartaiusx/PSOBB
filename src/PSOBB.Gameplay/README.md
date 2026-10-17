@@ -1,8 +1,10 @@
 # PSOBB.Gameplay
 
-An exact-client-gated x86 module for passive gameplay observation and future combat, focused-input, buffering, and hotbar work.
+An x86 module for recording selected native gameplay activity in one exact supported client, with foundations for future combat, focused-input, buffering, and hotbar work.
 
-Version 0.4.0 observes selected native `send_60` serialization attempts and provides an opt-in bounded evidence recorder. It does not dispatch actions or synthetic packets; hotbar slots remain empty.
+Version 0.4.0 is implemented and source-tested. Installation in CombatCanary, the isolated test setup, module-load verification, and live observation tests remain pending.
+
+The implementation observes selected native `send_60` serialization attempts and provides an opt-in bounded evidence recorder. It does not dispatch actions or synthetic packets; hotbar slots remain empty.
 
 ## Activation and safety
 
@@ -36,7 +38,7 @@ Rollback disables publication, restores and flushes the owned call target, waits
 
 Manual quit, crash, or forced termination can leave evidence incomplete. Accepted captures require the supported finalization handshake, `completed` state, retained events, zero failure/loss counters, at least 300,000 monotonic milliseconds and 300 heartbeats, and proof that the exact producer process has stopped.
 
-Publication, module-load proof, and live observation acceptance remain separate gates. Check the [implementation ledger](../../docs/COMBAT-IMPLEMENTATION-LEDGER.md) and [acceptance guide](../../docs/COMBAT-ACCEPTANCE.md).
+Installing the module, verifying that it loaded, and passing live observation tests are separate required checks. Check the [implementation ledger](../../docs/COMBAT-IMPLEMENTATION-LEDGER.md) and [acceptance guide](../../docs/COMBAT-ACCEPTANCE.md).
 
 ## Build and test
 
