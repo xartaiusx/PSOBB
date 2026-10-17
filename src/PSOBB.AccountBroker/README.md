@@ -1,44 +1,24 @@
 # PSOBB Account Broker
 
-This Windows service is the only component allowed to provision game accounts.
-It listens on an ACL-restricted local named pipe and accepts exactly four typed
-operations: `CreatePlayerAccount`, `RotateGamePassword`,
-`DisablePlayerAccount`, and `GetProvisioningStatus`. There is no arbitrary
-command or shell field in the wire contract.
+A Windows service that provides the project's constrained game-account interface over an access-controlled named pipe.
 
-Set `AccountBrokerPipe:AllowedClientSid` to the SID of the dedicated portal
-service identity before starting the service. Startup fails closed when the SID
-is absent, broad, or invalid. The pipe DACL is protected, the broker owns the
-first pipe instance, messages are length-bounded, and each connection has a
-deadline. Do not run the portal and broker under a shared production identity.
+The contract supports exactly four typed operations: `CreatePlayerAccount`, `RotateGamePassword`, `DisablePlayerAccount`, and `GetProvisioningStatus`. It accepts no arbitrary command or shell payload.
 
-Blue Burst accepts game passwords from 1 through 16 ASCII alphanumeric
-characters. The broker generates 16-character Crockford base32 values by
-default. Custom portal password input is not implemented yet; when it is added,
-12-16 characters will be the recommended range. A successful create or
-rotation response contains the generated password once. Idempotency receipts
-deliberately discard it; a repeated request returns completion status without
-the password.
+## Deployment status
 
-Idempotency receipts are stored in SQLite at `ReceiptStore:DatabasePath`, bind
-the request ID to a SHA-256 request fingerprint, and survive service restarts.
-The receipt contains only the terminal response and never the game password.
-Use an absolute, broker-identity-protected path in Production. Completed
-receipts rotate after the configured retention period; unresolved receipts are
-never pruned automatically.
+The checked-in `UnconfiguredNewservAccountGateway` is deliberately not ready. A reviewed, request-ID-aware adapter for atomic newserv account operations is required before provisioning can work.
 
-## Deliberate deployment gate
+That adapter must enforce unprivileged player accounts, durable game-side idempotency, and rollback of partial creation. It must not expose newserv stdin, its HTTP API, or shell execution.
 
-`UnconfiguredNewservAccountGateway` reports not-ready and always fails. Replace it only with the
-reviewed adapter for the planned atomic newserv operations. The adapter must use
-typed calls, use the supplied request ID for durable game-side idempotency,
-enforce no-flags player accounts, roll back partial creation, and
-must not expose newserv stdin, its HTTP API, or arbitrary shell execution.
+## Configuration and safety
 
-Cancellation after a gateway call is recorded as `operation_outcome_unknown`.
-A receipt left in progress by a process crash is converted to that explicit
-unknown state at the next startup and is never replayed automatically. The
-portal reconciliation flow can query the receipt; resolving an unknown outcome
-still requires the real request-ID-aware adapter to query/resume the atomic
-newserv operation. After confirmed creation, reconciliation rotates the lost
-one-time password. A real adapter remains the hard production/readiness gate.
+- Set `AccountBrokerPipe:AllowedClientSid` to the dedicated portal identity. Missing, broad, or invalid identities block startup.
+- Keep portal and broker identities separate. The pipe uses a protected DACL, first-instance ownership, bounded messages, and connection deadlines.
+- Store SQLite receipts at `ReceiptStore:DatabasePath`, using an absolute path protected for the broker identity in Production.
+- Receipts bind each request ID to its SHA-256 fingerprint. Completed receipts expire according to retention settings; unresolved receipts are never pruned automatically.
+
+Blue Burst passwords support 1–16 ASCII alphanumeric characters. The broker generates 16-character Crockford base32 passwords and returns them once. Receipts never retain the password; retries return status only. Custom portal password input remains unimplemented.
+
+Cancellation after dispatch or interrupted work is recorded as `operation_outcome_unknown`, never replayed automatically. Resolving it requires the real adapter to query or resume the original request. Confirmed creation with a lost password requires rotation.
+
+See [the gateway contract](Provisioning/INewservAccountGateway.cs), [the portal guide](../PSOBB.Portal/README.md), and [deployment gates](../../docs/PRODUCTION-GATES.md).

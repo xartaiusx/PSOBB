@@ -1,83 +1,44 @@
 # PSOBB.Enhancement
 
-`PSOBB.Enhancement.asi` is a clean-room, x86 Direct3D 8 enhancement for one
-exact PSO Blue Burst executable. It never edits `Psobb.exe` on disk. The
-component is inert unless an adjacent `PSOBB.Enhancement.ini` explicitly sets
-`Enabled=1`, and every pointer write is preceded by the pinned executable hash,
-PE/byte gates, and an expected-pointer compare.
+An experimental x86 Direct3D 8 presentation module for one exact PSO Blue Burst executable. It changes in-memory behavior without editing `Psobb.exe` on disk.
 
-The only pinned base is:
+The module is disabled unless the adjacent configuration explicitly sets `Enabled=1`. Every pointer write requires the pinned executable hash, PE/byte checks, and an expected-pointer comparison.
 
-```text
-SHA-256: DD3D475916038E8E8E3F230CFAD6D8D93A2976B1B42AF0014413FF3B737C5535
-Size:    6971904 bytes
-PE:      x86, fixed image base 0x00400000
-```
+## Compatibility and status
 
-See [`docs/CLEANROOM-ENHANCEMENT.md`](../../docs/CLEANROOM-ENHANCEMENT.md) for
-the derivation record, exact gates, capability status, and unresolved runtime
-acceptance work.
+The supported client is pinned in [build-manifest.json](build-manifest.json):
+
+- SHA-256: `DD3D475916038E8E8E3F230CFAD6D8D93A2976B1B42AF0014413FF3B737C5535`
+- Size: `6971904` bytes
+- x86 fixed image base: `0x00400000`
+
+Read [the derivation and acceptance record](../../docs/CLEANROOM-ENHANCEMENT.md) before using a candidate. Source or build verification is separate from graphics acceptance.
 
 ## Build and verify
 
-Use the manifest-pinned CMake 4.4.0 and Visual Studio 2026 x86 toolchain. The
-Release targets compile and link with reproducible-build flags, and acceptance
-requires matching hashes from a separate source root:
+Use the toolchain pinned in the build manifest. From the repository root:
 
 ```powershell
-cmake -S .\src\PSOBB.Enhancement `
-  -B .\src\PSOBB.Enhancement\bin\build-x86 -A Win32
-cmake --build .\src\PSOBB.Enhancement\bin\build-x86 `
-  --config Release --parallel
-ctest --test-dir .\src\PSOBB.Enhancement\bin\build-x86 `
-  -C Release --output-on-failure
-
-& .\src\PSOBB.Enhancement\bin\build-x86\Release\PSOBB.Enhancement.Verify.exe `
-  'C:\path\to\Psobb.exe'
+cmake -S .\src\PSOBB.Enhancement -B .\src\PSOBB.Enhancement\bin\build-x86 -A Win32
+cmake --build .\src\PSOBB.Enhancement\bin\build-x86 --config Release --parallel
+ctest --test-dir .\src\PSOBB.Enhancement\bin\build-x86 -C Release --output-on-failure
 ```
 
-The Release artifact is
-`src\PSOBB.Enhancement\bin\build-x86\Release\PSOBB.Enhancement.asi`.
-No ASI loader or proprietary client content is built or distributed here.
+The output includes `PSOBB.Enhancement.asi` and `PSOBB.Enhancement.Verify.exe`. Run the verifier against the separately supplied client. Reproducibility acceptance requires matching artifact hashes from a separate source root.
 
-## Configuration
+## Configuration and rollback
 
-Copy `PSOBB.Enhancement.ini.example` beside the ASI as
-`PSOBB.Enhancement.ini`. The parser accepts only the two 16:10 render targets
-and rejects gated features instead of silently enabling partial behavior.
+Start with [PSOBB.Enhancement.ini.example](PSOBB.Enhancement.ini.example). Supported settings are:
 
-- `Width=2560`, `Height=1600`, or `Width=3840`, `Height=2400`
-- `WindowMode=Unchanged`, `Borderless`, or `Resizable`
-- `HorizontalFov=1` adjusts only perspective-shaped projection matrices
-- `HudMinimap` must remain `0`
-- `AutomaticDeviceRecreation` must remain `0`
+- Resolution: `2560×1600` or `3840×2400`
+- Window mode: `Unchanged`, `Borderless`, or `Resizable`
+- `HorizontalFov=1`: perspective-shaped projection adjustment
+- `HudMinimap=0` and `AutomaticDeviceRecreation=0`: required until separately implemented and accepted
 
-If modified `CreateDevice` or game-initiated `Reset` parameters fail, the hook
-retries the original parameters and reports `runtime_fallback`.
+Failed modified device creation/reset retries the original parameters and reports `runtime_fallback`.
 
-## Capability API and rollback
+The [capability API](include/psobb_enhancement/api.h) reports hook state, resolution, fallbacks, and projection counts. Rollback restores only pointers still owned by this module plus the captured window placement. It never overwrites another component's changes. Relaunching is required for complete back-buffer rollback.
 
-The ASI exports stable, undecorated x86 entry points:
+## License
 
-- `PSOBBEnhancement_Initialize`
-- `PSOBBEnhancement_GetCapabilities`
-- `PSOBBEnhancement_GetVersion`
-- `PSOBBEnhancement_Rollback`
-
-`PSOBBEnhancement_GetCapabilities` fills `CapabilitiesV1` from
-`include/psobb_enhancement/api.h`, including the runtime state, installed hook
-flags, selected resolution, fallback count, and observed/adjusted projection
-counts.
-
-Rollback restores only pointers still owned by this module and restores the
-captured window style/rectangle. It never overwrites a pointer changed by
-another component. The existing D3D device remains alive, so a relaunch is the
-full rollback for back-buffer state.
-
-## License and build identity
-
-Project-authored source in this subtree is available under the adjacent
-[MIT license](LICENSE.md). The checked-in `build-manifest.json` pins every
-source and test input, the supported toolchain, and the exact unsigned x86
-canary artifact produced by the verified build. The binary remains ignored;
-the manifest is an identity and reproducibility record, not a bundled runtime.
+Project-authored source uses the [MIT license](LICENSE.md). The manifest records source, toolchain, and artifact identity; it does not bundle a runtime. ASI loaders, proprietary client files, and built binaries are not distributed here.

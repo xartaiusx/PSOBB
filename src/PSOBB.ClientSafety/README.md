@@ -1,52 +1,33 @@
 # PSOBB.ClientSafety
 
-`PSOBB.ClientSafety` is the internal static library for exact-client safety
-checks shared by project-owned native modules. It identifies only the approved
-x86 59NL executable and provides generic RVA expected-byte checks for file and
-loaded-image preflight. It also provides a fixed-capacity code-patch
-transaction with exact byte gates, executable-range validation, exclusive
-process-wide byte-range and touched-page ownership across static-library
-copies, and compare-before-restore rollback. Page ownership serializes the
-page-granular protection transitions required even for disjoint patch bytes.
+A static C++ library providing exact-client validation and reversible native changes for project-owned modules.
 
-For an already writable exact-image callsite, the library also provides an
-atomic x86 near-call hook. It validates the `E8 rel32` form and both executable
-targets, requires the instruction to fit on one page, claims the complete
-five-byte instruction and that page, atomically compares only the naturally
-aligned four-byte operand, flushes the instruction cache, verifies the resolved
-target, and performs compare-before-restore rollback. It refuses to broaden
-protection or patch a non-image allocation.
+It supports only the approved x86 59NL executable. Shared primitives cover file/loaded-image checks, expected-byte validation, fixed-capacity patch transactions, and atomic near-call hooks. It does not install a game-specific hook or ship a standalone runtime binary.
 
-Each logical owner uses a stable, nonzero, process-wide unique token. Its
-module remains pinned while any claim is active and performs an explicit
-rollback; ownership is not tied to a fallible object destructor. Failed cache
-flushes or protection restores retain the claim and the exact owed state until
-a verified retry succeeds. Every executable protection transition preserves
-the page's existing CFG call-target information.
+## Integration requirements
 
-Code-byte writes are 2-16 bytes and are not atomic. The caller must prove that
-target code is quiescent for install and rollback. The first Gameplay use must
-prove that `InitializeASI` runs before the target site is reachable, or marshal
-the operation to a separately proven safe point.
+- Validate the executable range and exact patch plan before use.
+- Give each logical owner a stable, nonzero, process-wide unique token. Keep its module pinned while any claim is active.
+- Claim both byte ranges and touched pages exclusively across all library copies. Page claims serialize protection changes even when bytes do not overlap.
+- Perform explicit compare-before-restore rollback. Failed cache flushes or protection restores retain the claim and owed state until a verified retry succeeds.
+- Preserve existing CFG call-target information during executable protection changes.
 
-The transaction primitive is inert until a caller supplies an already verified
-executable range and an exact patch plan. This component does not contain or
-install a game-specific hook, read gameplay state, or ship a runtime binary of
-its own. File hashing, PE parsing, installation, and rollback run only during
-module lifecycle work, never in a real-time action path.
+Code-patch writes are 2–16 bytes and are not atomic. Callers must prove that target code is quiescent during installation and rollback. Gameplay initialization must occur before a target becomes reachable or at a separately proven safe point.
+
+The atomic x86 near-call helper accepts an already writable exact-image `E8 rel32` instruction contained on one page. It validates both executable targets, claims the five-byte instruction and page, and atomically compares the aligned four-byte operand. It will not widen protection or patch a non-image allocation.
+
+Hashing, PE parsing, installation, and rollback belong in module lifecycle work, never a real-time action path. See the [public headers](include/psobb_client_safety/) for the exact contracts.
 
 ## Build and test
 
+From the repository root:
+
 ```powershell
 Push-Location .\src\PSOBB.ClientSafety
-cmake --preset x86
+cmake --fresh --preset x86
 cmake --build --preset release --parallel
 ctest --preset release
 Pop-Location
 ```
 
-Acceptance configures from scratch with `cmake --fresh --preset x86` before
-using the build and test presets.
-
-Tests use synthetic PE images and known public SHA-256 vectors. They do not
-read or copy the proprietary game client.
+Tests use synthetic PE images and public SHA-256 vectors, without reading or copying the proprietary game client.

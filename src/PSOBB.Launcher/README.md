@@ -1,166 +1,55 @@
 # PSOBB Launcher
 
-This is a dependency-free WPF launcher for the local Windows acceptance environment. It targets .NET 10 LTS and deliberately does not download or redistribute PSOBB client assets.
+A WPF launcher for Windows, targeting .NET 10. It selects supported profiles, verifies installed files, and delegates launch/stop actions to allowlisted project scripts.
 
-## Security boundary
-
-- A schema-v1 manifest must pass strict JSON and semantic validation before use.
-- `LoadSignedAsync` verifies a detached ECDSA P-256/SHA-256 signature over the exact manifest bytes before parsing those same bytes, avoiding a verify/reopen race.
-- Every installed artifact and every declared imported base file is checked with SHA-256 immediately before launch.
-- Destinations must be relative Windows paths beneath the selected runtime root. Traversal, absolute paths, alternate data streams, reserved device names, trailing dots/spaces, and existing reparse points are rejected.
-- Source URLs, when supplied, must be absolute HTTPS URLs.
-- Lifecycle operations invoke only allowlisted repository scripts with `pwsh -File` and `ProcessStartInfo.ArgumentList`; secret-like manifest and launcher arguments are rejected.
-- Health checks connect only to IPv4 loopback and only to manifest-declared ports.
-- Diagnostics omit absolute runtime paths and launch arguments, and redact usernames, account/license identifiers, Guild Card numbers, passwords, credentials, tokens, secrets, and the Windows user-profile path.
-- The launcher never asks for or stores a game password. Account creation remains an operator-side server action.
-
-The launcher validates signed manifests and installed files; acquisition, archive extraction, atomic installation, and private-key custody belong to the release pipeline. Do not point the launcher at an untrusted runtime tree.
-
-## Manifest contract
-
-Property names are case-sensitive and unknown properties are rejected. `sourceUrl` may be omitted for a user-imported proprietary base file. Both launch executables must appear as artifact destinations.
-
-```json
-{
-  "schemaVersion": 1,
-  "releaseId": "local-stable-2026-02-27",
-  "channel": "stable",
-  "protocolRevision": 1,
-  "artifacts": [
-    {
-      "id": "newserv",
-      "sourceUrl": "https://example.invalid/newserv.exe",
-      "destination": "server/newserv.exe",
-      "sha256": "<64 hexadecimal characters>",
-      "byteSize": 123456,
-      "license": "MIT"
-    },
-    {
-      "id": "imported-client",
-      "destination": "client/psobb.exe",
-      "sha256": "<64 hexadecimal characters>",
-      "byteSize": 123456,
-      "license": "SEGA proprietary; user-imported",
-      "requiredBase": {
-        "path": "client/base/psobb.exe",
-        "sha256": "<64 hexadecimal characters>"
-      }
-    }
-  ],
-  "launch": {
-    "serverExecutable": "server/newserv.exe",
-    "clientExecutable": "client/psobb.exe",
-    "serverArguments": ["--config", "config.json"],
-    "clientArguments": [],
-    "healthPorts": [11000, 12000, 12001]
-  }
-}
-```
-
-The manifest does not contain its own signature. Its sibling `release-manifest.json.sig` contains only the base64 encoding of a 64-byte IEEE P1363 P-256 signature (`r || s`) calculated with SHA-256 over the manifest's exact bytes. `LoadSignedAsync` accepts the corresponding trusted `PUBLIC KEY` PEM text; production must embed or package that public key with the code-signed launcher, while the private key remains offline.
-
-The WPF application looks for `release-public-key.pem` beside its executable. When present, its absence of a sibling `.sig` file or any invalid signature blocks loading. When the launcher package has no trusted public key, the UI labels the manifest `unsigned local`; this is intentionally limited to local-development acceptance and is not a valid production package.
-
-The interactive Control Center holds a per-Windows-session named mutex. A
-second shortcut launch reports that the Control Center is already open and
-exits without starting or stopping either PSOBB process. Headless lifecycle
-commands do not take this UI mutex; their allowlisted PowerShell scripts retain
-the operation locks and remain the sole process authority.
-
-Lifecycle status is accepted only after the selected environment's schema-3
-record matches one live PID, tracked executable size and SHA-256, recorded
-exact FILETIME creation identity, and exactly the three process-owned loopback
-listeners. A live
-client additionally requires its tracked executable identity and materialized
-profile or CombatCanary client binding. Switching environments invalidates the
-displayed status until a fresh observation completes; a late result from the
-previous environment is discarded.
-
-`Install-PSOBBDesktopShortcuts.ps1` resolves the current user's Desktop through
-the Windows special-folder API, stages and verifies all three `.lnk` files
-before an atomic replacement, removes the obsolete Control Center link, and is
-idempotent. **PSOBB Start Server** starts only newserv. **PSOBB Stop Server**
-uses the safe stop-all lifecycle so an active client closes before newserv.
-**PSOBB Play** starts the server when needed and launches the selected client.
-The links contain only lifecycle, channel, exact profile, window-mode, and
-runtime-root arguments; credentials and account identifiers are never valid
-shortcut arguments. The private HD profile is eligible only by its exact
-`lab-widescreen-hd-16x10` identity; CAS profiles remain evidence-only and are
-not valid GUI, command-line, or shortcut selections. Local-only widescreen,
-AshenbubsHD, Luthee, item-box, and Echelon files are never valid public launcher
-payloads or release-manifest artifacts. Installation
-rehashes every file in the signed launcher payload, rejects extra or unsafe
-paths, and recomputes the signed payload-index digest before creating all three
-shortcuts.
-
-Install the current LocalLab desktop contract explicitly so a later reinstall
-cannot fall back to the generic canary defaults:
-
-```powershell
-& .\scripts\Install-PSOBBDesktopShortcuts.ps1 `
-  -RuntimeRoot .\PSOBB-Runtime `
-  -PlayChannel LocalLab `
-  -PlayProfile lab-widescreen-hd-16x10 `
-  -PlayWindowMode Borderless `
-  -PlayPreserveForeground
-```
-
-Profile, monitor, and window-mode selection is written atomically to the schema-v2 `.launcher/active-profile.json` contract for the Stable server environment. Safe mode selects the stable native 4:3 runtime. The explicit CombatCanary server environment uses only its separately sealed Native client and does not read or rewrite the Stable graphics selection. Before Stable client startup, the launcher checks the selected channel's materialized `client-profile.json`; a lab, modern, DXVK, or d3d8to9 selection is rejected unless that exact profile ID has actually been built. The private HD profile additionally requires D3D11, exact 2560x1600 true-16:10 output, a disabled watermark, no CAS or ReShade state, the exact local-only AshenbubsHD activation declaration, and exactly one hash-pinned project-owned LargeAssets ASI/INI module. Its **Verify / repair** operation runs activation `Verify`; it never rebuilds or silently reinstalls private assets. The known dgVoodoo clarity profile additionally requires D3D11, 2560x1600 output, the approved 3840x2880 4:3 preset, preserved aspect ratio, and a disabled watermark.
-
-For the primary display profile, the renderer guard also enforces the
-watermark-free Ultra D3D11 configuration: 3840x2880 4:3 internal rendering,
-Lanczos-3 presentation to the 2560x1600 canvas, point-sampled texture
-preservation, 16x anisotropic filtering for other textures, MSAA off, and
-forced bilinear 2D scaling off. The WPF controls and command line delegate
-borderless/resizable presentation to `scripts/Start-PSOBBClient.ps1`; the
-launcher never starts `Psobb.exe` or newserv directly and closing the Control
-Center does not stop either process.
-
-## Lifecycle command line
-
-Exactly one operation may be supplied. Runtime, channel, profile, monitor, and
-window options never accept account or credential data.
-
-The launcher derives its one repository and nested `PSOBB-Runtime` from
-`AppContext.BaseDirectory`. It accepts `--runtime-root` or
-`PSOBB_RUNTIME_ROOT` only as redundant assertions of that exact path; neither
-an override nor the process current directory can select another repository.
-
-`--server-environment` accepts exactly `stable` or `combat-canary` and defaults
-to `stable`. CombatCanary is always explicit, uses its sealed Native client,
-and accepts only the sealed-equivalent `stable`, `safe-native-4x3`, and
-`profile-default` selection values. The three Desktop shortcuts remain
-Stable-default shortcuts; no additional shortcut is created.
-
-```powershell
-PSOBB.Launcher.exe --play --channel canary --profile clarity-dgvoodoo-4x3 --window-mode borderless
-PSOBB.Launcher.exe --play --channel local-lab --profile lab-widescreen-hd-16x10 --window-mode borderless --preserve-foreground
-PSOBB.Launcher.exe --safe-play
-PSOBB.Launcher.exe --start-server
-PSOBB.Launcher.exe --start-client --channel canary --profile clarity-dgvoodoo-4x3 --window-mode resizable
-PSOBB.Launcher.exe --stop-client
-PSOBB.Launcher.exe --stop-server
-PSOBB.Launcher.exe --stop-all
-PSOBB.Launcher.exe --play --server-environment combat-canary --preserve-foreground
-PSOBB.Launcher.exe --start-server --server-environment combat-canary
-PSOBB.Launcher.exe --start-client --server-environment combat-canary
-PSOBB.Launcher.exe --stop-client --server-environment combat-canary
-PSOBB.Launcher.exe --stop-all --server-environment combat-canary
-```
-
-`--stop-server` refuses while an approved client is active. `--stop-all`
-always requests client shutdown before the authenticated newserv shutdown
-script. The launcher accepts only the nested runtime belonging to its own
-installation-derived repository and rejects missing, incomplete, ambiguous,
-redirected, or reparse-backed lifecycle layouts.
+It does not download or redistribute game assets, request or store game passwords, or provision accounts.
 
 ## Build and test
 
-From the repository root:
+From the repository root with the SDK selected by [global.json](../../global.json):
 
 ```powershell
 dotnet build .\src\PSOBB.Launcher\PSOBB.Launcher.csproj -c Release
 dotnet test .\tests\PSOBB.Launcher.Tests\PSOBB.Launcher.Tests.csproj -c Release
 ```
 
-No production NuGet packages are used. The test project uses only Microsoft Test SDK and MSTest packages.
+The launcher has no production NuGet dependencies. Tests use Microsoft Test SDK and MSTest.
+
+## Verification model
+
+- Strict schema-v1 JSON and semantic validation precede manifest use.
+- Signed loading verifies ECDSA P-256/SHA-256 over the exact bytes subsequently parsed. The sibling `.sig` file contains a base64-encoded 64-byte IEEE P1363 signature.
+- A trusted `release-public-key.pem` beside the executable makes a missing or invalid signature fatal. Without a trusted key, the UI labels the manifest `unsigned local`; this is development-only.
+- Every installed artifact and declared imported base file is SHA-256 checked immediately before launch.
+- Destinations must be safe relative Windows paths below the selected root. Traversal, alternate streams, reserved names, trailing dots/spaces, and reparse points are rejected.
+- Optional source URLs must use HTTPS. Acquisition, extraction, atomic installation, and private-key custody belong to the release process.
+
+See the [manifest example](../../config/release-manifest.example.json) and [models](Models/ReleaseManifest.cs). Production packages require a trusted packaged public key and signing; never use an untrusted installation tree.
+
+## Launch behavior
+
+The launcher derives the repository and its nested `PSOBB-Runtime` from its installation. `--runtime-root` and `PSOBB_RUNTIME_ROOT` are assertions of that exact location, not arbitrary overrides.
+
+Stable is the default. CombatCanary must be selected explicitly and uses its separately sealed Native client. It never reads or rewrites Stable's graphics selection. Stable and CombatCanary must not run concurrently.
+
+Only materialized, verified profiles can launch. Private HD and renderer profiles have additional exact configuration and file-hash requirements; CAS profiles are evidence-only and cannot be selected for normal play. Private visual assets are never valid public release payloads.
+
+Lifecycle checks bind status to the exact executable, process creation identity, profile, and process-owned loopback listeners. Switching profiles invalidates stale displayed status. Health checks use declared IPv4 loopback ports only.
+
+## Command line
+
+Supply one operation at a time:
+
+```powershell
+PSOBB.Launcher.exe --safe-play
+PSOBB.Launcher.exe --start-server
+PSOBB.Launcher.exe --stop-client
+PSOBB.Launcher.exe --stop-all
+PSOBB.Launcher.exe --play --server-environment combat-canary --preserve-foreground
+```
+
+`--stop-server` refuses while an approved client is active. `--stop-all` closes the client before requesting authenticated server shutdown. Closing the launcher window does not stop either process.
+
+The three supported shortcuts start the server, safely stop the session, or play the selected profile. A second interactive launcher instance exits without changing either process. Account and credential data are forbidden in launcher or shortcut arguments.
+
+See [the setup and lifecycle guide](../../docs/OPERATIONS.md) for installation, profile-specific commands, and recovery. Diagnostics redact private identifiers and paths. Public deployment remains subject to [production gates](../../docs/PRODUCTION-GATES.md).

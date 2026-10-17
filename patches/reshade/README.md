@@ -1,23 +1,17 @@
-# PSOBB neutral CAS
+# Neutral CAS Candidate
 
-This directory contains source and a conservative candidate preset only. It
-does not include or redistribute ReShade binaries or the upstream shader
-bundle. The preset is not approved for the playable runtime until the graphics
-evidence matrix records passing screenshot, halo, frame-pacing, soak, rollback,
-and manual A/B results.
+A self-contained sharpening shader and conservative candidate preset for PSOBB. ReShade binaries and upstream shader bundles are not included.
 
-Project-authored files in this directory use the adjacent MIT license. AMD CAS
-attribution and its required MIT notice are in `THIRD-PARTY-NOTICES.md`.
+The preset remains unapproved for normal play until [graphics acceptance](../../docs/GRAPHICS-ACCEPTANCE.md) records passing screenshot, halo, frame-pacing, soak, rollback, and manual A/B checks.
 
-The only accepted evaluation values are `0.15`, `0.25`, and `0.35`. The weakest
-passing value wins. If all three create visible halos, clipping, HUD damage, or
-an unacceptable performance regression, sharpening remains disabled.
+## Evaluation limits
 
-The shader consumes ReShade's final SDR backbuffer. It must not be combined
-with bloom, ambient occlusion, depth of field, film grain, chromatic
-aberration, HDR conversion, tone mapping, or color grading in the default
-profile.
+Test only `0.15`, `0.25`, and `0.35`; choose the weakest passing value. Leave sharpening disabled if all three produce halos, clipping, HUD damage, or unacceptable performance loss.
 
-The effect is self-contained and does not require an external `ReShade.fxh` or
-shader bundle. Runtime materialization must include only this effect and a
-generated single-technique preset.
+The shader uses the final SDR backbuffer. The default profile must not combine it with bloom, ambient occlusion, depth of field, film grain, chromatic aberration, HDR conversion, tone mapping, or color grading.
+
+Include only this effect and a generated single-technique preset when staging a candidate. It does not need `ReShade.fxh` or an external shader bundle.
+
+## License
+
+Project-authored files use the adjacent [MIT license](LICENSE.md). Preserve the AMD CAS attribution and required MIT notice in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
